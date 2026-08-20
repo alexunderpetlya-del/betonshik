@@ -4,18 +4,6 @@
   "compatibility_date": "2026-08-20",
   "assets": {
     "directory": ".",
-    "run_worker_first": false,
-    "exclude": [
-      ".git/**",
-      ".github/**",
-      ".wrangler/**",
-      "node_modules/**",
-      "wrangler.jsonc",
-      ".assetsignore",
-      "*.zip",
-      "BUILD_NOTES_*.txt",
-      "PATCH_NOTES_*.txt",
-      "CLOUDFLARE_UPLOAD_README.txt"
-    ]
+    "run_worker_first": false
   }
 }
