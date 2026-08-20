@@ -1,0 +1,8 @@
+v51.40
+- Brightened the entire playable map, especially shadowed areas.
+- Main exposure 0.98 -> 1.12.
+- Hemisphere fill 0.66 -> 1.04 with a lighter ground bounce.
+- Ambient fill 0.035 -> 0.14.
+- Sun intensity 2.38 -> 2.58.
+- Cool opposite-side bounce 0.18 -> 0.36.
+- Existing construction-site top light preserved.

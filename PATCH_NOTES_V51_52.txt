@@ -1,0 +1,7 @@
+v51.52 — Cloudflare 25MB asset limit fix
+
+- BETONSHCHIK_SCENE99.glb was ~119MB and exceeded Cloudflare's per-file upload limit.
+- Converted the exact same scene payload to standard .gltf + multiple external .bin buffers.
+- Each .bin is capped at 22 MiB; no model geometry/material/image data was changed by this conversion.
+- main.js now loads ./assets/BETONSHCHIK_SCENE99.gltf.
+- Oversized .glb removed from deployment package.

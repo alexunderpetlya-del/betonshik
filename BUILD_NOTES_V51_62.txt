@@ -1,0 +1,12 @@
+BETONSHIK v51.62 — Cloudflare upload build
+
+Included:
+- FINAL scene desktop + mobile + mobile-safe split into <25 MiB files
+- v51.61 mobile crash recovery/debug + menu soundtrack + adaptive loader
+- final Blender-authored prop grips from grip_offsets_v5169_CIG_PROP_FIXED.json
+- updated Peremotka Energy texture
+- updated beer texture (user supplied final label)
+- all previous v51.60/v51.59 gameplay, dialogue, foliage, UI and mobile optimizations
+
+Cloudflare file-size check: generated after build.
+Desktop texture policy preserved: desktop scene textures were not downscaled in this assembly step; the new Energy and beer labels are also kept at their supplied source resolution.

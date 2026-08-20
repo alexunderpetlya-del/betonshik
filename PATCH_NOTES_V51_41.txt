@@ -1,0 +1,8 @@
+v51.41
+- Rebuilt dialogue UI for PC and mobile.
+- Added stylized character portraits for Pavel, Seryoga/Mandarin, George and Baba Kapa.
+- Added per-character accent themes while keeping one industrial UI language.
+- Dialogue uses portrait + industrial nameplate + numbered response buttons.
+- PC dialogue responses can be selected with number keys 1-9; ESC closes dialogue.
+- Mobile dialogue is landscape/touch optimized with large response buttons.
+- HUD dims behind dialogue for focus; no expensive full-screen blur on mobile.

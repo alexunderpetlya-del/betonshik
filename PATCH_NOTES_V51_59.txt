@@ -1,0 +1,27 @@
+v51.59 — MOBILE PERFORMANCE + ADAPTIVE MENU LOADER
+
+Mobile-only performance path:
+- Desktop SCENE666 asset is byte-for-byte unchanged from v51.58. PC textures are not downscaled/recompressed.
+- Mobile loads BETONSHCHIK_SCENE666_MOBILE.gltf.
+- Mobile scene textures are repacked externally in quality tiers:
+  * important large surfaces / vehicles / buildings: up to 1024
+  * ordinary base-color environment textures: up to 768
+  * normal / roughness / AO and vegetation: up to 512
+  * small source textures remain at their native size
+- Approx decoded scene texture footprint reduced from ~579 MB to ~209 MB on mobile.
+- Geometry repacked into four Cloudflare-safe ~22 MB buffers.
+- Grass and flower meshes are batched into InstancedMesh spatial chunks on mobile.
+- Static imported mesh transforms are frozen after setup.
+- Adaptive mobile DPR range: 0.78–1.35, with sustained-FPS hysteresis.
+- Mobile sun shadow atlas stays 1024 and shadow refresh is throttled to ~20 Hz while moving / lower while idle.
+- Hidden desktop 3D hotbar preview renders are skipped on mobile.
+- Hidden minimap redraw is skipped.
+- Desktop rendering/post FX and desktop SCENE666 remain unchanged.
+
+Main menu:
+- Added circular animated loading indicator in bottom-right.
+- Responsive size/offset via clamp(), safe-area support, short landscape and large-screen rules.
+- Spinner hides when the scene is ready and switches to error styling if loading fails.
+
+Cloudflare:
+- Verified: zero files exceed 25 MiB.

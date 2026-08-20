@@ -1,0 +1,19 @@
+Betonshik v51.57 — mobile control/UI rebuild
+
+Changes:
+- Context buttons no longer float next to world objects.
+- One fixed left-thumb context button appears only while aiming at a valid object/NPC.
+- When the hose is held, a separate fixed button appears: ВКЛ БЕТОН / ВЫКЛ БЕТОН.
+- When the rake is equipped, the same tool-action button becomes РАВНЯТЬ and supports hold-to-rake.
+- Right joystick remains the only joystick and controls movement.
+- Camera look remains free swipe over gameplay canvas.
+- Mobile look sensitivity increased ~26%.
+- Joystick dead zone reduced from 11% to 5.5%, response curve made much quicker, sprint engages earlier.
+- Desktop HUD is hidden completely on touch landscape.
+- Added dedicated mobile HUD: money, stamina, fill/level, centered mobile hotbar, mobile toast, mobile aim dot.
+- Mobile hotbar has its own touch targets and does not depend on hidden PC hotbar DOM.
+
+Changed files:
+- index.html
+- main.js
+- style.css

@@ -1,0 +1,6 @@
+v51.39
+- Added the approved Pavel app icon.
+- Added apple-touch-icon 180x180 for iPhone/iPad Home Screen.
+- Added PWA icons 192x192 and 512x512.
+- Added browser favicons 32x32 and 16x16.
+- Bumped cache refs to 51.39.

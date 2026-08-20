@@ -1,0 +1,8 @@
+v51.58 — Cloudflare 25 MB scene fix
+
+- BETONSHCHIK_SCENE666.glb removed from the deploy build.
+- Scene converted to BETONSHCHIK_SCENE666.gltf + 9 binary chunks.
+- Every scene chunk is below 25 MB (largest ~22.0 MiB).
+- main.js now loads BETONSHCHIK_SCENE666.gltf.
+- Old unused SCENE99 chunks removed from this build.
+- v51.57 mobile controls/UI/gameplay changes are preserved.

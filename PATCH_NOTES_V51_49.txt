@@ -1,0 +1,23 @@
+PATCH v51.49 — DIALOGUE UI REBUILD (CODE-DRIVEN)
+
+What changed
+- Rebuilt dialogue HUD presentation in CSS instead of relying on decorative heavy frames.
+- Kept only the approved portrait cutouts and their paint backdrops as core art.
+- Replaced the rest with a clean code UI: dark glass card, simple accent nameplate, clean answer buttons, light shadowing, responsive layout.
+- Removed hazard/corner/noise emphasis from the dialogue presentation.
+- Desktop and mobile dialogue layouts now share the same visual language.
+
+Assets used
+- assets/dialogue_v3/pavel.webp
+- assets/dialogue_v3/serega.webp
+- assets/dialogue_v3/george.webp
+- assets/dialogue_v3/baba.webp
+- assets/dialogue_v3/paint_pavel.png
+- assets/dialogue_v3/paint_serega.png
+- assets/dialogue_v3/paint_george.png
+- assets/dialogue_v3/paint_baba.png
+
+Implementation
+- index.html cache-bust updated to v51.49
+- style.css appended with new dialogue overrides
+- main.js logic preserved; dialogue content + interactions unchanged

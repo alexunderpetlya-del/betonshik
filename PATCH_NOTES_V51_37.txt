@@ -1,0 +1,6 @@
+v51.37
+- Mobile interaction controls are now world-space contextual UI: the TALK/PICK UP/TAKE HOSE button projects next to the object/NPC being looked at.
+- Primary ACTION is also world-anchored: next to hose end when held, or next to the rake work point.
+- Removed the separate mobile button grid.
+- Mobile hotbar now uses the exact same four centered bottom slots as PC and each slot is touchable (1 cigarettes, 2 energy, 3 Baltika 9, 4 rake).
+- Context buttons only appear for valid look-at targets / relevant held tool state.
