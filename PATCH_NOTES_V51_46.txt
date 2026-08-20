@@ -1,0 +1,6 @@
+v51.46
+- Rake viewmodel is now canonical: picking any scene rake gives the same in-hand rake model and transform.
+- Leveling endgame reworked to remove pixel hunting: larger rake brush, stronger local leveling, mild mass-preserving finishing relaxation, more forgiving practical quality threshold.
+- Leveling HUD is normalized so a practically finished bay displays 100% and only then counts as complete.
+- Filled volume snaps 99.5% to a clean 100.0% in the HUD; true overfill still displays above 100%.
+- Pavel handover feedback now also reports normalized leveling progress and asks for 100%.

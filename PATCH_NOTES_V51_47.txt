@@ -1,0 +1,26 @@
+v51.47 — scene cohesion / lighting / atmosphere pass
+
+Changed renderer / postprocessing:
+- renderer.toneMappingExposure: 1.12 -> 1.08
+- UnrealBloomPass: strength 0.075 -> 0.055, radius 0.18 -> 0.16, threshold 1.08 -> 1.12
+- Added subtleColorGradePass (desktop composer) with:
+  - saturation: 0.90
+  - greenSuppression: 0.16
+  - warmth: 0.035
+  - highlightCompression: 0.085
+
+Changed atmosphere / lights:
+- scene.fog.color: 0xa7b0b4 -> 0xb8c3ca
+- scene.fog.near: 82 -> 58
+- scene.fog.far: 220 -> 205
+- HemisphereLight sky/ground/intensity: 0xdfe9ed / 0x5f5a50 / 1.04 -> 0xe6edf0 / 0x6f675e / 1.18
+- AmbientLight color/intensity: 0xe7e5da / 0.14 -> 0xeee7db / 0.22
+- Sun light color/intensity: 0xffddb0 / 2.58 -> 0xffdeb7 / 2.42
+- Sky bounce color/intensity: 0xb6ceda / 0.36 -> 0xc3d5de / 0.52
+- Site top light color/intensity: 0xf3f0dd / 34.0 -> 0xf2efde / 28.0
+
+Intent:
+- unify the scene with lighter atmospheric perspective,
+- slightly desaturate and de-acidify greens,
+- warm the daylight subtly,
+- soften far background contrast without changing assets.

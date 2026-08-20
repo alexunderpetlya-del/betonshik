@@ -1,0 +1,5 @@
+v51.44
+- Map leveling now requires the HUD ровность value to reach 100% (threshold 99.5%, which rounds to 100% in the UI) instead of 86%.
+- Verified Pavel has 5 dance FBX files present and dance selection is random on each successful settlement.
+- Added anti-repeat logic so Pavel cannot immediately play the same dance twice in a row.
+- Cache version bumped to 51.44.

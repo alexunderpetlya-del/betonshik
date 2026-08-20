@@ -1,0 +1,30 @@
+v51.50 — SCENE99 + player/material/head-shadow + handheld props + mobile stability
+
+SCENE / MOBILE
+- Replaced old split BETONSHCHIK_SCENE.gltf with new BETONSHCHIK_SCENE99.glb.
+- Repacked SCENE99 and resized 108 non-character embedded textures to max 512 px.
+- Scene image payload: ~94.1 MiB -> ~31.6 MiB; GLB: ~180.6 MiB -> ~118.1 MiB.
+- Full-resolution donor character textures remain in the source GLB, but their static donor materials no longer request those textures because runtime hides/replaces those donor meshes.
+- Mobile sun shadow map: 2048 -> 1024.
+- On mobile, rigged NPCs keep their full-resolution base-color texture but skip 2K normal/MR maps to reduce GPU memory.
+- On mobile, player keeps full-resolution base-color texture but skips 2K normal/roughness maps.
+- Additional non-character prop/world textures (hose, beer, cigarette, energy, boot preview, paint splashes) resized to max 512 px.
+
+PLAYER BLACK MATERIAL FIX
+- Corrected external TextureLoader orientation for the FBX atlas: flipY=true instead of glTF-style false.
+- The previous flipY=false mirrored UV sampling into black atlas padding, producing large black patches.
+- Preserved FBX material slots instead of flattening every slot into one shared material object.
+- Reduced normal-map strength to 0.48 for more stable lighting.
+
+REAL HEAD SHADOW
+- Removed fake sphere + box head-shadow proxy.
+- Builds a real skinned head/neck-only shadow mesh from the original player geometry before FPS head removal.
+- The real head remains invisible in the color pass but casts the actual animated head silhouette into the shadow map.
+- Head shadow is enabled on mobile too.
+- Removed the redundant coordinate-based forceHeadlessWorldCut pass; FPS head removal now happens once through skin-weight trimming.
+
+HANDHELD PROPS
+- Cigarette now follows the index-finger bone instead of the palm.
+- Reset stale cigarette/energy/beer localStorage grip values with v51.50 grip key.
+- New fixed grip positions/rotations for cigarette, energy can, and beer can.
+- Reduced extra procedural can tilt so cans do not lie sideways through the palm while drinking.

@@ -1,0 +1,14 @@
+v51.42 — dialogue naming + real in-game dialogue integration
+
+- The only visible NPC names in the dialogue system are now fixed to:
+  • Павел Петрович
+  • Серёга
+  • Джордж
+  • Баба Капа
+- George's world interaction label is now “Джордж”.
+- New portrait/UI presentation remains, but ALL dialogue text, branches, prices,
+  progression checks, payouts, upgrades, shop opening, voices and actions are taken
+  from the game's existing dialogue functions. No replacement mockup dialogue is used.
+- Dialogue header name is resolved from the active NPC key, so nested responses keep
+  the correct exact name automatically.
+- Cache version bumped to 51.42.

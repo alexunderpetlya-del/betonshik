@@ -1,0 +1,9 @@
+BETONSHCHIK v51.67 OPTIMIZED CLOUDFLARE
+
+- v51.66 gameplay/UI fixes preserved.
+- Project storage optimized: desktop/mobile now share the exact same geometry buffers.
+- Desktop FINAL textures are byte-for-byte identical to the previous desktop build (no PC texture quality loss).
+- Separate mobile and mobile-safe texture sets remain for memory stability.
+- The omitted monetka5-material storefront geometry is restored directly into FINAL / FINAL_MOBILE / FINAL_MOBILE_SAFE.
+- Dialogue portraits normalized to identical 1024x1024 framing with their assigned brush backgrounds baked in.
+- No individual deployment file exceeds 25 MiB.

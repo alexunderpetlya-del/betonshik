@@ -1,0 +1,19 @@
+v51.56 — Mobile controls rework
+
+Implemented:
+- Only ONE fixed joystick remains, positioned bottom-right.
+- The right joystick controls movement (forward/back/strafe).
+- Camera look is now swipe/drag directly on the gameplay canvas; no camera joystick.
+- Multi-touch works as intended: one thumb can hold movement while the other swipes to look.
+- Added radial deadzone and remapped response curve to the movement stick.
+- Added safe-area-aware layout and larger touch targets.
+- Context interaction/action buttons remain world-anchored and only appear when relevant.
+- Center hotbar remains tappable.
+- Added light haptic feedback where the browser/device supports navigator.vibrate().
+- Added a short unobtrusive "swipe to look" hint that fades away automatically.
+- Updated cache-bust query to v51.56.
+
+Files changed:
+- index.html
+- main.js
+- style.css
