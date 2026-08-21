@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="БЕТОНЩИК" />
+  <meta name="application-name" content="БЕТОНЩИК" />
+  <meta name="theme-color" content="#11110f" />
+  <link rel="apple-touch-icon" sizes="180x180" href="./assets/icons/apple-touch-icon.png?v=51.41" />
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/icons/favicon-32.png?v=51.41" />
+  <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png?v=51.41" />
+  <title>БЕТОНЩИК</title>
+  <link rel="manifest" href="./manifest.webmanifest?v=51.62" />
+  <link rel="stylesheet" href="./style.css?v=51.72" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.min.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="game"></div>
+  <div id="cinematicGrade"></div>
+  <div id="rotateNotice"><b>ПОВЕРНИ ТЕЛЕФОН</b><span>Мобильное управление работает в панорамном режиме</span></div>
+  <div id="mobileControls" aria-label="Мобильное управление">
+    <div id="mobileLookHint" aria-hidden="true"><b>ОБЗОР</b><span>води пальцем по экрану</span></div>
+    <div id="mobileWorldActions" aria-label="Контекстные действия">
+      <button id="mobileInteract" class="mobileWorldButton isHidden" type="button">ДЕЙСТВИЕ</button>
+      <button id="mobileAction" class="mobileWorldButton mobileWorldAction isHidden" type="button">ВКЛ БЕТОН</button>
+    </div>
+    <div class="mobileStick" id="moveStick" aria-label="Движение"><div class="stickRing"></div><div class="stickKnob" id="moveKnob"></div><span>ДВИЖЕНИЕ</span></div>
+  </div>
+
+  <div id="mobileHud" aria-label="Мобильный HUD">
+    <div id="mobileAim" aria-hidden="true"></div>
+    <div id="mobileJobMini">
+      <span>ЗАЛИВКА</span><b id="mobileFillPercent">0.0%</b>
+      <small>РОВНОСТЬ <strong id="mobileLevelPercent">0%</strong></small>
+    </div>
+    <div id="mobileStamina">
+      <img src="./assets/ui/stamina_icon.png" alt="">
+      <div class="mobileStaminaTrack"><i id="mobileStaminaFill"></i></div>
+      <b id="mobileStaminaText">100</b>
+    </div>
+    <div id="mobileMoney"><img src="./assets/ui/wallet_icon.png" alt=""><b id="mobileMoneyText">0 ₽</b></div>
+    <div id="mobileHotbar" aria-label="Быстрые предметы">
+      <button id="mobileSmokeSlot" class="mobileHotbarSlot" type="button"><img src="./assets/ui/hotbar_cigarettes.png" alt=""><b id="mobileSmokeCount">3</b></button>
+      <button id="mobileDrinkSlot" class="mobileHotbarSlot" type="button"><img src="./assets/ui/hotbar_energy.png" alt=""><b id="mobileDrinkCount">0</b></button>
+      <button id="mobileBeerSlot" class="mobileHotbarSlot" type="button"><img src="./assets/ui/hotbar_baltika9.png" alt=""><b id="mobileBeerCount">4</b></button>
+      <button id="mobileRakeSlot" class="mobileHotbarSlot" type="button"><img src="./assets/ui/hotbar_rake.png" alt=""><b id="mobileRakeState">—</b></button>
+    </div>
+    <div id="mobileToast"></div>
+  </div>
+  <button id="mobileDebugToggle" type="button" aria-label="Mobile debug">DBG</button>
+  <pre id="mobileDebugPanel" aria-live="polite"></pre>
+
+  <div id="start" class="overlay menuSplash">
+    <div class="menuBackdrop" aria-hidden="true"></div>
+
+    <div class="menuFrame" aria-label="Бетонщик">
+      <img
+        class="menuSplashImage"
+        src="./assets/ui/main_menu_ultrawide_v528.jpg"
+        alt="Бетонщик"
+        draggable="false"
+      >
+
+      <button id="startBtn" class="menuPlayButton" aria-label="Играть" type="button">
+        <img
+          class="menuPlayButtonImage"
+          src="./assets/ui/play_button.png"
+          alt="Играть"
+          draggable="false"
+        >
+      </button>
+
+      <div class="menuLoadState" id="loadState">Загрузка...</div>
+      <div id="menuLoadingSpinner" class="menuLoadingSpinner" aria-hidden="true"></div>
+    </div>
+  </div>
+
+  <div id="hud">
+    <div id="topLeft">
+      <div class="tag">ОБЪЕКТ №17</div>
+      <div class="title">Заливка бетонного пола</div>
+      <div class="sub" id="zoneLabel">Двор стройплощадки</div>
+      <div id="economy"><span>НА РУКАХ</span><img id="walletIcon" src="./assets/ui/wallet_icon.png" alt=""><b id="moneyText">0 ₽</b></div>
+    </div>
+    <div id="meters">
+      <div class="meterRow staminaRow"><span>ВЫНОСЛИВОСТЬ</span><div class="bar"><img id="staminaLabel" src="./assets/ui/stamina_icon.png" alt="Дыхалка"><i id="staminaBar"></i></div><b id="staminaText">100</b></div>
+      <div class="meterRow"><span>ПЕРЕМОТКА</span><div class="bar"><i id="energyBar"></i></div><b id="energyText">0</b></div>
+    </div>
+    <div id="crosshair"><i></i><b></b></div>
+    <div id="prompt"></div>
+    <div id="toast"></div>
+    <div id="quickActions">
+      <div class="quickAction" id="hotbarSmokeSlot"><kbd>1</kbd><img class="hotbarIcon hotbarIconCigs" src="./assets/ui/hotbar_cigarettes.png" alt=""><span id="smokeState">ЗАКУРИТЬ</span><b id="smokeCount">3</b></div>
+      <div class="quickAction" id="hotbarDrinkSlot"><kbd>2</kbd><img class="hotbarIcon hotbarIconEnergy" src="./assets/ui/hotbar_energy.png" alt=""><span id="drinkState">ПЕРЕМОТКА</span><b id="drinkCount">0</b></div>
+      <div class="quickAction" id="hotbarBeerSlot"><kbd>3</kbd><img class="hotbarIcon hotbarIconBeer" src="./assets/ui/hotbar_baltika9.png" alt=""><span id="beerState">БАЛТИКА 9</span><b id="beerCount">4</b></div>
+      <div class="quickAction locked" id="hotbarRakeSlot"><kbd>4</kbd><img class="hotbarIcon hotbarIconRake" src="./assets/ui/hotbar_rake.png" alt=""><span>ГРАБЛИ</span><b id="rakeHotbarState">—</b></div>
+    </div>
+    <div id="pourHud">
+      <div class="pourHead"><span>ТЕКУЩАЯ КАРТА</span><b id="fillPercent">0.0%</b></div>
+      <div class="pourBar"><i id="fillBar"></i></div>
+      <div class="pourGrid">
+        <span>ОСТАЛОСЬ</span><b id="fillRemaining">12.80 м³</b>
+        <span>РОВНОСТЬ</span><b id="fillLevel">0%</b>
+        <span>СЕКТОР</span><b id="zoneProgress">№1: 0% · готово 0/6</b>
+        <span>БЕТОН НА ПЛИТЕ</span><b id="spillVolume">0.00 м³</b>
+        <span>ДАВЛЕНИЕ / QTE</span><b id="qteScore">0 OK · 0 MISS</b>
+      </div>
+      <div class="pourHint">Лить можно по всей плите · плюхи снаружи карт надо загнать граблями обратно</div>
+    </div>
+    <canvas id="minimap" width="250" height="190"></canvas>
+    <div id="legend">v0.46 · CALMER COLOR · NPC FACING · FPS BODY FIX</div>
+  </div>
+<div id="qteLayer">
+    <div id="qteTarget"><b>КЛИК</b></div>
+    <div id="qteCursor"></div>
+    <div id="qteLabel">ШЛАНГ ВОТ-ВОТ ВЫСКОЛЬЗНЕТ ИЗ РУК!<small>ПОПАДИ В КРУГ · СОВПАДЕНИЕ КОЛЕЦ = ИДЕАЛЬНО</small></div>
+  </div>
+
+  <div id="shop" class="gameModal hidden">
+    <div class="modalCard shopCard">
+      <div class="shopHeader">
+        <div>
+          <div class="modalEyebrow">ЛАРЁК · БАБА КАПА</div>
+          <h2>МОНЕТКА</h2>
+        </div>
+        <div class="shopBalance">НА РУКАХ <b id="shopMoney">0 ₽</b></div>
+      </div>
+
+      <div class="shopLayout">
+        <div class="shopProducts">
+          <div class="shopSectionLabel first">ТОВАРЫ</div>
+          <button class="shopProduct selected" data-product="rewind">
+            <span><strong>Перемотка</strong><small>+1 банка</small></span><b>180 ₽</b>
+          </button>
+          <button class="shopProduct" data-product="beer">
+            <span><strong>Балтика 9</strong><small>+1 банка</small></span><b>140 ₽</b>
+          </button>
+          <button class="shopProduct" data-product="samec">
+            <span><strong>Сигареты «Самец»</strong><small>+20 сигарет</small></span><b>120 ₽</b>
+          </button>
+          <button class="shopProduct" data-product="belomor">
+            <span><strong>Сигареты «Беломор»</strong><small>+20 сигарет</small></span><b>150 ₽</b>
+          </button>
+
+          <div class="shopSectionLabel">РАБОЧАЯ ОБУВЬ</div>
+          <button class="shopProduct" data-product="boots1">
+            <span><strong>Сапоги новичка</strong><small>меньше вязнешь</small></span><b>450 ₽</b>
+          </button>
+          <button class="shopProduct" data-product="boots2">
+            <span><strong>Сапоги бетонщика</strong><small>для мокрого бетона</small></span><b>1 100 ₽</b>
+          </button>
+          <button class="shopProduct" data-product="boots3">
+            <span><strong>Мышеходы</strong><small>легендарные сапоги Паши</small></span><b>2 400 ₽</b>
+          </button>
+        </div>
+
+        <div class="shopPreviewPane">
+          <canvas id="shopPreview" width="360" height="300"></canvas>
+          <div class="shopSelectedInfo">
+            <h3 id="shopSelectedName">Перемотка</h3>
+            <p id="shopSelectedDesc">Напиток «Перемотка». Временно усиливает спринт.</p>
+            <div class="shopSelectedBottom">
+              <b id="shopSelectedPrice">180 ₽</b>
+              <button id="shopBuy">КУПИТЬ</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <button id="shopClose" class="modalClose">ВЫХОД</button>
+    </div>
+  </div>
+
+
+  <div id="dialogue" class="dialogueLayer hidden" data-npc="pavel">
+    <div class="dialogueCard">
+      <div class="dialoguePortraitStage" aria-hidden="true">
+        <div class="dialoguePaint"></div>
+        <div class="dialoguePortraitShadow"></div>
+        <img id="dialoguePortrait" class="dialoguePortrait" src="./assets/dialogue_v5/pavel.webp" alt="">
+      </div>
+      <div class="dialoguePanel">
+        <div class="dialoguePanelNoise" aria-hidden="true"></div>
+        <div class="dialogueHazardTop" aria-hidden="true"></div>
+        <div class="dialogueHazardCorner" aria-hidden="true"></div>
+        <div class="dialogueNameplate"><h2 id="dialogueName">ПАВЕЛ ПЕТРОВИЧ</h2></div>
+        <p id="dialogueText"></p>
+        <div id="dialogueOptions"></div>
+        <button id="dialogueClose" class="dialogueClose"><kbd>ESC</kbd><span>ВЫЙТИ</span></button>
+      </div>
+    </div>
+  </div>
+
+  <div id="jobResult" class="gameModal hidden">
+    <div class="modalCard resultCard">
+      <div class="modalEyebrow">ОБЪЕКТ №17</div>
+      <h2 id="jobResultTitle">РАБОТА ПРИНЯТА</h2>
+      <p id="jobResultText"></p>
+      <button id="jobResultBtn" class="modalClose">ДАЛЬШЕ</button>
+    </div>
+  </div>
+
+  <script type="module" src="./main.js?v=51.72"></script>
+</body>
+</html>
