@@ -6,11 +6,13 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
 const mount = document.querySelector('#game');
 const start = document.querySelector('#start');
 const startBtn = document.querySelector('#startBtn');
 const loadState = document.querySelector('#loadState');
+const menuLoadingSpinner = document.querySelector('#menuLoadingSpinner');
 
 // v49.1: if any runtime exception stops scene initialization, show it directly
 // on the loading screen instead of leaving the user with an endless "loading".
@@ -18,6 +20,7 @@ function showFatalRuntimeError(message) {
   console.error('[FATAL RUNTIME]', message);
   if (!loadState) return;
   loadState.textContent = 'ОШИБКА: ' + String(message);
+  menuLoadingSpinner?.classList.add('isError');
   loadState.style.color = '#ff7777';
   loadState.style.whiteSpace = 'pre-wrap';
   loadState.style.maxWidth = '900px';
@@ -67,6 +70,24 @@ const qteTargetEl = document.querySelector('#qteTarget');
 const qteCursorEl = document.querySelector('#qteCursor');
 const shopEl = document.querySelector('#shop');
 const shopMoneyEl = document.querySelector('#shopMoney');
+const mobileInteractBtn = document.querySelector('#mobileInteract');
+const mobileActionBtn = document.querySelector('#mobileAction');
+const mobileWorldActionsEl = document.querySelector('#mobileWorldActions');
+const mobileHudEl = document.querySelector('#mobileHud');
+const mobileFillPercentEl = document.querySelector('#mobileFillPercent');
+const mobileLevelPercentEl = document.querySelector('#mobileLevelPercent');
+const mobileStaminaFillEl = document.querySelector('#mobileStaminaFill');
+const mobileStaminaTextEl = document.querySelector('#mobileStaminaText');
+const mobileMoneyTextEl = document.querySelector('#mobileMoneyText');
+const mobileSmokeCountEl = document.querySelector('#mobileSmokeCount');
+const mobileDrinkCountEl = document.querySelector('#mobileDrinkCount');
+const mobileBeerCountEl = document.querySelector('#mobileBeerCount');
+const mobileRakeStateEl = document.querySelector('#mobileRakeState');
+const mobileSmokeSlotEl = document.querySelector('#mobileSmokeSlot');
+const mobileDrinkSlotEl = document.querySelector('#mobileDrinkSlot');
+const mobileBeerSlotEl = document.querySelector('#mobileBeerSlot');
+const mobileRakeSlotEl = document.querySelector('#mobileRakeSlot');
+const mobileToastEl = document.querySelector('#mobileToast');
 const shopCloseEl = document.querySelector('#shopClose');
 const shopPreviewCanvasEl = document.querySelector('#shopPreview');
 const shopSelectedNameEl = document.querySelector('#shopSelectedName');
@@ -77,10 +98,8 @@ const jobResultEl = document.querySelector('#jobResult');
 const jobResultTitleEl = document.querySelector('#jobResultTitle');
 const jobResultTextEl = document.querySelector('#jobResultText');
 const jobResultBtnEl = document.querySelector('#jobResultBtn');
-const tuneHudEl = document.querySelector('#tuneHud');
-const tuneTitleEl = document.querySelector('#tuneTitle');
-const tuneLinesEl = document.querySelector('#tuneLines');
 const dialogueEl = document.querySelector('#dialogue');
+const dialoguePortraitEl = document.querySelector('#dialoguePortrait');
 const dialogueNameEl = document.querySelector('#dialogueName');
 const dialogueTextEl = document.querySelector('#dialogueText');
 const dialogueOptionsEl = document.querySelector('#dialogueOptions');
@@ -88,21 +107,90 @@ const dialogueCloseEl = document.querySelector('#dialogueClose');
 const mapCtx = minimap.getContext('2d');
 minimap.style.display = 'none';
 
-// Mobile/browser profile. We keep the SAME scene, textures and geometry on mobile;
-// only render resolution, shadow-map resolution and expensive post FX adapt to the GPU.
+// Mobile/browser profile. Desktop loads the exact FINAL export without texture downscaling.
+// Mobile uses a separate memory profile; weak devices automatically retry with SAFE textures.
 const TOUCH_DEVICE = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
 const MOBILE_LANDSCAPE = () => TOUCH_DEVICE && innerWidth > innerHeight;
+const MOBILE_SAFE_KEY = 'beton_mobile_safe_v5161';
+const MOBILE_BOOT_STAGE_KEY = 'beton_mobile_boot_stage_v5161';
+const MOBILE_BOOT_TIME_KEY = 'beton_mobile_boot_time_v5161';
+const MOBILE_DEBUG_LOG_KEY = 'beton_mobile_debug_log_v5161';
+const mobileUrlParams = new URLSearchParams(location.search);
+const forceFullMobile = mobileUrlParams.has('fullmobile');
+const previousMobileStage = TOUCH_DEVICE ? (localStorage.getItem(MOBILE_BOOT_STAGE_KEY) || '') : '';
+const previousMobileStageTime = TOUCH_DEVICE ? Number(localStorage.getItem(MOBILE_BOOT_TIME_KEY) || 0) : 0;
+const previousMobileLikelyCrashed = TOUCH_DEVICE &&
+  ['scene-loading-normal','player-loading','npc-loading'].includes(previousMobileStage) && previousMobileStageTime > 0 &&
+  (Date.now() - previousMobileStageTime) < 10 * 60 * 1000;
+if (previousMobileLikelyCrashed && !forceFullMobile) localStorage.setItem(MOBILE_SAFE_KEY, '1');
+const MOBILE_SAFE_MODE = TOUCH_DEVICE && !forceFullMobile && localStorage.getItem(MOBILE_SAFE_KEY) === '1';
+const FINAL_SCENE_URL = TOUCH_DEVICE
+  ? (MOBILE_SAFE_MODE ? './assets/FINAL_MOBILE_SAFE.gltf' : './assets/FINAL_MOBILE.gltf')
+  : './assets/FINAL.gltf';
 document.documentElement.classList.toggle('touchDevice', TOUCH_DEVICE);
-THREE.Cache.enabled = true;
+document.documentElement.classList.toggle('mobileSafeMode', MOBILE_SAFE_MODE);
+// Do not retain huge .bin/image payloads in the Three.js global file cache on phones.
+THREE.Cache.enabled = !TOUCH_DEVICE;
+
+const mobileDebugLines = [];
+function mobileDebugLog(message) {
+  if (!TOUCH_DEVICE) return;
+  const line = `${new Date().toISOString().slice(11,19)} ${String(message)}`;
+  mobileDebugLines.push(line);
+  if (mobileDebugLines.length > 80) mobileDebugLines.splice(0, mobileDebugLines.length - 80);
+  try { localStorage.setItem(MOBILE_DEBUG_LOG_KEY, mobileDebugLines.join('\n')); } catch (_) {}
+  const panel = document.querySelector('#mobileDebugPanel');
+  if (panel) panel.textContent = mobileDebugLines.join('\n');
+}
+function mobileDebugStage(stage) {
+  if (!TOUCH_DEVICE) return;
+  try {
+    localStorage.setItem(MOBILE_BOOT_STAGE_KEY, stage);
+    localStorage.setItem(MOBILE_BOOT_TIME_KEY, String(Date.now()));
+  } catch (_) {}
+  mobileDebugLog(`stage: ${stage}`);
+}
+function buildMobileDebugReport() {
+  let glInfo = 'webgl: pending';
+  try {
+    const gl = renderer?.getContext?.();
+    const ext = gl?.getExtension?.('WEBGL_debug_renderer_info');
+    if (gl && ext) glInfo = `gpu: ${gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)}`;
+    else if (gl) glInfo = `webgl: ${gl.getParameter(gl.VERSION)}`;
+  } catch (_) {}
+  return [
+    'BETONSHCHIK MOBILE DEBUG v51.72',
+    `safe=${MOBILE_SAFE_MODE} scene=${FINAL_SCENE_URL}`,
+    `screen=${innerWidth}x${innerHeight} dpr=${devicePixelRatio}`,
+    `ua=${navigator.userAgent}`,
+    glInfo,
+    '',
+    ...mobileDebugLines,
+  ].join('\n');
+}
+if (TOUCH_DEVICE) {
+  try {
+    const old = localStorage.getItem(MOBILE_DEBUG_LOG_KEY);
+    if (old) mobileDebugLines.push(...old.split('\n').slice(-20));
+  } catch (_) {}
+  mobileDebugStage('boot');
+  window.addEventListener('error', e => mobileDebugLog(`ERROR ${e.message || e.type} @${e.filename || ''}:${e.lineno || ''}`));
+  window.addEventListener('unhandledrejection', e => mobileDebugLog(`PROMISE ${e.reason?.message || e.reason || 'rejected'}`));
+}
 
 let started = false;
 let locked = false;
 let assetsLoaded = 0;
 let assetsFailed = 0;
 const TOTAL_ASSETS = 1;
+if (startBtn) { startBtn.disabled = true; startBtn.setAttribute('aria-disabled','true'); }
+let sceneReady = false;
+let sceneRecoveryPending = false;
+let sceneMissingTimer = 0;
+const SCENE_RETRY_KEY = 'beton_scene_retry_v536';
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x9aa7ad);
+scene.background = new THREE.Color(0x0b0d0e); // dark fallback: grey screen must never masquerade as a loaded scene
 scene.fog = null;
 
 const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.12, 450);
@@ -110,59 +198,100 @@ camera.layers.set(0);
 camera.rotation.order = 'YXZ';
 camera.position.set(0, 1.72, 15.5);
 
-// Debug third-person camera (F3). It never replaces the FPS camera logic; it only changes what renderer uses.
-const debugCamera = new THREE.PerspectiveCamera(68, innerWidth / innerHeight, 0.08, 450);
-debugCamera.rotation.order = 'YXZ';
-let debugMode = false;
-let debugYaw = 0;
-let debugPitch = 0.28;
-let debugDistance = 5.2;
-const debugTarget = new THREE.Vector3();
-
-const renderer = new THREE.WebGLRenderer({ antialias: !TOUCH_DEVICE, powerPreference: 'high-performance' });
-// Full devicePixelRatio (2-4x on phones) is needlessly expensive in WebGL. 1 CSS pixel
-// per rendered pixel stays crisp on a small display while avoiding 4-16x pixel cost.
-let mobileRenderScale = TOUCH_DEVICE ? 0.82 : 1.0;
+const renderer = new THREE.WebGLRenderer({
+  antialias: !TOUCH_DEVICE,
+  stencil: false,
+  depth: true,
+  alpha: false,
+  powerPreference: 'high-performance',
+  preserveDrawingBuffer: false,
+});
+// Adaptive mobile DPR: starts crisp, then moves only when sustained FPS proves the GPU budget.
+// Desktop rendering is unchanged.
+const MOBILE_DPR_MIN = 0.78;
+const MOBILE_DPR_MAX = 1.35;
+let mobileRenderScale = TOUCH_DEVICE ? Math.min(devicePixelRatio, 1.08) : 1.0;
 renderer.setPixelRatio(TOUCH_DEVICE ? Math.min(devicePixelRatio, mobileRenderScale) : Math.min(devicePixelRatio, 1.55));
 renderer.setSize(innerWidth, innerHeight);
-// Mobile Safari has a tight combined RAM/VRAM budget. A 2048² shadow map plus
-// the large authored scene was enough to make iOS kill the tab outright.
-renderer.shadowMap.enabled = !TOUCH_DEVICE;
+renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.98;
+renderer.toneMappingExposure = 1.08;
 mount.appendChild(renderer.domElement);
 
 // v0.45: clean indie-grade post stack. No SSAO: it caused black halos on the huge
 // joined GLB. Desktop gets very restrained high-threshold bloom for sun/bright highlights;
 // touch devices render the same scene directly to save a full-screen HDR pass.
-const composer = TOUCH_DEVICE ? null : new EffectComposer(renderer);
-composer?.setPixelRatio(Math.min(devicePixelRatio, 1.15));
-composer?.setSize(innerWidth, innerHeight);
-const renderPass = TOUCH_DEVICE ? null : new RenderPass(scene, camera);
-if (renderPass) composer.addPass(renderPass);
+let composer = null;
+let renderPass = null;
 let bloomPass = null;
+const subtleColorGradeShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    saturation: { value: 0.96 },
+    greenSuppression: { value: 0.16 },
+    warmth: { value: 0.035 },
+    highlightCompression: { value: 0.085 },
+  },
+  vertexShader: `varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }`,
+  fragmentShader: `uniform sampler2D tDiffuse;
+    uniform float saturation;
+    uniform float greenSuppression;
+    uniform float warmth;
+    uniform float highlightCompression;
+    varying vec2 vUv;
+    void main() {
+      vec3 color = texture2D(tDiffuse, vUv).rgb;
+      float luma = dot(color, vec3(0.299, 0.587, 0.114));
+      color = mix(vec3(luma), color, saturation);
+      float dominantGreen = max(color.g - max(color.r, color.b), 0.0);
+      color.g -= dominantGreen * greenSuppression;
+      color.r += dominantGreen * greenSuppression * 0.16;
+      color.b += dominantGreen * greenSuppression * 0.05;
+      color *= vec3(1.0 + warmth, 1.0 + warmth * 0.25, 1.0 - warmth * 0.45);
+      color = color / (1.0 + color * highlightCompression);
+      gl_FragColor = vec4(color, 1.0);
+    }`
+};
+let subtleColorGradePass = null;
+let outputPass = null;
 if (!TOUCH_DEVICE) {
-  bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.075, 0.18, 1.08);
+  composer = new EffectComposer(renderer);
+  composer.setPixelRatio(Math.min(devicePixelRatio, 1.15));
+  composer.setSize(innerWidth, innerHeight);
+  renderPass = new RenderPass(scene, camera);
+  composer.addPass(renderPass);
+  bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.055, 0.16, 1.12);
   composer.addPass(bloomPass);
+  subtleColorGradePass = new ShaderPass(subtleColorGradeShader);
+  composer.addPass(subtleColorGradePass);
+  outputPass = new OutputPass();
+  composer.addPass(outputPass);
 }
-const outputPass = TOUCH_DEVICE ? null : new OutputPass();
-if (outputPass) composer.addPass(outputPass);
 
 // Shop product preview: a separate small Three.js scene rendered only while the shop is open.
-const shopPreviewRenderer = TOUCH_DEVICE ? null : new THREE.WebGLRenderer({
-  canvas: shopPreviewCanvasEl,
-  alpha: true,
-  antialias: true,
-  powerPreference: 'low-power',
-});
-if (shopPreviewRenderer) {
-  shopPreviewRenderer.setPixelRatio(Math.min(devicePixelRatio, 1.35));
+let shopPreviewRenderer = null;
+function ensureShopPreviewRenderer() {
+  if (shopPreviewRenderer) return shopPreviewRenderer;
+  shopPreviewRenderer = new THREE.WebGLRenderer({
+    canvas: shopPreviewCanvasEl,
+    alpha: true,
+    antialias: !TOUCH_DEVICE,
+    stencil: false,
+    powerPreference: 'low-power',
+  });
+  shopPreviewRenderer.setPixelRatio(TOUCH_DEVICE ? 0.85 : Math.min(devicePixelRatio, 1.35));
   shopPreviewRenderer.setSize(360, 300, false);
   shopPreviewRenderer.outputColorSpace = THREE.SRGBColorSpace;
   shopPreviewRenderer.toneMapping = THREE.ACESFilmicToneMapping;
   shopPreviewRenderer.toneMappingExposure = 1.15;
+  mobileDebugLog('shop preview WebGL context created');
+  return shopPreviewRenderer;
 }
 
 const shopPreviewScene = new THREE.Scene();
@@ -185,20 +314,20 @@ let shopPreviewRequestId = 0;
 // v0.29 atmosphere: warm directional sun + cool skylight/bounce.
 // Fog is deliberately subtle: it only softens the distant panel houses and gives depth
 // without washing out the playable construction site.
-scene.fog = new THREE.Fog(0xa7b0b4, 82, 220);
+scene.fog = new THREE.Fog(0xb8c3ca, 58, 205);
 // Skylight establishes readable shadow colour; a tiny neutral fill prevents crushed blacks.
-scene.add(new THREE.HemisphereLight(0xd7e4eb, 0x49443d, 0.66));
-scene.add(new THREE.AmbientLight(0xdde2df, 0.035));
+scene.add(new THREE.HemisphereLight(0xe6edf0, 0x6f675e, 1.18));
+scene.add(new THREE.AmbientLight(0xeee7db, 0.22));
 
 const SUN_OFFSET = new THREE.Vector3(-28, 42, 15);
-const sun = new THREE.DirectionalLight(0xffd8a3, 2.38);
+const sun = new THREE.DirectionalLight(0xffdeb7, 2.42);
 sun.position.copy(SUN_OFFSET);
 sun.castShadow = true;
 
 // Shadow-acne fix:
 // keep a much tighter high-resolution shadow frustum around the player,
 // and offset shadow comparison along surface normals.
-sun.shadow.mapSize.set(TOUCH_DEVICE ? 2048 : 4096, TOUCH_DEVICE ? 2048 : 4096);
+sun.shadow.mapSize.set(TOUCH_DEVICE ? 1024 : 4096, TOUCH_DEVICE ? 1024 : 4096);
 sun.shadow.camera.left = -32;
 sun.shadow.camera.right = 32;
 sun.shadow.camera.top = 32;
@@ -214,11 +343,19 @@ scene.add(sun.target);
 scene.add(sun);
 
 // Cool sky bounce from the opposite side. No shadow map: cheap, soft and atmospheric.
-const skyBounce = new THREE.DirectionalLight(0xa9c5d6, 0.18);
+const skyBounce = new THREE.DirectionalLight(0xc3d5de, 0.52);
 skyBounce.position.set(24, 26, -18);
 skyBounce.target.position.set(0, 1.5, -6);
 scene.add(skyBounce.target);
 scene.add(skyBounce);
+
+// v51.29 — extra overhead work light aimed directly at the construction slab.
+const siteTopLight = new THREE.SpotLight(0xf2efde, 28.0, 62, THREE.MathUtils.degToRad(34), .62, 1.15);
+siteTopLight.position.set(0, 28, 4);
+siteTopLight.target.position.set(0, .18, 4);
+siteTopLight.castShadow = false;
+scene.add(siteTopLight.target);
+scene.add(siteTopLight);
 
 const mats = {
   dirt: new THREE.MeshStandardMaterial({ color: 0x777267, roughness: 1 }),
@@ -286,6 +423,480 @@ function addWalkSurface(name, minX, maxX, minZ, maxZ, topY) {
   if (![minX,maxX,minZ,maxZ,topY].every(Number.isFinite)) return;
   walkSurfaces.push({ name, minX, maxX, minZ, maxZ, topY });
 }
+
+const MONETKA_PARKING_ZONE = Object.freeze({
+  minX: -24.0,
+  maxX: 8.0,
+  minZ: -39.5,
+  maxZ: -22.4,
+});
+function boxCenterXZ(bb) {
+  return new THREE.Vector2((bb.min.x + bb.max.x) * .5, (bb.min.z + bb.max.z) * .5);
+}
+function inMonetkaParkingZone(bb, padX = 0, padZ = 0) {
+  if (!bb) return false;
+  const c = boxCenterXZ(bb);
+  return (
+    c.x >= MONETKA_PARKING_ZONE.minX - padX &&
+    c.x <= MONETKA_PARKING_ZONE.maxX + padX &&
+    c.y >= MONETKA_PARKING_ZONE.minZ - padZ &&
+    c.y <= MONETKA_PARKING_ZONE.maxZ + padZ
+  );
+}
+function isVehicleName(name) {
+  const low = String(name || '').toLowerCase();
+  return low.includes('zhiguli') || low.includes('vehicle') || low.includes('car') || low.includes('<auto>') || low.includes('lada') || low.includes('vaz');
+}
+function applyParkingTransparencyHack(mat, threshold = 0.16) {
+  if (!mat || mat.userData?.parkingTransparencyHack) return;
+  mat.transparent = false;
+  mat.opacity = 1;
+  mat.alphaTest = Math.max(mat.alphaTest || 0, 0.02);
+  mat.depthWrite = true;
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = shader => {
+    if (typeof prev === 'function') prev(shader);
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <map_fragment>',
+      `#include <map_fragment>
+float __betonParkingLuma = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
+if (__betonParkingLuma < ${threshold.toFixed(3)}) discard;`
+    );
+  };
+  mat.userData = mat.userData || {};
+  mat.userData.parkingTransparencyHack = true;
+  mat.needsUpdate = true;
+}
+function forceMonetka5Visible(root) {
+  if (!root) return;
+
+  // IMPORTANT: FINAL was exported while the real `monetka5-material` object was hidden.
+  // The export therefore contains only the sibling `monetka5-material.003` floor plane.
+  // A visibility toggle cannot bring missing geometry back, so v51.67 restores the omitted
+  // storefront from a tiny standalone glTF extracted from the previous authored scene.
+  const realStore = root.getObjectByName('monetka5-material');
+  if (realStore) {
+    realStore.visible = true;
+    realStore.frustumCulled = false;
+    realStore.traverse(o => {
+      o.visible = true;
+      if (!o.isMesh || !o.material) return;
+      o.frustumCulled = false;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const mat of mats) {
+        if (!mat) continue;
+        mat.visible = true;
+        mat.opacity = 1;
+        mat.transparent = false;
+        mat.depthTest = true;
+        mat.depthWrite = true;
+        mat.needsUpdate = true;
+      }
+    });
+    console.log('[MONETKA] real storefront already present');
+    return;
+  }
+
+  if (root.userData?.monetkaRestoreRequested) return;
+  root.userData = root.userData || {};
+  root.userData.monetkaRestoreRequested = true;
+  mobileDebugLog('MONETKA: restoring omitted storefront mesh');
+
+  loader.load('./assets/monetka_restore/monetka_restore.gltf', restoredGltf => {
+    const restored =
+      restoredGltf.scene.getObjectByName('monetka5-material_RESTORED') ||
+      restoredGltf.scene.children[0];
+    if (!restored) {
+      console.error('[MONETKA] restore glTF loaded but storefront mesh is empty');
+      mobileDebugLog('MONETKA restore failed: empty glTF');
+      return;
+    }
+
+    restored.name = 'monetka5-material';
+    restored.visible = true;
+    restored.frustumCulled = false;
+    restored.traverse(o => {
+      o.visible = true;
+      if (!o.isMesh) return;
+      o.frustumCulled = false;
+      o.castShadow = true;
+      o.receiveShadow = true;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const mat of mats) {
+        if (!mat) continue;
+        mat.visible = true;
+        mat.opacity = 1;
+        mat.transparent = false;
+        mat.depthTest = true;
+        mat.depthWrite = true;
+        mat.needsUpdate = true;
+      }
+    });
+
+    // The extracted Monetka vertices are already authored in FINAL world coordinates.
+    // Its original parent chain in Blender is identity, so attaching to MONETKA keeps
+    // the exact placement while preserving the semantic hierarchy.
+    const host = root.getObjectByName('monetka') || root.getObjectByName('MONETKA') || root;
+    host.add(restored);
+    restored.updateWorldMatrix(true, true);
+    console.log('[MONETKA] restored missing storefront from standalone asset');
+    mobileDebugLog('MONETKA storefront restored');
+  }, undefined, err => {
+    console.error('[MONETKA] failed to load restore asset', err);
+    mobileDebugLog(`MONETKA restore error: ${err?.message || err}`);
+  });
+}
+
+function fixMonetkaParking(root) {
+  if (!root) return;
+  let decalsFixed = 0;
+  root.updateWorldMatrix(true, true);
+  root.traverse(o => {
+    if (!o.isMesh || !o.visible) return;
+    const bb = new THREE.Box3().setFromObject(o);
+    if (!Number.isFinite(bb.min.x) || !inMonetkaParkingZone(bb, 1.0, 1.0)) return;
+    const size = bb.getSize(new THREE.Vector3());
+    const footprintMax = Math.max(size.x, size.z);
+    const footprintMin = Math.min(size.x, size.z);
+    const low = String(o.name || '').toLowerCase();
+
+    // White parking-space markings exported as flat planes were rendering with a solid
+    // black fill. Make only those decal-like meshes punch out their dark background.
+    const looksLikeParkingDecal =
+      low.startsWith('plane') &&
+      size.y <= 0.35 &&
+      bb.max.y <= 0.35 &&
+      footprintMax >= 3.0 && footprintMax <= 13.5 &&
+      footprintMin >= 2.5 && footprintMin <= 5.5;
+    if (!looksLikeParkingDecal) return;
+
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const mat of mats) {
+      applyParkingTransparencyHack(mat);
+    }
+    // Treat the marking plane as walkable, never as an obstacle.
+    o.userData = o.userData || {};
+    o.userData.walkOnly = true;
+    decalsFixed++;
+  });
+  if (decalsFixed) console.log(`[MONETKA] parking decals fixed: ${decalsFixed}`);
+}
+function carveMonetkaParkingPassage() {
+  let removedBoxes = 0;
+  let removedObbs = 0;
+  for (let i = colliders.length - 1; i >= 0; i--) {
+    const c = colliders[i];
+    if (
+      c.maxX > MONETKA_PARKING_ZONE.minX && c.minX < MONETKA_PARKING_ZONE.maxX &&
+      c.maxZ > MONETKA_PARKING_ZONE.minZ && c.minZ < MONETKA_PARKING_ZONE.maxZ &&
+      (c.maxY ?? Infinity) <= 1.20
+    ) {
+      const low = String(c.name || '').toLowerCase();
+      if (!isVehicleName(low)) {
+        colliders.splice(i, 1);
+        removedBoxes++;
+      }
+    }
+  }
+  for (let i = meshColliders.length - 1; i >= 0; i--) {
+    const m = meshColliders[i];
+    const low = String(m.name || '').toLowerCase();
+    if (isVehicleName(low)) continue;
+    const c = m.obb?.center;
+    if (!c) continue;
+    if (
+      c.x >= MONETKA_PARKING_ZONE.minX && c.x <= MONETKA_PARKING_ZONE.maxX &&
+      c.z >= MONETKA_PARKING_ZONE.minZ && c.z <= MONETKA_PARKING_ZONE.maxZ &&
+      c.y <= 1.35
+    ) {
+      meshColliders.splice(i, 1);
+      removedObbs++;
+    }
+  }
+  if (removedBoxes || removedObbs) {
+    console.log(`[MONETKA] collision carve-out: removed ${removedBoxes} XZ colliders and ${removedObbs} OBB colliders in parking passage`);
+  }
+}
+
+function removeFrontSiteFlower(root) {
+  if (!root) return;
+  const target = new THREE.Vector3(0, 0, -5.5);
+  const world = new THREE.Vector3();
+  let best = null;
+  let bestDist = Infinity;
+
+  root.traverse(o => {
+    if (!o.isMesh || !o.visible) return;
+    const low = String(o.name || '').toLowerCase();
+    const materialNames = (Array.isArray(o.material) ? o.material : [o.material])
+      .filter(Boolean).map(m => String(m.name || '').toLowerCase());
+    const looksLikeFlower =
+      low.includes('daisy') || low.includes('flower') ||
+      materialNames.some(m => m.includes('daisy') || m.includes('flower'));
+    if (!looksLikeFlower) return;
+
+    o.getWorldPosition(world);
+    if (Math.abs(world.x) > 12 || world.z < -15 || world.z > 8) return;
+    const dx = world.x - target.x;
+    const dz = world.z - target.z;
+    const dist = dx * dx + dz * dz;
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = o;
+    }
+  });
+
+  if (best) {
+    best.visible = false;
+    best.userData = best.userData || {};
+    best.userData.noCollision = true;
+    console.log('[SCENE] removed front-site flower:', best.name, 'dist2=', bestDist.toFixed(3));
+  }
+}
+
+function cloneVehicleMaterialForRole(src, role, palette) {
+  const mat = src?.clone?.() || new THREE.MeshStandardMaterial();
+  const cfg = {
+    orange: { color:palette.orange, roughness:.68, metalness:.05, transparent:false, opacity:1, depthWrite:true },
+    orange2:{ color:palette.orange2,roughness:.72, metalness:.04, transparent:false, opacity:1, depthWrite:true },
+    cream:  { color:palette.cream, roughness:.74, metalness:.03, transparent:false, opacity:1, depthWrite:true },
+    dark:   { color:palette.dark,  roughness:.84, metalness:.08, transparent:false, opacity:1, depthWrite:true },
+    rubber: { color:palette.rubber,roughness:.96, metalness:.00, transparent:false, opacity:1, depthWrite:true },
+    metal:  { color:palette.metal, roughness:.56, metalness:.38, transparent:false, opacity:1, depthWrite:true },
+    metal2: { color:palette.metal2,roughness:.62, metalness:.24, transparent:false, opacity:1, depthWrite:true },
+    glass:  { color:palette.glass, roughness:.18, metalness:.02, transparent:true, opacity:.66, depthWrite:false },
+    red:    { color:palette.red,   roughness:.62, metalness:.02, transparent:false, opacity:1, depthWrite:true },
+    yellow: { color:palette.yellow,roughness:.62, metalness:.02, transparent:false, opacity:1, depthWrite:true },
+    blue:   { color:palette.blue,  roughness:.56, metalness:.12, transparent:false, opacity:1, depthWrite:true },
+  }[role] || { color:palette.metal2,roughness:.64,metalness:.18,transparent:false,opacity:1,depthWrite:true };
+
+  // Vehicles are plain CAD colours in FINAL. Keep any maps if they ever appear,
+  // but never let an imported helper tint multiply the authored palette.
+  if (mat.color) mat.color.set(cfg.color);
+  mat.transparent = cfg.transparent;
+  mat.opacity = cfg.opacity;
+  mat.depthWrite = cfg.depthWrite;
+  mat.depthTest = true;
+  if ('roughness' in mat) mat.roughness = cfg.roughness;
+  if ('metalness' in mat) mat.metalness = cfg.metalness;
+  if ('transmission' in mat) mat.transmission = 0;
+  mat.needsUpdate = true;
+  return mat;
+}
+
+function paintVehicleMesh(mesh, role, palette) {
+  if (!mesh?.isMesh) return false;
+  const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  const next = mats.map(src => cloneVehicleMaterialForRole(src, role, palette));
+  mesh.material = Array.isArray(mesh.material) ? next : next[0];
+  return true;
+}
+
+function paintNamedVehicleMeshes(root, roleMap, palette, label) {
+  if (!root) return 0;
+  let count = 0;
+  root.traverse(o => {
+    if (!o.isMesh) return;
+    const role = roleMap[o.name];
+    if (!role) return; // IMPORTANT: no blanket recolour anymore.
+    if (paintVehicleMesh(o, role, palette)) count++;
+  });
+  console.log(`[SCENE] ${label} explicit mesh repaint: ${count}/${Object.keys(roleMap).length}`);
+  return count;
+}
+
+function repaintConstructionVehicles(root) {
+  if (!root) return;
+
+  const palette = {
+    // Warm industrial orange + cream bodywork, graphite chassis, neutral metals.
+    orange: 0xd97b2f,
+    orange2:0xb95e27,
+    cream:  0xe1d8c4,
+    dark:   0x272a2d,
+    rubber: 0x17191b,
+    metal:  0x7d8386,
+    metal2: 0x555b5e,
+    glass:  0x344c5a,
+    red:    0xb53a2d,
+    yellow: 0xd2aa32,
+    blue:   0x587c91,
+  };
+
+  // v51.69: explicit per-mesh paint. The old code recoloured every material by
+  // fuzzy material-name rules, which turned whole multi-part assemblies into
+  // giant orange/black slabs. FINAL already separates the truck into Geom3D
+  // meshes, so colour the actual parts instead.
+  const mixerRoles = {
+    'Geom3D':'cream',           // inner drum / light body hardware
+    'Geom3D.001':'orange',      // main painted body / drum
+    'Geom3D.002':'rubber',      // tyres
+    'Geom3D.003':'dark',        // chassis
+    'Geom3D.004':'metal',       // frame / metal fittings
+    'Geom3D.005':'cream',       // light panels
+    'Geom3D.006':'metal2',      // mechanical parts
+    'Geom3D.007':'metal2',
+    'Geom3D.008':'metal',
+    'Geom3D.009':'metal2',
+    'Geom3D.010':'metal',
+    'Geom3D.011':'dark',        // black hardware
+    'Geom3D.012':'orange2',     // cab/body secondary paint
+    'Geom3D.013':'glass',       // cab glass
+    'Geom3D.014':'cream',       // cab light panel
+    'Geom3D.015':'red',         // marker/tail lights
+    'Geom3D.016':'glass',       // pale glass / lamp cover
+  };
+
+  const pumpRoles = {
+    // Pump machinery / chassis
+    'Geom3D.023':'dark',
+    'Geom3D.024':'metal',
+    'Geom3D.025':'rubber',
+    'Geom3D.026':'metal2',
+    'Geom3D.027':'orange',
+    'Geom3D.028':'cream',
+    'Geom3D.029':'metal',       // kill the source lavender helper colour
+    'Geom3D.030':'metal2',
+    'Geom3D.031':'orange2',
+    'Geom3D.032':'yellow',
+    'Geom3D.033':'yellow',
+    'Geom3D.034':'cream',
+    'Geom3D.035':'dark',
+    'Geom3D.036':'dark',
+    'Geom3D.037':'orange',      // source was purple; painted structural part
+    'Geom3D.038':'red',
+    'Geom3D.039':'dark',
+    'Geom3D.040':'blue',        // hydraulic / utility reservoir
+    'Geom3D.041':'orange',
+    'Geom3D.042':'metal',
+    'Geom3D.043':'dark',
+    'Geom3D.044':'dark',
+    'Geom3D.045':'metal2',
+    'Geom3D.046':'cream',
+    'Geom3D.047':'orange2',     // cab lower/body structure
+    'Geom3D.048':'dark',
+    'Geom3D.049':'dark',
+    'Geom3D.050':'dark',
+    'Geom3D.051':'metal2',
+    'Geom3D.052':'cream',
+    'Geom3D.053':'orange',      // long pump body
+    'Geom3D.054':'glass',
+    'Geom3D.055':'red',
+    'Geom3D.056':'red',
+    'Geom3D.057':'glass',       // imported translucent shell/window set
+    'Geom3D.058':'cream',       // cab roof/trim
+    'Geom3D.059':'dark',        // grille / mesh
+    'Geom3D.060':'orange',      // main cab shell
+    'Geom3D.061':'dark',        // lower trim
+    'Geom3D.062':'rubber',      // tyres
+    'Geom3D.063':'cream',       // secondary cab panel
+    'Geom3D.064':'glass',
+    'Geom3D.065':'glass',
+    'Geom3D.066':'dark',        // bumper / grille
+  };
+
+  const boomRoles = {
+    'Geom3D.017':'orange',
+    'Geom3D.018':'orange',
+    'Geom3D.019':'cream',
+    'Geom3D.020':'orange',
+    'Geom3D.021':'cream',
+    'Geom3D_Boom 2':'orange2',
+    'Geom3D.022':'dark',
+    'GREY_HOSE_SEG_01_00':'dark',
+  };
+
+  const mixerTruck = root.getObjectByName('Concrete Mixer Truck') || root.getObjectByName('Mixer Truck');
+  const pumpTruck = root.getObjectByName('Hoze Truck');
+  const boom = root.getObjectByName('Boom 1');
+
+  paintNamedVehicleMeshes(mixerTruck, mixerRoles, palette, 'mixer');
+  paintNamedVehicleMeshes(pumpTruck, pumpRoles, palette, 'pump');
+  paintNamedVehicleMeshes(boom, boomRoles, palette, 'pump boom');
+}
+
+function isMobileVegetationMesh(o) {
+  if (!o?.isMesh || o.isSkinnedMesh || !o.geometry || !o.material) return false;
+  const low = String(o.name || '').toLowerCase();
+  const materialNames = (Array.isArray(o.material) ? o.material : [o.material])
+    .filter(Boolean).map(m => String(m.name || '').toLowerCase());
+  return (
+    low.includes('grass') || low.includes('flower') || low.includes('daisy') || low.includes('daffodil') ||
+    materialNames.some(m => m.includes('grass') || m.includes('flower') || m.includes('daisy') || m.includes('daffodil'))
+  );
+}
+
+// Mobile-only batching: identical grass/flower meshes are instanced in 12 m spatial cells.
+// Appearance and transforms are preserved, while draw calls and frustum work drop sharply.
+function instanceMobileVegetation(root) {
+  if (!TOUCH_DEVICE || !root) return 0;
+  root.updateWorldMatrix(true, true);
+  const rootInv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+  const worldPos = new THREE.Vector3();
+  const localMat = new THREE.Matrix4();
+  const groups = new Map();
+  const candidates = [];
+  const CELL = 12.0;
+
+  root.traverse(o => {
+    if (!isMobileVegetationMesh(o) || !o.visible) return;
+    o.getWorldPosition(worldPos);
+    const cellX = Math.floor(worldPos.x / CELL);
+    const cellZ = Math.floor(worldPos.z / CELL);
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    const matKey = mats.map(m => m?.uuid || 'null').join(',');
+    const key = `${o.geometry.uuid}|${matKey}|${cellX}|${cellZ}|${o.castShadow ? 1 : 0}|${o.receiveShadow ? 1 : 0}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = { geometry:o.geometry, material:o.material, castShadow:o.castShadow, receiveShadow:o.receiveShadow, items:[] };
+      groups.set(key, g);
+    }
+    g.items.push(o);
+    candidates.push(o);
+  });
+
+  const batchRoot = new THREE.Group();
+  batchRoot.name = 'MOBILE_VEGETATION_CHUNKS';
+  root.add(batchRoot);
+  let batched = 0;
+  for (const g of groups.values()) {
+    if (g.items.length < 3) continue;
+    const inst = new THREE.InstancedMesh(g.geometry, g.material, g.items.length);
+    inst.name = `grass_flower_chunk_${batched}`;
+    inst.castShadow = g.castShadow;
+    inst.receiveShadow = g.receiveShadow;
+    inst.frustumCulled = true;
+    inst.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+    for (let i = 0; i < g.items.length; i++) {
+      localMat.multiplyMatrices(rootInv, g.items[i].matrixWorld);
+      inst.setMatrixAt(i, localMat);
+    }
+    inst.instanceMatrix.needsUpdate = true;
+    inst.computeBoundingBox?.();
+    inst.computeBoundingSphere?.();
+    batchRoot.add(inst);
+    for (const o of g.items) o.parent?.remove(o);
+    batched += g.items.length;
+  }
+  if (!batchRoot.children.length) root.remove(batchRoot);
+  else console.log(`[MOBILE PERF] vegetation instanced: ${batched} meshes -> ${batchRoot.children.length} spatial batches`);
+  return batched;
+}
+
+function freezeMobileStaticMeshes(root) {
+  if (!TOUCH_DEVICE || !root) return;
+  root.updateWorldMatrix(true, true);
+  let frozen = 0;
+  root.traverse(o => {
+    if (!o.isMesh || o.isSkinnedMesh || o.isInstancedMesh) return;
+    // Imported environment is authored static. Pickups are removed, not animated by transform.
+    o.updateMatrix();
+    o.matrixAutoUpdate = false;
+    frozen++;
+  });
+  console.log(`[MOBILE PERF] frozen static mesh transforms: ${frozen}`);
+}
+
 function addObjectCollider(obj, name = obj?.name || 'model', pad = .06) {
   if (!obj) return;
   obj.updateWorldMatrix(true, true);
@@ -357,10 +968,71 @@ function labelSprite(text, pos, color = '#e8e3b4') {
 // GLTF ASSETS
 const loader = new GLTFLoader();
 function updateLoadState() {
-  loadState.textContent = assetsLoaded + assetsFailed >= TOTAL_ASSETS
+  const done = assetsLoaded + assetsFailed >= TOTAL_ASSETS;
+  loadState.textContent = done
     ? (assetsFailed ? `Сцена готова · ${assetsFailed} ассет(а) не загрузились` : 'Сцена готова')
     : `Загрузка моделей ${assetsLoaded + assetsFailed}/${TOTAL_ASSETS}…`;
+  if (!done) menuLoadingSpinner?.classList.remove('isDone','isError');
 }
+function recoverBrokenScene(reason = 'scene unavailable') {
+  if (sceneRecoveryPending) return;
+  sceneRecoveryPending = true;
+  console.error('[SCENE RECOVERY]', reason);
+  sceneReady = false;
+  if (startBtn) { startBtn.disabled = true; startBtn.setAttribute('aria-disabled','true'); }
+  menuLoadingSpinner?.classList.remove('isDone','isError');
+  if (loadState) {
+    loadState.textContent = 'ВОССТАНАВЛИВАЮ СЦЕНУ…';
+    loadState.style.color = '#eee790';
+  }
+  if (start) start.classList.remove('hidden');
+  document.body.classList.remove('gameStarted');
+  if (TOUCH_DEVICE && !MOBILE_SAFE_MODE) {
+    mobileDebugLog(`normal mobile scene failed: ${reason}; switching to SAFE`);
+    try { localStorage.setItem(MOBILE_SAFE_KEY, '1'); } catch (_) {}
+    mobileDebugStage('switching-safe');
+    setTimeout(() => location.reload(), 250);
+    return;
+  }
+  const retries = Number.parseInt(sessionStorage.getItem(SCENE_RETRY_KEY) || '0', 10) || 0;
+  if (retries < 2) {
+    sessionStorage.setItem(SCENE_RETRY_KEY, String(retries + 1));
+    setTimeout(() => {
+      const u = new URL(location.href);
+      u.searchParams.set('sceneRetry', Date.now().toString());
+      location.replace(u.toString());
+    }, 650);
+  } else {
+    if (loadState) {
+      loadState.textContent = 'СЦЕНА НЕ ЗАГРУЗИЛАСЬ · ОБНОВИ СТРАНИЦУ';
+      menuLoadingSpinner?.classList.add('isError');
+      loadState.style.color = '#ff8b78';
+    }
+    sceneRecoveryPending = false;
+  }
+}
+function applyVegetationCutout(mat) {
+  if (!mat || mat.userData?.vegetationCutoutFix) return;
+  // FINAL already contains proper alpha on the foliage atlases.  Do NOT black-key every
+  // vegetation material: dark green/brown texels are legitimate leaves and were being
+  // discarded by the old shader hack. Preserve the glTF alpha mode and only add a tiny
+  // cutoff to BLEND cards so their fully transparent background stays clean.
+  const authoredBlend = !!mat.transparent;
+  const authoredCutoff = Number.isFinite(mat.alphaTest) ? mat.alphaTest : 0;
+  mat.opacity = 1;
+  mat.depthWrite = true;
+  if (authoredBlend) {
+    mat.transparent = true;
+    mat.alphaTest = Math.max(authoredCutoff, 0.012);
+  } else {
+    mat.transparent = false;
+    mat.alphaTest = authoredCutoff;
+  }
+  mat.userData = mat.userData || {};
+  mat.userData.vegetationCutoutFix = true;
+  mat.needsUpdate = true;
+}
+
 function prepModel(root) {
   root.traverse(o => {
     if (!o.isMesh) return;
@@ -389,9 +1061,15 @@ function prepModel(root) {
       const mn = String(mat.name || '').toLowerCase();
       const isGlass = mn.includes('glass');
       const isCigButt = mn.includes('cigbutt');
-      const isCutout = isCigButt || mn.includes('panelkamat') || mn.includes('tree_birch') || mat.alphaTest > 0;
+      const isVegetationCard =
+        mn === 'leaf' || mn === 'leaves' || mn.includes('leaf') || mn.includes('leaves') ||
+        mn.includes('tree_birch') || mn === 'tree-04' || mn.includes('tree-branch') || mn.includes('tree_branc') ||
+        mn.includes('grass') || mn.includes('flower') || mn.includes('daisy') || mn.includes('daffodil');
+      const isCutout = isCigButt || mn.includes('panelkamat') || isVegetationCard || mat.alphaTest > 0 || mat.transparent;
 
-      if (isCutout && !isGlass) {
+      if (isVegetationCard && !isGlass) {
+        applyVegetationCutout(mat);
+      } else if (isCutout && !isGlass) {
         // Alpha cards must stay cut out. v0.27 accidentally forced all non-glass
         // materials opaque, which revealed the black RGB hidden under PNG alpha.
         mat.transparent = false;
@@ -433,6 +1111,9 @@ function placeModel(url, { x = 0, y = 0, z = 0, rotY = 0, targetXZ = 3, onReady 
 // FINAL LAYOUT + PHYSICAL HOSE + POUR JOB v0.19
 // ---------------------------------------------------------------------------
 let layoutRoot = null;
+let babaWorldRoot = null;
+let babaLockedY = 0;
+let babaGroundLockEnabled = false;
 let hoseAnchorObject = null;
 let hoseProxy = null;
 let hoseInteraction = null;
@@ -448,17 +1129,17 @@ let hoseAnchorFallbackValid = false;
 // -----------------------------
 const hosePoints = [];
 const hosePrev = [];
-const hoseMeshes = [];
-const HOSE_SEGMENTS = 24;
-const HOSE_REST = 0.31;
+const hoseMeshes = []; // legacy array kept empty for compatibility/debug counters
+const HOSE_SEGMENTS = 36;
+const HOSE_REST = 0.21;
+const HOSE_RADIUS = .105;
+const HOSE_RADIAL_SEGMENTS = TOUCH_DEVICE ? 10 : 14;
 // Textured procedural concrete-pump hose.
-// The source texture is rotated offline so its grooves run across the hose,
-// while the cylinder UV V axis follows hose length.
 const hoseTextureLoader = new THREE.TextureLoader();
 const hoseColorTex = hoseTextureLoader.load('./assets/hose_rubber_corrugated.jpg');
 hoseColorTex.wrapS = THREE.RepeatWrapping;
 hoseColorTex.wrapT = THREE.RepeatWrapping;
-hoseColorTex.repeat.set(1.0, 1.0);
+hoseColorTex.repeat.set(1.0, 5.5);
 hoseColorTex.colorSpace = THREE.SRGBColorSpace;
 hoseColorTex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
 
@@ -483,18 +1164,84 @@ const hoseEndMat = new THREE.MeshStandardMaterial({
   metalness: 0.0,
   side: THREE.DoubleSide,
 });
-const hoseGeom = new THREE.CylinderGeometry(.105, .105, 1, 18, 1, false);
+
+function makeDynamicHoseGeometry() {
+  const rings = HOSE_SEGMENTS + 1;
+  const radial = HOSE_RADIAL_SEGMENTS;
+  const pos = new Float32Array(rings * radial * 3);
+  const nor = new Float32Array(rings * radial * 3);
+  const uv = new Float32Array(rings * radial * 2);
+  const idx = [];
+  for (let i = 0; i < rings; i++) {
+    for (let j = 0; j < radial; j++) {
+      const vi = i * radial + j;
+      uv[vi * 2] = j / radial;
+      uv[vi * 2 + 1] = i / HOSE_SEGMENTS;
+    }
+  }
+  for (let i = 0; i < HOSE_SEGMENTS; i++) {
+    for (let j = 0; j < radial; j++) {
+      const a = i * radial + j;
+      const b = i * radial + (j + 1) % radial;
+      const c = (i + 1) * radial + (j + 1) % radial;
+      const d = (i + 1) * radial + j;
+      idx.push(a, d, b, b, d, c);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  return g;
+}
+
+const hoseTubeGeom = makeDynamicHoseGeometry();
 const hoseGroup = new THREE.Group();
 hoseGroup.name = 'PHYSICAL_HOSE_RUNTIME';
 scene.add(hoseGroup);
-const hoseTip = new THREE.Mesh(
-  new THREE.SphereGeometry(.12, 14, 10),
-  hoseEndMat
-);
-const hoseCoupler = new THREE.Mesh(
-  new THREE.CylinderGeometry(.125, .125, .32, 16, 1, false),
-  hoseEndMat
-);
+const hoseTube = new THREE.Mesh(hoseTubeGeom, hoseMat);
+hoseTube.name = 'PHYSICAL_HOSE_CONTINUOUS_TUBE';
+hoseTube.castShadow = true;
+hoseTube.receiveShadow = true;
+hoseTube.frustumCulled = false;
+hoseTube.renderOrder = 2;
+hoseGroup.add(hoseTube);
+
+const hoseOutlineMat = new THREE.ShaderMaterial({
+  uniforms: {
+    uColor: { value: new THREE.Color(0x45ff33) },
+    uExpand: { value: .028 },
+    uOpacity: { value: .90 },
+  },
+  vertexShader: `
+    uniform float uExpand;
+    void main(){
+      vec3 p = position + normal * uExpand;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(p,1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform vec3 uColor;
+    uniform float uOpacity;
+    void main(){ gl_FragColor = vec4(uColor,uOpacity); }
+  `,
+  side: THREE.BackSide,
+  transparent: true,
+  depthTest: false,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+  toneMapped: false,
+});
+const hoseOutline = new THREE.Mesh(hoseTubeGeom, hoseOutlineMat);
+hoseOutline.name = 'PHYSICAL_HOSE_SELECTION_OUTLINE';
+hoseOutline.visible = false;
+hoseOutline.frustumCulled = false;
+hoseOutline.renderOrder = 30;
+hoseGroup.add(hoseOutline);
+
+const hoseTip = new THREE.Mesh(new THREE.SphereGeometry(.12, 14, 10), hoseEndMat);
+const hoseCoupler = new THREE.Mesh(new THREE.CylinderGeometry(.125, .125, .32, 16, 1, false), hoseEndMat);
 hoseCoupler.name = 'PHYSICAL_HOSE_COUPLER';
 hoseCoupler.castShadow = true;
 hoseCoupler.frustumCulled = false;
@@ -508,7 +1255,46 @@ const hoseTmpDir = new THREE.Vector3();
 const hoseTmpMid = new THREE.Vector3();
 const hoseHandTarget = new THREE.Vector3();
 const hoseFloorTarget = new THREE.Vector3();
+const hoseHeldForward = new THREE.Vector3();
+const hoseHeldGuide = new THREE.Vector3();
+const hoseHeldDrop = new THREE.Vector3();
+const hoseTubeTangent = new THREE.Vector3();
+const hoseTubeN1 = new THREE.Vector3();
+const hoseTubeN2 = new THREE.Vector3();
+const hoseTubeRef = new THREE.Vector3();
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
+
+function updateHoseTubeGeometry() {
+  if (hosePoints.length !== HOSE_SEGMENTS + 1) return;
+  const pos = hoseTubeGeom.attributes.position.array;
+  const nor = hoseTubeGeom.attributes.normal.array;
+  const radial = HOSE_RADIAL_SEGMENTS;
+  for (let i = 0; i <= HOSE_SEGMENTS; i++) {
+    const prev = hosePoints[Math.max(0, i - 1)];
+    const next = hosePoints[Math.min(HOSE_SEGMENTS, i + 1)];
+    hoseTubeTangent.copy(next).sub(prev).normalize();
+    // Pick a stable reference axis even on the near-vertical hanging section.
+    if (Math.abs(hoseTubeTangent.y) < .88) hoseTubeRef.set(0, 1, 0);
+    else hoseTubeRef.set(1, 0, 0);
+    hoseTubeN1.crossVectors(hoseTubeTangent, hoseTubeRef).normalize();
+    hoseTubeN2.crossVectors(hoseTubeTangent, hoseTubeN1).normalize();
+    const p = hosePoints[i];
+    for (let j = 0; j < radial; j++) {
+      const a = (j / radial) * Math.PI * 2;
+      const ca = Math.cos(a), sa = Math.sin(a);
+      const nx = hoseTubeN1.x * ca + hoseTubeN2.x * sa;
+      const ny = hoseTubeN1.y * ca + hoseTubeN2.y * sa;
+      const nz = hoseTubeN1.z * ca + hoseTubeN2.z * sa;
+      const k = (i * radial + j) * 3;
+      pos[k] = p.x + nx * HOSE_RADIUS;
+      pos[k + 1] = p.y + ny * HOSE_RADIUS;
+      pos[k + 2] = p.z + nz * HOSE_RADIUS;
+      nor[k] = nx; nor[k + 1] = ny; nor[k + 2] = nz;
+    }
+  }
+  hoseTubeGeom.attributes.position.needsUpdate = true;
+  hoseTubeGeom.attributes.normal.needsUpdate = true;
+}
 
 // -----------------------------
 // SIX RECESSED POUR BAYS BETWEEN STRUCTURAL COLUMNS
@@ -521,8 +1307,10 @@ const SLAB = { minX: -15, maxX: 15, minZ: -6, maxZ: 14, floorY: .18 };
 const COLUMN_X = [-13.5, -4.5, 4.5, 13.5];
 const COLUMN_Z = [-4.5, 4.0, 12.5];
 const BAY_MARGIN = .55;
-const TARGET_H = .16;
-const PIT_BOTTOM_Y = .02;
+// v51.29 — recesses are 15% deeper. TARGET_H follows physical depth so fill still ends flush.
+const PIT_DEPTH = .16 * 1.15;
+const TARGET_H = PIT_DEPTH;
+const PIT_BOTTOM_Y = SLAB.floorY - PIT_DEPTH;
 const SIM_CELL = .25;
 
 const POUR_ZONES = [];
@@ -543,7 +1331,7 @@ for (let rz = 0; rz < COLUMN_Z.length - 1; rz++) {
       // Arcade tolerances: filling is forgiving, finishing requires leveling.
       failRatio: 1.08,
       successRatio: .985,
-      levelRequired: .86,
+      levelRequired: .94,
       levelPrompted: false,
       dirty: true,
       piles: [],
@@ -688,13 +1476,20 @@ function updateActivePourOutline(dt) {
 }
 
 const slabMat = new THREE.MeshStandardMaterial({
-  color: 0xa7a8a2, roughness: .90, side: THREE.DoubleSide
+  // Mobile top slab is intentionally a little lighter than the authored asphalt.
+  // The stronger value separation makes the 18 cm structural recess readable on a phone.
+  color: TOUCH_DEVICE ? 0xb8b5ab : 0xa7a8a2, roughness: .90, side: THREE.DoubleSide
 });
 const pitWallMat = new THREE.MeshStandardMaterial({
-  color: 0x8d8f8a, roughness: .95, side: THREE.DoubleSide
+  // Strong inner-wall contrast substitutes for contact shadows on mobile.
+  color: TOUCH_DEVICE ? 0x4b504d : 0x8d8f8a,
+  roughness: .97, side: THREE.DoubleSide,
+  polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1
 });
 const pitBottomMat = new THREE.MeshStandardMaterial({
-  color: 0x696c68, roughness: 1.0, side: THREE.DoubleSide
+  color: TOUCH_DEVICE ? 0x343936 : 0x626560,
+  roughness: 1.0, side: THREE.DoubleSide,
+  polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2
 });
 const wetConcreteMat = new THREE.MeshStandardMaterial({
   color: 0x626a67, roughness: .34, metalness: 0.0, side: THREE.DoubleSide
@@ -707,6 +1502,9 @@ function addPitBox(name, x, y, z, w, h, d, mat) {
   m.position.set(x, y, z);
   m.castShadow = false;
   m.receiveShadow = true;
+  m.frustumCulled = false;
+  // Keep runtime recess geometry in the normal depth pass but after imported ground.
+  m.renderOrder = TOUCH_DEVICE ? 2 : 0;
   pitGroup.add(m);
   return m;
 }
@@ -738,31 +1536,48 @@ for (let zi = 0; zi < zCuts.length - 1; zi++) {
 
     if (zoneAt(mx, mz)) continue;
 
-    const tile = new THREE.Mesh(
-      new THREE.PlaneGeometry(x1 - x0, z1 - z0),
-      slabMat
-    );
+    // Desktop can use a single top plane. On mobile use a real thin slab box instead.
+    // Some mobile GPUs + shadowless lighting made the old plane and the imported SITE_GROUND
+    // read as one flat surface, visually erasing the 18 cm recess even though gameplay still
+    // used the pit. The box adds actual vertical slab edges, so the depression is unambiguous
+    // without changing simulation height or collision/gameplay.
+    const mobileSlabH = .14;
+    const tile = TOUCH_DEVICE
+      ? new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, mobileSlabH, z1 - z0), slabMat)
+      : new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), slabMat);
     tile.name = `SLAB_TILE_${xi}_${zi}`;
-    tile.rotation.x = -Math.PI * 0.5;
-    tile.position.set(mx, SLAB.floorY, mz);
+    if (TOUCH_DEVICE) {
+      tile.position.set(mx, SLAB.floorY - mobileSlabH * .5, mz);
+    } else {
+      tile.rotation.x = -Math.PI * 0.5;
+      tile.position.set(mx, SLAB.floorY, mz);
+    }
     tile.castShadow = false;
     tile.receiveShadow = true;
+    tile.frustumCulled = false;
     pitGroup.add(tile);
   }
 }
 
 // Bottom + four vertical walls for every bay.
 for (const zone of POUR_ZONES) {
+  // v51.72: mobile cuts SITE_GROUND away under the pour slab, so the visual floor can
+  // finally sit at the authored bay bottom instead of being lifted onto the asphalt.
+  const visualPitTopY = TOUCH_DEVICE
+    ? zone.bottomY + .004
+    : Math.max(zone.bottomY + .020, .016);
   addPitBox(
     `PIT_${zone.id}_BOTTOM`,
     (zone.minX + zone.maxX) * .5,
-    zone.bottomY - .025,
+    visualPitTopY - .025,
     (zone.minZ + zone.maxZ) * .5,
     zone.w, .05, zone.d,
     pitBottomMat
   );
 
-  const wallH = zone.floorY - zone.bottomY;
+  // Leave a tiny top gap so the pit wall and slab edge never become coplanar.
+  const wallTopGap = .008;
+  const wallH = Math.max(.02, zone.floorY - zone.bottomY - wallTopGap);
   const wallY = zone.bottomY + wallH * .5;
 
   addPitBox(`PIT_${zone.id}_WALL_L`,
@@ -777,6 +1592,94 @@ for (const zone of POUR_ZONES) {
   addPitBox(`PIT_${zone.id}_WALL_B`,
     (zone.minX + zone.maxX) * .5, wallY, zone.maxZ + .05,
     zone.w, wallH, .10, pitWallMat);
+
+  // A short dark band directly below the rim gives the recess a stable contact-shadow cue
+  // even when mobile shadow quality is reduced.
+  if (TOUCH_DEVICE) {
+    const lipH = .055;
+    const lipT = .105;
+    const lipY = zone.floorY - .012 - lipH * .5;
+    addPitBox(`PIT_${zone.id}_LIP_L`,
+      zone.minX + lipT * .5, lipY, (zone.minZ + zone.maxZ) * .5,
+      lipT, lipH, zone.d, pitBottomMat);
+    addPitBox(`PIT_${zone.id}_LIP_R`,
+      zone.maxX - lipT * .5, lipY, (zone.minZ + zone.maxZ) * .5,
+      lipT, lipH, zone.d, pitBottomMat);
+    addPitBox(`PIT_${zone.id}_LIP_F`,
+      (zone.minX + zone.maxX) * .5, lipY, zone.minZ + lipT * .5,
+      zone.w, lipH, lipT, pitBottomMat);
+    addPitBox(`PIT_${zone.id}_LIP_B`,
+      (zone.minX + zone.maxX) * .5, lipY, zone.maxZ - lipT * .5,
+      zone.w, lipH, lipT, pitBottomMat);
+  }
+}
+
+// v51.72 MOBILE GROUND CUTOUT ------------------------------------------------
+// FINAL_MOBILE's SITE_GROUND is one large asphalt box whose top is y=0.
+// The bay bottom is ~y=-0.004, so that box visually caps every recess even though
+// gameplay/camera height already follows the lower pit. On touch devices replace the
+// single ground box with a four-piece frame around the slab. Outside the slab the
+// authored asphalt/material is preserved; under the slab there is now an actual hole.
+let mobileSiteGroundFrame = null;
+function cutMobileSiteGroundUnderPourSlab(root) {
+  if (!TOUCH_DEVICE || !root || mobileSiteGroundFrame) return false;
+
+  const ground = root.getObjectByName('SITE_GROUND');
+  if (!ground || !ground.isMesh || !ground.geometry || !ground.material) {
+    mobileDebugLog('pit cutout: SITE_GROUND not found');
+    return false;
+  }
+
+  ground.updateWorldMatrix(true, false);
+  const bb = new THREE.Box3().setFromObject(ground);
+  if (!Number.isFinite(bb.min.x) || !Number.isFinite(bb.max.x)) {
+    mobileDebugLog('pit cutout: invalid SITE_GROUND bounds');
+    return false;
+  }
+
+  const minX = bb.min.x, maxX = bb.max.x;
+  const minZ = bb.min.z, maxZ = bb.max.z;
+  const bottomY = bb.min.y, topY = bb.max.y;
+  const h = Math.max(.04, topY - bottomY);
+  const cy = (bottomY + topY) * .5;
+
+  const parent = ground.parent || root;
+  const frame = new THREE.Group();
+  frame.name = 'MOBILE_SITE_GROUND_FRAME';
+
+  const addFrameBox = (name, x0, x1, z0, z1) => {
+    const w = x1 - x0;
+    const d = z1 - z0;
+    if (w <= .01 || d <= .01) return;
+
+    const mat = Array.isArray(ground.material)
+      ? ground.material.map(m => m?.clone?.() || m)
+      : (ground.material.clone?.() || ground.material);
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    mesh.name = name;
+    mesh.position.set((x0 + x1) * .5, cy, (z0 + z1) * .5);
+    mesh.castShadow = false;
+    mesh.receiveShadow = ground.receiveShadow;
+    mesh.frustumCulled = true;
+    mesh.userData.walkOnly = true;
+    frame.add(mesh);
+  };
+
+  // Full authored ground minus the exact runtime slab rectangle.
+  addFrameBox('MOBILE_SITE_GROUND_W', minX, SLAB.minX, minZ, maxZ);
+  addFrameBox('MOBILE_SITE_GROUND_E', SLAB.maxX, maxX, minZ, maxZ);
+  addFrameBox('MOBILE_SITE_GROUND_S', SLAB.minX, SLAB.maxX, minZ, SLAB.minZ);
+  addFrameBox('MOBILE_SITE_GROUND_N', SLAB.minX, SLAB.maxX, SLAB.maxZ, maxZ);
+
+  ground.visible = false;
+  parent.add(frame);
+  mobileSiteGroundFrame = frame;
+  frame.updateWorldMatrix(true, true);
+
+  mobileDebugLog(
+    `pit cutout active: SITE_GROUND ${Math.round(maxX-minX)}x${Math.round(maxZ-minZ)}m -> frame; slab opening ${SLAB.minX}..${SLAB.maxX}/${SLAB.minZ}..${SLAB.maxZ}`
+  );
+  return true;
 }
 
 // -----------------------------
@@ -940,13 +1843,13 @@ function zoneLevelStats(zone) {
   );
 
   const rakeCoverage = zoneRakeCoverage(zone);
-  const rakeWork = THREE.MathUtils.clamp(rakeCoverage / .68, 0, 1);
+  const rakeWork = THREE.MathUtils.clamp(rakeCoverage / .55, 0, 1);
   const coverage = zoneCoverage(zone);
 
   // Real surface quality matters most, but the player must actually work a
   // meaningful part of the area with the rake.
   const score = THREE.MathUtils.clamp(
-    uniformity * .58 + rakeWork * .42,
+    uniformity * .72 + rakeWork * .28,
     0, 1
   );
 
@@ -959,7 +1862,7 @@ function zoneReadyForSequence(zone) {
   const level = zoneLevelStats(zone);
   return (
     ratio >= zone.successRatio &&
-    level.coverage >= .88 &&
+    level.coverage >= .82 &&
     level.score >= zone.levelRequired
   );
 }
@@ -1737,7 +2640,7 @@ function spawnBlob(pos, burst = false, inheritedVel = null) {
     THREE.MathUtils.randFloat(burst ? -.12 : -.04, .06),
     THREE.MathUtils.randFloatSpread(burst ? .6 : .14)
   );
-  if (inheritedVel) b.vel.add(inheritedVel);
+  if (inheritedVel) b.vel.addScaledVector(inheritedVel, 1.18);
 }
 function updateBlobs(dt) {
   const g = 7.25;
@@ -1843,8 +2746,9 @@ const rakeSweepDir = new THREE.Vector3();
 // v51.3: stable lower-right FPS framing.
 // v51.5: rake head stays forward over the work surface; handle returns
 // toward the player in the lower-right corner.
-const RAKE_VM_BASE_POS = new THREE.Vector3(.70, -.60, -1.62);
-const RAKE_VM_BASE_ROT = new THREE.Euler(-.20, -1.615, -.50, 'XYZ');
+const RAKE_VM_BASE_POS = new THREE.Vector3(.72, -.58, -1.68);
+// v51.29 — handle points back toward the player instead of sideways across the frame.
+const RAKE_VM_BASE_ROT = new THREE.Euler(-.16, -.18, -.06, 'XYZ');
 
 const RAKE_VIEWMODEL_LAYER = 2;
 
@@ -1854,6 +2758,8 @@ rakeVM.visible = false;
 rakeVM.layers.set(RAKE_VIEWMODEL_LAYER);
 camera.add(rakeVM);
 
+// The rake is rendered in a dedicated second pass/layer. Enable the normal
+// scene lights on that layer too, otherwise MeshStandardMaterial renders black.
 function enableRakeViewmodelLighting() {
   scene.traverse?.(o => {
     if (o?.isLight) o.layers.enable(RAKE_VIEWMODEL_LAYER);
@@ -1998,7 +2904,7 @@ function buildRakeViewModelFromScene(source) {
   // Authoring mesh is vertical in the world. Rotate the handle into FPS depth.
   holder.rotation.set(Math.PI * .5, 0, -.02);
   const modelLength = Math.max(size.x, size.y, size.z, .001);
-  holder.scale.setScalar(2.025 / modelLength);
+  holder.scale.setScalar(2.70 / modelLength); // +33% more than v51.42 in-hand size
   holder.position.set(0, 0, 0);
   rakeVM.add(holder);
 
@@ -2054,21 +2960,25 @@ function setupSceneRake(root) {
     console.log('Scene rake pickup ready:', source.name, center, bb.min, bb.max);
   }
 
-  // Legacy vars kept for other code paths.
-  rakeSceneSource=candidates[0];
-  rakeWorld=candidates[0];
-  setHotbar3DModel('rake',candidates[0]);
+  // Canonical rake model for first-person/hotbar. The world can contain
+  // multiple authored rake props with different transforms, but picking any of
+  // them must always give the SAME viewmodel in the player's hand.
+  rakeSceneSource = candidates[0];
+  rakeWorld = candidates[0];
+  buildRakeViewModelFromScene(rakeSceneSource);
+  rakeVM.visible = false;
+  setHotbar3DModel('rake', rakeSceneSource);
 }
 
 function pickupRake(source = null) {
   if (rakeOwned) return;
   rakeOwned = true;
 
-  rakeWorld = source || rakeWorld || rakeCandidateRoots[0] || null;
-  if (rakeWorld) {
-    buildRakeViewModelFromScene(rakeWorld);
-    rakeWorld.visible = false;
-  }
+  // Hide only the physical rake that was picked. Do not rebuild the FPS
+  // viewmodel from it: the hand model is canonical and independent of pickup.
+  const pickedWorldRake = source || rakeWorld || rakeCandidateRoots[0] || null;
+  rakeWorld = pickedWorldRake;
+  if (pickedWorldRake) pickedWorldRake.visible = false;
 
   for (const it of rakePickupInteractions) {
     const i = interactive.indexOf(it);
@@ -2122,6 +3032,8 @@ function setRakeEquipped(on) {
   if (rakeEquipped) {
     rakeVM.position.copy(RAKE_VM_BASE_POS);
     rakeVM.rotation.copy(RAKE_VM_BASE_ROT);
+    rakeVM.scale.setScalar(1);
+    rakeProximityScaleBlend = 0;
     if (hoseHeld) {
       hoseHeld = false;
       pouring = false;
@@ -2215,7 +3127,7 @@ function levelConcreteAtPoint(px, pz, step, moveDirX, moveDirZ) {
   const zone = zoneAt(px, pz);
   if (!zone) return didSomething;
 
-  const brushRadius = 1.272;
+  const brushRadius = 1.55;
   const brushR2 = brushRadius * brushRadius;
   const cells = [];
   let localSum = 0;
@@ -2250,7 +3162,7 @@ function levelConcreteAtPoint(px, pz, step, moveDirX, moveDirZ) {
   // Continuous strength: roughly 12–15% correction per 30 Hz tick at the
   // center. A patch becomes visibly flatter while the player sweeps over it,
   // but one stationary hold cannot finish the whole bay.
-  const centerStrength = 1 - Math.exp(-5.95 * step);
+  const centerStrength = 1 - Math.exp(-8.20 * step);
 
   let before = 0;
   let after = 0;
@@ -2275,6 +3187,30 @@ function levelConcreteAtPoint(px, pz, step, moveDirX, moveDirZ) {
   const correction = (before - after) / cells.length;
   for (const [idx] of cells) {
     zone.fill[idx] = Math.max(0, zone.fill[idx] + correction);
+  }
+
+  // Finishing assist: once the bay is essentially full and the player has
+  // genuinely raked a meaningful portion of it, gently relax the remaining tiny
+  // highs/lows across the whole bay. This removes end-game pixel hunting while
+  // preserving total concrete volume exactly enough for gameplay purposes.
+  const finishRatio = zoneVolume(zone) / Math.max(.000001, zone.targetVolume);
+  const finishCoverage = zoneRakeCoverage(zone);
+  if (finishRatio >= .985 && finishRatio <= 1.025 && finishCoverage >= .34) {
+    let globalSum = 0;
+    for (let i = 0; i < zone.fill.length; i++) globalSum += zone.fill[i];
+    const globalMean = globalSum / zone.fill.length;
+    const assistStrength = 1 - Math.exp(-2.80 * step);
+    let assistBefore = 0;
+    let assistAfter = 0;
+    for (let i = 0; i < zone.fill.length; i++) {
+      assistBefore += zone.fill[i];
+      zone.fill[i] += (globalMean - zone.fill[i]) * assistStrength;
+      assistAfter += zone.fill[i];
+    }
+    const assistCorrection = (assistBefore - assistAfter) / zone.fill.length;
+    for (let i = 0; i < zone.fill.length; i++) {
+      zone.fill[i] = Math.max(0, zone.fill[i] + assistCorrection);
+    }
   }
 
   // A tiny directional comb effect. It gives a sense that the rake is being
@@ -2425,7 +3361,7 @@ let qteActive = false;
 let qteCooldown = 12.0;
 let qteStartTime = 0;
 let qteDeadline = 0;
-const QTE_DURATION_MS = 950;
+const QTE_DURATION_MS = 1140; // v51.65: +20% response window (950ms -> 1140ms)
 const QTE_PERFECT_AT = 0.76;       // visual approach ring coincides with target here
 const QTE_PERFECT_WINDOW_MS = 90;  // rhythm-game perfect window
 let qtePerfectBoostUntil = 0;
@@ -2536,7 +3472,6 @@ function updateQTE(dt) {
 function initializeHose(anchorPos) {
   hosePoints.length = 0;
   hosePrev.length = 0;
-  for (const m of hoseMeshes) hoseGroup.remove(m);
   hoseMeshes.length = 0;
   if (hoseTip.parent !== hoseGroup) hoseGroup.add(hoseTip);
 
@@ -2548,25 +3483,15 @@ function initializeHose(anchorPos) {
     p.y = Math.max(p.y, groundHeightAt(p.x, p.z) + .07);
     hosePoints.push(p);
     hosePrev.push(p.clone());
-
-    if (i < HOSE_SEGMENTS) {
-      const seg = new THREE.Mesh(hoseGeom, hoseMat);
-      seg.castShadow = true;
-      seg.receiveShadow = true;
-      seg.frustumCulled = false;
-      seg.renderOrder = 2;
-      hoseGroup.add(seg);
-      hoseMeshes.push(seg);
-    }
   }
 
   hoseGroup.visible = true;
+  hoseTube.visible = true;
+  hoseOutline.visible = false;
   hoseCoupler.position.copy(anchorPos);
   hoseCoupler.position.y -= .16;
   hoseCoupler.rotation.set(0, 0, 0);
-  for (let i = 0; i < HOSE_SEGMENTS; i++) {
-    setCylinderBetween(hoseMeshes[i], hosePoints[i], hosePoints[i + 1]);
-  }
+  updateHoseTubeGeometry();
 
   hoseProxy = new THREE.Object3D();
   hoseProxy.name = 'HOSE_GRAB_END';
@@ -2602,6 +3527,19 @@ function constrainHose() {
     camera.updateWorldMatrix(true, false);
     hoseHandTarget.set(.34, -.31, -1.32).applyQuaternion(camera.quaternion).add(camera.position);
     hosePoints[HOSE_SEGMENTS].copy(hoseHandTarget);
+
+    camera.getWorldDirection(hoseHeldForward);
+    hoseHeldForward.y = THREE.MathUtils.clamp(hoseHeldForward.y - 0.08, -0.22, 0.18);
+    if (hoseHeldForward.lengthSq() < 1e-6) hoseHeldForward.set(0, -0.12, -1);
+    hoseHeldForward.normalize();
+    for (let k = 1; k <= Math.min(4, HOSE_SEGMENTS); k++) {
+      const idx = HOSE_SEGMENTS - k;
+      hoseHeldGuide.copy(hoseHandTarget).addScaledVector(hoseHeldForward, -0.18 * k);
+      hoseHeldDrop.set(0, -0.028 * k, 0);
+      hoseHeldGuide.add(hoseHeldDrop);
+      hosePoints[idx].copy(hoseHeldGuide);
+      hosePrev[idx].copy(hoseHeldGuide);
+    }
   }
 
   for (let i = 0; i < HOSE_SEGMENTS; i++) {
@@ -2650,7 +3588,7 @@ function updatePhysicalHose(dt) {
   hosePrev[0].copy(hosePoints[0]);
   if (hoseHeld) hosePrev[HOSE_SEGMENTS].copy(hosePoints[HOSE_SEGMENTS]);
 
-  for (let i = 0; i < HOSE_SEGMENTS; i++) setCylinderBetween(hoseMeshes[i], hosePoints[i], hosePoints[i + 1]);
+  updateHoseTubeGeometry();
   if (hoseProxy) hoseProxy.position.copy(hosePoints[HOSE_SEGMENTS]);
   hoseTip.position.copy(hosePoints[HOSE_SEGMENTS]);
 
@@ -2692,23 +3630,30 @@ function updatePouring(dt) {
   }
   pourTipPrevSafe.copy(end);
 
-  pourOutletDirSafe
-    .copy(end)
-    .sub(hosePoints[Math.max(0, HOSE_SEGMENTS - 1)]);
-  if (pourOutletDirSafe.lengthSq() < 1e-7) {
-    pourOutletDirSafe.set(0, -1, 0);
+  if (hoseHeld) {
+    camera.getWorldDirection(pourOutletDirSafe);
+    pourOutletDirSafe.y = THREE.MathUtils.clamp(pourOutletDirSafe.y - 0.10, -0.26, 0.12);
+    if (pourOutletDirSafe.lengthSq() < 1e-7) pourOutletDirSafe.set(0, -0.16, -1);
+    pourOutletDirSafe.normalize();
   } else {
+    pourOutletDirSafe
+      .copy(end)
+      .sub(hosePoints[Math.max(0, HOSE_SEGMENTS - 1)]);
+    if (pourOutletDirSafe.lengthSq() < 1e-7) {
+      pourOutletDirSafe.set(0, -1, 0);
+    } else {
+      pourOutletDirSafe.normalize();
+    }
+    pourOutletDirSafe.y -= .35;
     pourOutletDirSafe.normalize();
   }
-  pourOutletDirSafe.y -= .35;
-  pourOutletDirSafe.normalize();
 
   const rateMult = currentPumpRateMultiplier() * currentPerfectQTEBoost();
 
   pourVisualVelSafe
     .copy(pourOutletDirSafe)
-    .multiplyScalar(1.35 * rateMult)
-    .addScaledVector(pourTipVelSafe, .42);
+    .multiplyScalar((hoseHeld ? 2.35 : 1.35) * rateMult)
+    .addScaledVector(pourTipVelSafe, hoseHeld ? .22 : .42);
 
   // Predict a short fall from the hose end to the work surface.
   // This keeps numerical mass near where the visible stream actually lands,
@@ -2772,7 +3717,7 @@ function evaluateJob() {
       if (!currentZone.levelPrompted) {
         currentZone.levelPrompted = true;
         showToast(
-          `ОБЪЁМ НАБРАН · БЕРИ ГРАБЛИ · РОВНОСТЬ ${Math.round(currentLevel.score * 100)}%`
+          `ОБЪЁМ НАБРАН · БЕРИ ГРАБЛИ · РОВНОСТЬ ${Math.round(THREE.MathUtils.clamp(currentLevel.score / Math.max(.001, currentZone.levelRequired), 0, 1) * 100)}%`
         );
       }
     }
@@ -2906,8 +3851,13 @@ function updatePourHUD() {
   const zone = bestHUDZone();
   const zoneVol = zoneVolume(zone);
   const zoneRatio = THREE.MathUtils.clamp(zoneVol / Math.max(.000001, zone.targetVolume), 0, 9.99);
-  const zonePct = Math.max(0, zoneRatio * 100);
-  const zoneRemaining = Math.max(0, zone.targetVolume - zoneVol);
+  const rawZonePct = Math.max(0, zoneRatio * 100);
+  const zonePct = (zoneRatio >= .995 && zoneRatio <= 1.0)
+    ? 100
+    : rawZonePct;
+  const zoneRemaining = zoneRatio >= .995
+    ? 0
+    : Math.max(0, zone.targetVolume - zoneVol);
   const avgH = zoneAverageHeight(zone);
 
   const completed = POUR_ZONES.filter(z => zoneReadyForSequence(z)).length;
@@ -2921,10 +3871,14 @@ function updatePourHUD() {
   fillPercentEl.textContent = `${zonePct.toFixed(1)}%`;
   fillRemainingEl.textContent = `${zoneRemaining.toFixed(2)} м³`;
   const levelStats = zoneLevelStats(zone);
-  const levelPct = Math.round(levelStats.score * 100);
+  // HUD percentage is normalized to the practical completion threshold: when
+  // the bay is good enough to advance, the player sees a clean 100%, not 94–99%.
+  const levelPct = Math.round(THREE.MathUtils.clamp(
+    levelStats.score / Math.max(.001, zone.levelRequired), 0, 1
+  ) * 100);
   fillLevelEl.textContent = `${levelPct}%`;
   fillLevelEl.style.color =
-    levelPct >= Math.round(zone.levelRequired * 100)
+    levelPct >= 100
       ? '#91e68b'
       : levelPct >= 65
         ? '#eee790'
@@ -2934,7 +3888,7 @@ function updatePourHUD() {
     const activeRatio = zoneVolume(active) / active.targetVolume;
     const activeLevel = zoneLevelStats(active);
     zoneProgressEl.textContent = activeRatio >= .985
-      ? `РОВНЯЙ №${active.id}: ${Math.round(activeLevel.score * 100)}% · готово ${completed}/6`
+      ? `РОВНЯЙ №${active.id}: ${Math.round(THREE.MathUtils.clamp(activeLevel.score / Math.max(.001, active.levelRequired), 0, 1) * 100)}% · готово ${completed}/6`
       : `ЛИТЬ №${active.id}: ${zonePct.toFixed(0)}% · готово ${completed}/6`;
   } else {
     zoneProgressEl.textContent = `№${zone.id}: ${zonePct.toFixed(0)}% · готово ${completed}/6`;
@@ -2988,18 +3942,23 @@ function addFinalLayoutColliders(root) {
       // these combined shop meshes into automatic collision.
       low === 'monetka' || low.startsWith('monetka')
     ) return;
+    if (o.userData?.noCollision) return;
 
-    // FOLIAGE: never collide with leaf cards/crowns.  Tree_Birch is exported as
-    // foliage-heavy combined meshes, so its geometry would otherwise create huge
-    // invisible blockers around the canopy. Trunk interaction is intentionally
-    // sacrificed here in favour of freely walking through foliage.
+    // FOLIAGE / GROUND DECALS: never collide with leaf cards, tree crowns, flowers,
+    // grass tufts or parking-line decals. These meshes are visual only.
     const materialNames = (Array.isArray(o.material) ? o.material : [o.material])
       .filter(Boolean).map(m => String(m.name || '').toLowerCase());
     const isFoliage =
-      low.includes('cannabis plant_leaf') || low.includes('leaf_') ||
-      low.includes('foliage') || low.includes('tree_birch') ||
-      materialNames.some(m => m === 'leaf' || m.includes('foliage') || m.includes('tree_birch'));
-    if (isFoliage) return;
+      low.includes('cannabis plant_leaf') || low.includes('leaf_') || low.includes('leaves') ||
+      low.includes('foliage') || low.includes('tree_birch') || low.includes('birch-') ||
+      materialNames.some(m =>
+        m === 'leaf' || m === 'leaves' || m.includes('foliage') || m.includes('tree_birch') ||
+        m.includes('tree-branches') || m.includes('leaves')
+      );
+    const isGrassOrFlowers =
+      low.includes('grass') || low.includes('flower') || low.includes('daisy') || low.includes('daffodil') || low.includes('stem') ||
+      materialNames.some(m => m.includes('grass') || m.includes('flower') || m.includes('daisy') || m.includes('daffodil') || m.includes('stem'));
+    if (isFoliage || isGrassOrFlowers) return;
 
     // Also reject any mesh living anywhere under the MONETKA hierarchy, even if
     // Blender changes the child mesh name on the next export.
@@ -3014,6 +3973,44 @@ function addFinalLayoutColliders(root) {
     const size = bb.getSize(new THREE.Vector3());
     const footprintMax = Math.max(size.x, size.z);
     const footprintMin = Math.min(size.x, size.z);
+
+    // Imported pump/mixer CAD is split by material, not by physical solid part. Some of those
+    // meshes span 8-12 metres while containing only sparse rails/panels; one OBB then blocks
+    // a completely empty lane (the invisible blocker near George). Keep compact vehicle parts
+    // collidable, but reject only broad material-aggregate boxes automatically.
+    let vehicleAncestor = o.parent;
+    let underVehicle = false;
+    while (vehicleAncestor) {
+      const vn = String(vehicleAncestor.name || '').toLowerCase();
+      if (vn.includes('hoze truck') || vn.includes('concrete mixer truck') || vn.includes('mixer truck') || vn === 'assembly-10') {
+        underVehicle = true; break;
+      }
+      vehicleAncestor = vehicleAncestor.parent;
+    }
+    const vehicleMaterialAggregate = underVehicle && (footprintMax > 4.15 || (size.x * size.z) > 13.5);
+    if (vehicleMaterialAggregate) {
+      skippedHuge++;
+      console.warn('[COLLISION] sparse vehicle material aggregate skipped:', n, size);
+      return;
+    }
+
+    const isParkingDecal =
+      inMonetkaParkingZone(bb, 1.0, 1.0) &&
+      low.startsWith('plane') &&
+      size.y <= 0.35 && bb.max.y <= 0.35 &&
+      footprintMax >= 3.0 && footprintMax <= 13.5 &&
+      footprintMin >= 2.5 && footprintMin <= 5.5;
+    if (isParkingDecal) {
+      addWalkSurface(n || 'parking decal', bb.min.x, bb.max.x, bb.min.z, bb.max.z, bb.max.y);
+      walkable++;
+      return;
+    }
+
+    if (o.userData?.walkOnly) {
+      addWalkSurface(n || 'walk surface', bb.min.x, bb.max.x, bb.min.z, bb.max.z, bb.max.y);
+      walkable++;
+      return;
+    }
 
     // ROAD / PAVEMENT / GROUND FIX:
     // A low, broad mesh whose top is around walking height is a floor patch.
@@ -3106,9 +4103,19 @@ function addFinalLayoutColliders(root) {
     added++;
   });
 
+  // v51.29 — explicit collision along the authored scene perimeter. The vehicle gate stays open.
+  addColliderXZ('PERIMETER_NORTH', -32.50, 32.50, 22.80, 23.30, 0, 2.25);
+  addColliderXZ('PERIMETER_SOUTH_LEFT', -32.50, -9.20, -23.20, -22.65, 0, 2.25);
+  addColliderXZ('PERIMETER_SOUTH_RIGHT', 9.20, 32.50, -23.20, -22.65, 0, 2.25);
+  addColliderXZ('PERIMETER_FAR_SOUTH', -31.80, 32.05, -50.95, -50.35, 0, 2.25);
+  addColliderXZ('PERIMETER_WEST_MAIN', -32.55, -32.20, -23.25, 23.30, 0, 2.25);
+  addColliderXZ('PERIMETER_EAST_MAIN', 32.20, 32.55, -23.25, 23.30, 0, 2.25);
+  addColliderXZ('PERIMETER_WEST_YARD', -32.55, -32.20, -51.40, -22.95, 0, 2.25);
+  addColliderXZ('PERIMETER_EAST_YARD', 32.20, 32.55, -51.40, -22.95, 0, 2.25);
+
   // Prefer higher overlapping walk surfaces (e.g. pavement over SITE_GROUND).
   walkSurfaces.sort((a, b) => b.topY - a.topY);
-  console.log(`Scene collision: ${added} compact OBB obstacles · ${walkable} walk surfaces · ${skippedHuge} broad/combined meshes skipped`);
+  console.log(`Scene collision: ${added} compact OBB obstacles · ${walkable} walk surfaces · ${skippedHuge} broad/combined meshes skipped + perimeter walls`);
 }
 function addEmbeddedNPCCollider(root, label) {
   if (!root) return;
@@ -3264,6 +4271,7 @@ function addBabaInteraction(baba) {
     npcKey: 'baba',
     radius: 2.65,
     text: 'E — поговорить · Баба Капа',
+    requiresLook: true,
   });
 }
 
@@ -3291,7 +4299,92 @@ function addShopInteraction(root) {
   interactive.push(shopInteraction);
 }
 
-loader.load('./assets/BETONSHCHIK_SCENE.glb', gltf => {
+function rotateStaticArmVertices(mesh, centerX, leftShoulderX, rightShoulderX, pivotY, angleRad) {
+  if (!mesh?.isMesh || !mesh.geometry?.attributes?.position || mesh.userData?.babaArmsRelaxed) return;
+  mesh.geometry = mesh.geometry.clone();
+  const attr = mesh.geometry.attributes.position;
+  for (let i = 0; i < attr.count; i++) {
+    let x = attr.getX(i), y = attr.getY(i), z = attr.getZ(i);
+    let px = null, a = 0;
+    if (x < leftShoulderX) { px = leftShoulderX; a = angleRad; }
+    else if (x > rightShoulderX) { px = rightShoulderX; a = -angleRad; }
+    if (px === null) continue;
+    const dx = x - px, dy = y - pivotY;
+    const c = Math.cos(a), sn = Math.sin(a);
+    attr.setXYZ(i, px + dx * c - dy * sn, pivotY + dx * sn + dy * c, z);
+  }
+  attr.needsUpdate = true;
+  mesh.geometry.computeBoundingBox();
+  mesh.geometry.computeBoundingSphere();
+  mesh.geometry.computeVertexNormals();
+  mesh.userData = mesh.userData || {};
+  mesh.userData.babaArmsRelaxed = true;
+}
+
+function relaxBabaKapaTPose(root) {
+  if (!root) return;
+  const torso = root.getObjectByName('туловище');
+  const arms = root.getObjectByName('руки');
+  const gloves = root.getObjectByName('перчатки');
+  if (!torso || !arms) return;
+  torso.geometry?.computeBoundingBox?.();
+  arms.geometry?.computeBoundingBox?.();
+  const tb = torso.geometry?.boundingBox;
+  const ab = arms.geometry?.boundingBox;
+  if (!tb || !ab) return;
+  const centerX = (tb.min.x + tb.max.x) * .5;
+  const leftShoulderX = tb.min.x + (tb.max.x - tb.min.x) * .08;
+  const rightShoulderX = tb.max.x - (tb.max.x - tb.min.x) * .08;
+  const pivotY = (ab.min.y + ab.max.y) * .5;
+  const relaxAngle = THREE.MathUtils.degToRad(68);
+  rotateStaticArmVertices(arms, centerX, leftShoulderX, rightShoulderX, pivotY, relaxAngle);
+  rotateStaticArmVertices(gloves, centerX, leftShoulderX, rightShoulderX, pivotY, relaxAngle);
+  console.log('[BABA] static T-pose arms relaxed procedurally');
+}
+
+let babaIdleClock = 0;
+let babaIdleBaseYaw = 0;
+function updateBabaProceduralIdle(dt) {
+  if (!babaGroundLockEnabled || !babaWorldRoot) return;
+  babaIdleClock += dt;
+  const breathe = Math.sin(babaIdleClock * 1.72);
+  const sway = Math.sin(babaIdleClock * .73);
+  babaWorldRoot.visible = true;
+  babaWorldRoot.position.y = babaLockedY + breathe * .006;
+  babaWorldRoot.rotation.y = babaIdleBaseYaw + sway * .015;
+  babaWorldRoot.updateMatrixWorld(true);
+}
+
+function findOrCreateBabaKapa(root) {
+  if (!root) return null;
+  const existing = root.getObjectByName('BabaKapa');
+  if (existing) return existing;
+  const partNames = ['брови','веки','волосы','глаза','голова','крылья','ноги','нос','перчатки','платок','платье','руки','тапки','туловище','усы'];
+  const parts = partNames.map(name => root.getObjectByName(name)).filter(Boolean);
+  if (parts.length < 8) return null;
+  const group = new THREE.Group();
+  group.name = 'BabaKapa';
+  // Put the group pivot at Baba herself before attaching the baked-world-coordinate parts.
+  // attach() preserves their world transforms, while the centered pivot makes idle sway local
+  // instead of orbiting the character around scene origin.
+  root.updateWorldMatrix(true, true);
+  const partsBox = new THREE.Box3();
+  for (const part of parts) partsBox.expandByObject(part);
+  const pivotWorld = partsBox.getCenter(new THREE.Vector3());
+  pivotWorld.y = 0;
+  root.worldToLocal(pivotWorld);
+  group.position.copy(pivotWorld);
+  root.add(group);
+  group.updateWorldMatrix(true, true);
+  for (const part of parts) group.attach(part);
+  group.updateWorldMatrix(true, true);
+  console.log(`[BABA] reconstructed root from ${parts.length} FINAL parts`);
+  mobileDebugLog(`Baba root reconstructed: ${parts.length} parts`);
+  return group;
+}
+
+mobileDebugStage(TOUCH_DEVICE ? (MOBILE_SAFE_MODE ? 'scene-loading-safe' : 'scene-loading-normal') : 'desktop-scene-loading');
+loader.load(FINAL_SCENE_URL, gltf => {
   layoutRoot = gltf.scene;
   layoutRoot.name = 'BETONSHCHIK_FINAL_LAYOUT';
   prepModel(layoutRoot);
@@ -3320,9 +4413,21 @@ loader.load('./assets/BETONSHCHIK_SCENE.glb', gltf => {
     });
   }
 
-  // Replace flat Blender slab with the actual runtime recess.
-  const originalSlab = layoutRoot.getObjectByName('POUR_SLAB');
-  if (originalSlab) originalSlab.visible = false;
+  // Replace flat Blender slab with the actual runtime recess. Hide every matching node
+  // (mobile glTF can expose mesh/group wrappers differently) and force the runtime pit visible.
+  layoutRoot.traverse(o => {
+    if (String(o.name || '').toLowerCase().includes('pour_slab')) o.visible = false;
+  });
+  // Mobile: remove the authored asphalt cap only under the runtime pour slab.
+  // This is the missing piece that makes the physical depressions actually visible.
+  cutMobileSiteGroundUnderPourSlab(layoutRoot);
+  pitGroup.visible = true;
+  pitGroup.traverse(o => { if (o.isMesh) { o.visible = true; o.frustumCulled = false; } });
+  if (TOUCH_DEVICE) {
+    const pitMeshes = [];
+    pitGroup.traverse(o => { if (o.isMesh) pitMeshes.push(o.name || '(unnamed)'); });
+    mobileDebugLog(`runtime pits visible: ${pitMeshes.length} meshes; slabBoxes=mobile`);
+  }
 
   // HOSE ANCHOR
   // Blender Empty nodes have repeatedly disappeared or exported as identity in our GLB.
@@ -3384,7 +4489,7 @@ loader.load('./assets/BETONSHCHIK_SCENE.glb', gltf => {
         o.renderOrder = 20;
       }
     });
-    console.log('PHYSICAL HOSE INITIALIZED', anchorPos, 'segments', hoseMeshes.length);
+    console.log('PHYSICAL HOSE INITIALIZED', anchorPos, 'continuous tube rings', HOSE_SEGMENTS + 1);
   } else {
     console.error('NO VALID HOSE ANCHOR FOUND — add a tiny mesh named ShlangAnchor in Blender');
   }
@@ -3392,8 +4497,10 @@ loader.load('./assets/BETONSHCHIK_SCENE.glb', gltf => {
   // Rake is authored/positioned in Blender now. Use that exact scene model.
   setupSceneRake(layoutRoot);
 
-  // Make Baba Kapa robust against skinned-mesh frustum culling and accidental visibility flags.
-  const baba = layoutRoot.getObjectByName('BabaKapa');
+  // FINAL contains Baba as separated static parts in a T-pose (no skin/armature was exported).
+  // Relax the arms directly from their actual mesh bounds, then run a subtle procedural idle.
+  relaxBabaKapaTPose(layoutRoot);
+  const baba = findOrCreateBabaKapa(layoutRoot);
   if (baba) {
     baba.visible = true;
     baba.updateWorldMatrix(true, true);
@@ -3427,6 +4534,11 @@ loader.load('./assets/BETONSHCHIK_SCENE.glb', gltf => {
         }
       }
     });
+    babaWorldRoot = baba;
+    babaLockedY = baba.position.y;
+    babaIdleBaseYaw = baba.rotation.y;
+    babaIdleClock = 0;
+    babaGroundLockEnabled = true;
     addEmbeddedNPCCollider(baba, 'BabaKapa');
     addBabaInteraction(baba);
   } else {
@@ -3437,20 +4549,63 @@ loader.load('./assets/BETONSHCHIK_SCENE.glb', gltf => {
   // they never leave invisible blockers after being collected.
   setupWorldPickups(layoutRoot);
 
+  // Scene cleanup / art polish for the new export.
+  removeFrontSiteFlower(layoutRoot);
+  repaintConstructionVehicles(layoutRoot);
+
+  // The real storefront was omitted because it was hidden during Blender export.
+  // Restore that missing mesh from a tiny standalone asset; no Blender re-export required.
+  forceMonetka5Visible(layoutRoot);
+
+  // Small parking-marking planes near MONETKA need alpha punch-through and must never
+  // become solid blockers in the storefront parking lane.
+  fixMonetkaParking(layoutRoot);
+
+  // Mobile static batching happens after all scene-art fixes and before collider extraction.
+  // Grass/flowers are visual-only and already collision-free, so replacing them with instancing
+  // cannot affect gameplay volumes.
+  instanceMobileVegetation(layoutRoot);
+
   addFinalLayoutColliders(layoutRoot);
-  // MONETKA is no longer an invisible E-zone: shopping starts only via Baba Kapa dialogue.
-  startSceneNPCs();
+  carveMonetkaParkingPassage();
+  freezeMobileStaticMeshes(layoutRoot);
+  // Avoid the largest mobile memory spike: scene geometry/textures finish uploading first,
+  // then NPC FBX/base textures are loaded after the browser has had time to release network buffers.
+  if (TOUCH_DEVICE) {
+    setTimeout(() => {
+      mobileDebugStage('npc-loading');
+      startSceneNPCs().finally?.(() => mobileDebugStage('npc-ready'));
+    }, 1500);
+  } else {
+    startSceneNPCs();
+  }
 
   assetsLoaded++;
+  sessionStorage.removeItem(SCENE_RETRY_KEY);
   updateLoadState();
-}, undefined, err => {
+  // Enable PLAY only after the final layout is actually mounted and survives a paint.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    sceneReady = !!(layoutRoot && layoutRoot.parent && layoutRoot.children.length);
+    if (sceneReady) {
+      mobileDebugStage('scene-ready');
+      menuLoadingSpinner?.classList.add('isDone');
+    }
+    if (sceneReady && startBtn) { startBtn.disabled = false; startBtn.removeAttribute('aria-disabled'); }
+  }));
+}, xhr => {
+  if (TOUCH_DEVICE && xhr) {
+    const pct = xhr.total ? Math.round(xhr.loaded / xhr.total * 100) : 0;
+    if (pct && pct % 10 === 0) mobileDebugLog(`scene network ${pct}%`);
+  }
+}, err => {
+  mobileDebugLog(`Final layout failed: ${err?.message || err}`);
   console.error('Final layout failed', err);
   assetsFailed++;
   updateLoadState();
+  recoverBrokenScene('final GLTF load failed');
 });
 
 // FIRST-PERSON PLAYER / CONTROLS
-// FPS character body stays loaded; F3 only adds a debug observer camera.
 // Movement is deterministic: no acceleration, no velocity carry-over, no camera orbit smoothing.
 const keys = Object.create(null);
 let yaw = 0;
@@ -3497,7 +4652,6 @@ if (!Number.isFinite(cameraHeightOffset)) cameraHeightOffset = 0;
 let cameraForwardOffset = Number.parseFloat(localStorage.getItem('betonshchik_camera_forward_offset') || '0');
 if (!Number.isFinite(cameraForwardOffset)) cameraForwardOffset = 0;
 // FPS body framing: unlike cameraForwardOffset (world/collision space), this shifts
-// the camera relative to the camera-attached player body and is what F5 adjusts now.
 let playerCameraDepthOffset = Number.parseFloat(localStorage.getItem('betonshchik_player_camera_depth_offset') || '0');
 if (!Number.isFinite(playerCameraDepthOffset)) playerCameraDepthOffset = 0;
 // v0.48: local camera is forced in front of the severed neck opening.
@@ -3509,7 +4663,6 @@ if (localStorage.getItem('beton_camera_safe_v48') !== '1') {
 playerCameraDepthOffset = THREE.MathUtils.clamp(playerCameraDepthOffset, .18, .48);
 const PLAYER_BODY_BASE_Z = 0;
 function syncPlayerViewModelDepth() {
-  // F5 now moves the CAMERA relative to the world-space body, never the body itself.
   syncCameraToPlayer();
 }
 function syncPlayerBodyToWorld() {
@@ -3588,58 +4741,6 @@ function syncCameraToPlayer() {
 }
 syncCameraToPlayer();
 
-// DEBUG PLAYER MARKER -------------------------------------------------------
-// Visible only in F3 mode: body capsule substitute + head/eye marker + facing arrow.
-const debugPlayer = new THREE.Group();
-debugPlayer.visible = false;
-scene.add(debugPlayer);
-const dbgBodyMat = new THREE.MeshBasicMaterial({ color: 0x2e8cff, transparent: true, opacity: .28, depthTest: true });
-const dbgHeadMat = new THREE.MeshBasicMaterial({ color: 0xffd84d, transparent: true, opacity: .78, depthTest: true });
-const dbgBody = new THREE.Mesh(new THREE.CylinderGeometry(PLAYER_R, PLAYER_R, 1.22, 12), dbgBodyMat);
-dbgBody.position.y = .73;
-debugPlayer.add(dbgBody);
-const dbgHead = new THREE.Mesh(new THREE.SphereGeometry(.18, 12, 8), dbgHeadMat);
-debugPlayer.add(dbgHead);
-const dbgEyeBar = new THREE.Mesh(new THREE.BoxGeometry(.9, .025, .025), dbgHeadMat);
-debugPlayer.add(dbgEyeBar);
-const dbgForward = new THREE.Mesh(new THREE.BoxGeometry(.06, .06, .85), dbgHeadMat);
-dbgForward.position.z = -.44;
-debugPlayer.add(dbgForward);
-
-function syncDebugCamera() {
-  const groundY = groundHeightAt(playerPos.x, playerPos.z);
-  debugPlayer.position.set(playerPos.x, groundY, playerPos.z);
-  debugPlayer.rotation.y = yaw;
-  dbgHead.position.y = eyeHeight;
-  dbgEyeBar.position.y = eyeHeight;
-  dbgForward.position.y = eyeHeight;
-
-  debugTarget.set(playerPos.x, groundY + Math.min(eyeHeight * .72, 1.25), playerPos.z);
-  const cp = Math.cos(debugPitch);
-  debugCamera.position.set(
-    debugTarget.x + Math.sin(debugYaw) * cp * debugDistance,
-    debugTarget.y + Math.sin(debugPitch) * debugDistance + .35,
-    debugTarget.z + Math.cos(debugYaw) * cp * debugDistance
-  );
-  debugCamera.lookAt(debugTarget);
-}
-
-function setDebugMode(on) {
-  debugMode = !!on;
-  debugPlayer.visible = debugMode;
-  if (debugMode) {
-    debugYaw = yaw;
-    debugPitch = .28;
-    syncDebugCamera();
-    showToast('DEBUG 3RD PERSON · F3 вернуться · колесо — дистанция');
-  } else {
-    // Keep the direction you were orbiting toward when returning to FPS.
-    yaw = debugYaw;
-    syncCameraToPlayer();
-    showToast('FPS CAMERA');
-  }
-}
-
 // FIRST-PERSON ARMS / PROPS --------------------------------------------------
 // Full Mixamo skeleton stays alive for animation, but only shoulder/arm/hand vertices are rendered.
 // This avoids the classic "camera inside the head/body" FPS problem while preserving Smoking/Drinking.
@@ -3697,6 +4798,10 @@ const AUDIO_MIX = Object.freeze({
 
   cigarettePuff: .42,
 
+  // Supplied can opening + close-up gulps.
+  drinkCanOpen: .46,
+  drinkGulps: 2.55,
+
   wetFootstep: .48,
 
   qteAppear: .34,
@@ -3747,6 +4852,10 @@ let georgeVoiceSource = null;
 let cigarettePuffBuffer = null;
 let cigarettePuffSource = null;
 let cigarettePuffLastDrag = -1;
+let drinkCanOpenBuffer = null;
+let drinkGulpsBuffer = null;
+let drinkCanOpenSource = null;
+let drinkGulpsSource = null;
 let wetFootstepBuffer = null;
 
 let qteAppearBuffer = null;
@@ -3772,6 +4881,9 @@ let rakeDragCooldown = 0;
 // near the pump/hose area.
 const pumpAudioWorld = new THREE.Vector3();
 const mixerAudioWorld = new THREE.Vector3();
+const pumpAudioBounds = new THREE.Box3();
+const mixerAudioBounds = new THREE.Box3();
+const machineAudioNearestPoint = new THREE.Vector3();
 let pumpAudioWorldValid = false;
 let mixerAudioWorldValid = false;
 
@@ -3809,6 +4921,7 @@ async function initGameAudio() {
         pavelGreeting, pavelFarewell, pavelSuccessDance, pavelSuccessMusic,
         georgeGreeting, georgeUpgrade1, georgeUpgrade2, georgeUpgrade3, georgeNoMoney,
         cigarettePuff,
+        drinkCanOpen, drinkGulps,
         wetFootstep,
         qteAppear, qteHit, hoseSlip,
         babaGreeting, babaFarewell, babaPurchase
@@ -3831,6 +4944,8 @@ async function initGameAudio() {
         decodeGameAudio('./assets/audio/voices/george/upgrade_03.mp3'),
         decodeGameAudio('./assets/audio/voices/george/no_money.mp3'),
         decodeGameAudio('./assets/audio/smoking/cigarette_puff.mp3'),
+        decodeGameAudio('./assets/audio/drinks/can_open.mp3'),
+        decodeGameAudio('./assets/audio/drinks/drinking_gulps.mp3'),
         decodeGameAudio('./assets/audio/footsteps/wet_concrete.mp3'),
         decodeGameAudio('./assets/audio/qte/qte_appear.mp3'),
         decodeGameAudio('./assets/audio/qte/qte_hit.mp3'),
@@ -3857,6 +4972,8 @@ async function initGameAudio() {
       georgeUpgrade3Buffer = georgeUpgrade3;
       georgeNoMoneyBuffer = georgeNoMoney;
       cigarettePuffBuffer = cigarettePuff;
+      drinkCanOpenBuffer = drinkCanOpen;
+      drinkGulpsBuffer = drinkGulps;
 
       wetFootstepBuffer = wetFootstep;
       qteAppearBuffer = qteAppear;
@@ -3986,6 +5103,15 @@ function objectVisualCenter(obj, out) {
   );
 }
 
+function objectVisualBounds(obj, outBox, outCenter) {
+  if (!obj) return false;
+  obj.updateWorldMatrix(true, true);
+  outBox.setFromObject(obj);
+  if (outBox.isEmpty()) return objectVisualCenter(obj, outCenter);
+  outBox.getCenter(outCenter);
+  return [outCenter.x, outCenter.y, outCenter.z].every(Number.isFinite);
+}
+
 function resolveMachineAudioWorldPositions() {
   pumpAudioWorldValid = false;
   mixerAudioWorldValid = false;
@@ -3996,18 +5122,18 @@ function resolveMachineAudioWorldPositions() {
   //
   // Use the actual truck geometry instead.
   const pumpTruck =
-    scene.getObjectByName('Geom3D_Hoze Truck') ||
-    scene.getObjectByName('Hoze Truck');
+    scene.getObjectByName('Hoze Truck') ||
+    scene.getObjectByName('Geom3D_Hoze Truck');
 
   const mixerTruck =
     scene.getObjectByName('Concrete Mixer Truck');
 
   if (pumpTruck) {
-    pumpAudioWorldValid = objectVisualCenter(pumpTruck, pumpAudioWorld);
+    pumpAudioWorldValid = objectVisualBounds(pumpTruck, pumpAudioBounds, pumpAudioWorld);
   }
 
   if (mixerTruck) {
-    mixerAudioWorldValid = objectVisualCenter(mixerTruck, mixerAudioWorld);
+    mixerAudioWorldValid = objectVisualBounds(mixerTruck, mixerAudioBounds, mixerAudioWorld);
   }
 
   // Last-resort fallbacks only.
@@ -4018,12 +5144,14 @@ function resolveMachineAudioWorldPositions() {
       scene.getObjectByName('ShlangAnchor');
 
     if (fallback) {
-      pumpAudioWorldValid = objectVisualCenter(fallback, pumpAudioWorld);
+      pumpAudioWorldValid = objectVisualBounds(fallback, pumpAudioBounds, pumpAudioWorld);
     }
   }
 
   if (!mixerAudioWorldValid && pumpAudioWorldValid) {
-    mixerAudioWorld.copy(pumpAudioWorld).add(new THREE.Vector3(-4.0, 0, 1.0));
+    const fallbackOffset = new THREE.Vector3(-4.0, 0, 1.0);
+    mixerAudioWorld.copy(pumpAudioWorld).add(fallbackOffset);
+    mixerAudioBounds.copy(pumpAudioBounds).translate(fallbackOffset);
     mixerAudioWorldValid = true;
   }
 
@@ -4086,6 +5214,14 @@ function distanceGain3D(listenerPos, sourcePos, nearDist, farDist, maxGain) {
   return Math.max(.0001, maxGain * k * k);
 }
 
+function distanceGainFromVehicle(listenerPos, bounds, fallbackCenter, nearDist, farDist, maxGain) {
+  if (bounds && !bounds.isEmpty()) {
+    bounds.clampPoint(listenerPos, machineAudioNearestPoint);
+    return distanceGain3D(listenerPos, machineAudioNearestPoint, nearDist, farDist, maxGain);
+  }
+  return distanceGain3D(listenerPos, fallbackCenter, nearDist, farDist, maxGain);
+}
+
 function updateMachineAudio() {
   if (!started || !gameAudioReady || !gameAudioCtx) return;
 
@@ -4102,11 +5238,12 @@ function updateMachineAudio() {
       ? AUDIO_MIX.ambienceDuckWhileVoice
       : 1;
 
-    const g = distanceGain3D(
+    const g = distanceGainFromVehicle(
       camera.position,
+      pumpAudioBounds,
       pumpAudioWorld,
       2.6,
-      23.0,
+      23.0 * 1.30,
       AUDIO_MIX.pumpNear
     ) * voiceDuck;
     pumpSpatialGain.gain.setTargetAtTime(g, now, .08);
@@ -4117,11 +5254,12 @@ function updateMachineAudio() {
       ? AUDIO_MIX.ambienceDuckWhileVoice
       : 1;
 
-    const g = distanceGain3D(
+    const g = distanceGainFromVehicle(
       camera.position,
+      mixerAudioBounds,
       mixerAudioWorld,
       2.8,
-      25.0,
+      25.0 * 1.30,
       AUDIO_MIX.mixerNear
     ) * voiceDuck;
     mixerSpatialGain.gain.setTargetAtTime(g, now, .09);
@@ -4272,6 +5410,45 @@ function playSimpleGameOneShot(buffer, gainValue, playbackRate = 1.0) {
   source.start();
 
   return source;
+}
+
+function stopDrinkAudio() {
+  for (const src of [drinkCanOpenSource, drinkGulpsSource]) {
+    if (!src) continue;
+    try { src.stop(); } catch (_) {}
+  }
+  drinkCanOpenSource = null;
+  drinkGulpsSource = null;
+}
+
+function playCanDrinkAudio() {
+  if (!gameAudioReady || !gameAudioCtx || gameAudioCtx.state !== 'running') return;
+  stopDrinkAudio();
+  const now = gameAudioCtx.currentTime;
+
+  if (drinkCanOpenBuffer) {
+    const source = gameAudioCtx.createBufferSource();
+    const gain = gameAudioCtx.createGain();
+    source.buffer = drinkCanOpenBuffer;
+    gain.gain.value = AUDIO_MIX.drinkCanOpen;
+    source.connect(gain);
+    gain.connect(gameAudioMaster);
+    drinkCanOpenSource = source;
+    source.onended = () => { if (drinkCanOpenSource === source) drinkCanOpenSource = null; };
+    source.start(now);
+  }
+
+  if (drinkGulpsBuffer) {
+    const source = gameAudioCtx.createBufferSource();
+    const gain = gameAudioCtx.createGain();
+    source.buffer = drinkGulpsBuffer;
+    gain.gain.value = AUDIO_MIX.drinkGulps;
+    source.connect(gain);
+    gain.connect(gameAudioMaster);
+    drinkGulpsSource = source;
+    source.onended = () => { if (drinkGulpsSource === source) drinkGulpsSource = null; };
+    source.start(now + 1.12);
+  }
 }
 
 function playQTEAppearAudio() {
@@ -4638,6 +5815,7 @@ function updatePourAudio() {
 }
 let rightHandBone = null;
 let leftHandBone = null;
+let playerHeadShadowCaster = null;
 let rightIndexBone = null;
 
 // Procedural upper-body animation bones.
@@ -4685,7 +5863,7 @@ function makeCigaretteSmokeTexture() {
 }
 const cigaretteSmokeTexture=makeCigaretteSmokeTexture();
 
-for(let i=0;i<30;i++){
+for(let i=0;i<48;i++){
   const mat=new THREE.SpriteMaterial({
     map:cigaretteSmokeTexture,transparent:true,opacity:0,
     depthWrite:false,depthTest:true,color:0xe5e8e4
@@ -4725,19 +5903,19 @@ function spawnCigaretteSmoke(strength=1){
   if(!getCigaretteBurnTipWorld(smokeTipWorld))return;
   let p=cigaretteSmokeParticles.find(x=>!x.sprite.visible);
   if(!p)p=cigaretteSmokeParticles[0];
-  p.age=0;p.life=THREE.MathUtils.randFloat(1.15,1.85);
+  p.age=0;p.life=THREE.MathUtils.randFloat(1.45,2.25);
   p.sprite.visible=true;p.sprite.position.copy(smokeTipWorld);
   p.sprite.position.x+=THREE.MathUtils.randFloatSpread(.008);
   p.sprite.position.y+=THREE.MathUtils.randFloatSpread(.006);
   p.sprite.position.z+=THREE.MathUtils.randFloatSpread(.008);
   p.vel.set(
-    THREE.MathUtils.randFloatSpread(.025),
-    THREE.MathUtils.randFloat(.08,.14),
-    THREE.MathUtils.randFloatSpread(.025)
+    THREE.MathUtils.randFloatSpread(.040),
+    THREE.MathUtils.randFloat(.10,.18),
+    THREE.MathUtils.randFloatSpread(.040)
   );
-  const s=THREE.MathUtils.randFloat(.018,.032)*(0.85+strength*.25);
+  const s=THREE.MathUtils.randFloat(.026,.045)*(0.92+strength*.34);
   p.sprite.scale.set(s,s,s);
-  p.sprite.material.opacity=.38+strength*.16;
+  p.sprite.material.opacity=.50+strength*.20;
   p.sprite.material.rotation=Math.random()*Math.PI*2;
 }
 
@@ -4750,8 +5928,8 @@ function updateCigaretteSmoke(dt){
     p.vel.x+=Math.sin((p.age+p.life)*5.1)*dt*.006;
     p.vel.z+=Math.cos((p.age+p.life)*4.2)*dt*.006;
     p.sprite.position.addScaledVector(p.vel,dt);
-    p.sprite.scale.multiplyScalar(1+dt*.72);
-    p.sprite.material.opacity=Math.max(0,(1-k)*.42);
+    p.sprite.scale.multiplyScalar(1+dt*.82);
+    p.sprite.material.opacity=Math.max(0,(1-k)*.58);
   }
   if(specialMode!=='smoke'||!cigaretteProp||!cigaretteVM.visible){
     cigaretteSmokeSpawnTimer=0;
@@ -4778,8 +5956,9 @@ function updateCigaretteSmoke(dt){
 
   cigaretteSmokeSpawnTimer-=dt;
   if(cigaretteSmokeSpawnTimer<=0){
-    cigaretteSmokeSpawnTimer=THREE.MathUtils.lerp(.16,.065,dragStrength);
+    cigaretteSmokeSpawnTimer=THREE.MathUtils.lerp(.105,.042,dragStrength);
     spawnCigaretteSmoke(dragStrength);
+    if (dragStrength > .38) spawnCigaretteSmoke(dragStrength * .86);
   }
 }
 let energyProp = null;
@@ -4980,7 +6159,7 @@ async function getShopPreviewSource(productKey) {
 
     if (productKey === 'boots2') {
       const gltf = await new Promise((resolve, reject) =>
-        loader.load('./assets/shop/rubberbootstier2.glb', resolve, undefined, reject)
+        loader.load('./assets/shop/rubberbootstier2.gltf', resolve, undefined, reject)
       );
       const model = cloneForShopPreview(gltf.scene);
       model.rotation.x = -0.10;
@@ -5075,8 +6254,15 @@ function prepPlayerWorldBody(root) {
     if (!(o.isMesh || o.isSkinnedMesh)) return;
     o.frustumCulled = false;
     o.renderOrder = 0;
+    if (o.userData?.headShadowOnly) {
+      o.castShadow = true;
+      o.receiveShadow = false;
+      const ms = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of ms) { if (m) { m.colorWrite=false; m.depthWrite=false; m.depthTest=false; m.side=THREE.DoubleSide; m.needsUpdate=true; } }
+      return;
+    }
     o.castShadow = !TOUCH_DEVICE;
-    o.receiveShadow = true;
+    o.receiveShadow = false;
     const ms = Array.isArray(o.material) ? o.material : [o.material];
     for (const m of ms) {
       if (!m) continue;
@@ -5088,11 +6274,99 @@ function prepPlayerWorldBody(root) {
       m.alphaTest = 0;
       m.blending = THREE.NormalBlending;
       m.premultipliedAlpha = false;
-      m.side = THREE.FrontSide;
+      m.side = THREE.DoubleSide;
+      m.shadowSide = THREE.DoubleSide;
       m.forceSinglePass = true;
       m.needsUpdate = true;
     }
   });
+}
+function buildHeadShadowGeometry(mesh) {
+  if (!mesh?.isSkinnedMesh || !mesh.geometry?.attributes?.position || !mesh.skeleton?.bones?.length) return null;
+  const skinIndex = mesh.geometry.attributes.skinIndex;
+  const skinWeight = mesh.geometry.attributes.skinWeight;
+  if (!skinIndex || !skinWeight) return null;
+
+  const headBones = new Set();
+  mesh.skeleton.bones.forEach((b, i) => {
+    const core = canonicalBoneCore(b.name);
+    if (core === 'head' || core === 'neck' || core.startsWith('headtop') || core.includes('headend')) headBones.add(i);
+  });
+  if (!headBones.size) return null;
+
+  const src = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
+  const si = src.attributes.skinIndex, sw = src.attributes.skinWeight, pos = src.attributes.position;
+  const attrs = Object.keys(src.attributes);
+  const out = Object.fromEntries(attrs.map(n => [n, []]));
+  const influence = (v) => {
+    let total = 0;
+    for (let c = 0; c < Math.min(si.itemSize, sw.itemSize); c++) {
+      const bi = si.array[v * si.itemSize + c];
+      const w = sw.array[v * sw.itemSize + c];
+      if (headBones.has(bi)) total += w;
+    }
+    return total;
+  };
+  let kept = 0;
+  for (let base = 0; base + 2 < pos.count; base += 3) {
+    const a=influence(base), b=influence(base+1), c=influence(base+2);
+    // Keep actual deformed head/neck silhouette, not a fake sphere/box proxy.
+    if (Math.max(a,b,c) < .14 && (a+b+c)/3 < .07) continue;
+    kept += 3;
+    for (let j=0;j<3;j++) {
+      const vi=base+j;
+      for (const name of attrs) {
+        const at=src.attributes[name], off=vi*at.itemSize;
+        for (let q=0;q<at.itemSize;q++) out[name].push(at.array[off+q]);
+      }
+    }
+  }
+  if (!kept) { src.dispose(); return null; }
+  const ng = new THREE.BufferGeometry();
+  for (const name of attrs) {
+    const at=src.attributes[name], Arr=at.array.constructor;
+    ng.setAttribute(name,new THREE.BufferAttribute(new Arr(out[name]),at.itemSize,at.normalized));
+  }
+  ng.computeBoundingBox(); ng.computeBoundingSphere();
+  src.dispose();
+  return ng;
+}
+
+function ensurePlayerHeadShadowCaster(root) {
+  if (!root || playerHeadShadowCaster) return;
+  const holder = new THREE.Group();
+  holder.name = 'PLAYER_REAL_HEAD_SHADOW';
+  holder.userData.headShadowHolder = true;
+  let count = 0;
+  const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
+  shadowMat.colorWrite = false;
+  shadowMat.depthWrite = false;
+  shadowMat.depthTest = false;
+
+  const additions = [];
+  root.traverse(o => {
+    if (!o.isSkinnedMesh || o.userData?.headShadowOnly) return;
+    const geo = buildHeadShadowGeometry(o);
+    if (!geo) return;
+    const sh = new THREE.SkinnedMesh(geo, shadowMat);
+    sh.name = `${o.name || 'mesh'}__HEAD_SHADOW_ONLY`;
+    sh.userData.headShadowOnly = true;
+    sh.position.copy(o.position); sh.quaternion.copy(o.quaternion); sh.scale.copy(o.scale);
+    sh.bindMode = o.bindMode;
+    sh.bind(o.skeleton, o.bindMatrix);
+    sh.bindMatrix.copy(o.bindMatrix);
+    sh.bindMatrixInverse.copy(o.bindMatrixInverse);
+    sh.castShadow = true;
+    sh.receiveShadow = false;
+    sh.frustumCulled = false;
+    additions.push([o.parent || root, sh]);
+    count++;
+  });
+  for (const [parent, sh] of additions) parent.add(sh);
+  if (count) {
+    root.add(holder); // bookkeeping marker only; shadow meshes remain under original parents.
+    playerHeadShadowCaster = holder;
+  }
 }
 function normalizeCharacter(root, targetHeight = 1.78) {
   root.updateMatrixWorld(true);
@@ -5415,6 +6689,7 @@ function trimCharacterToArms(root) {
   // local basis.  Skin weights are invariant to that, so prefer them.
   root.traverse(o => {
     if (!(o.isMesh || o.isSkinnedMesh)) return;
+    if (o.userData?.headShadowOnly) return;
     if (isHiddenViewMeshName(o.name)) { o.visible = false; return; }
     if (!o.isSkinnedMesh) return; // keep non-head static accessories/clothes
     const removedByWeights = rebuildSkinnedMeshWithoutHeadWeights(o);
@@ -5468,6 +6743,7 @@ const PAVEL_DANCES = [
   './assets/npcs/dances/Gangnam_Style.fbx',
   './assets/npcs/dances/Hip_Hop_Dancing.fbx',
 ];
+let pavelLastDanceIndex = -1;
 
 const NPC_SPECS = [
   {
@@ -5479,7 +6755,8 @@ const NPC_SPECS = [
     mr: './assets/npcs/pavel_1.jpg',
     normal: './assets/npcs/pavel_2.jpg',
     metalness: 1.0,
-    sceneYawDeg: 323.44731,
+    // v51.29 — Pavel turned exactly 180° from v51.28.
+    sceneYawDeg: 143.44731,
   },
   {
     label: 'Серёга',
@@ -5494,7 +6771,7 @@ const NPC_SPECS = [
     lockHead: true,
   },
   {
-    label: 'George',
+    label: 'Джордж',
     npcKey: 'george',
     placeholder: 'George',
     fbx: './assets/npcs/george_rigged.fbx',
@@ -5517,6 +6794,13 @@ function loadNPCTexture(url, srgb = false) {
 }
 
 async function buildNPCMaterialSet(spec) {
+  // Keep character base-color at full source resolution on all devices. On phones,
+  // skip the two extra 2K PBR maps to avoid ~32 MB+ GPU allocation per NPC.
+  if (TOUCH_DEVICE) {
+    const baseUrl = MOBILE_SAFE_MODE ? spec.base.replace(/\.jpg$/i, '_mobile_safe.jpg') : spec.base;
+    const base = await loadNPCTexture(baseUrl, true);
+    return { base, mr: null, normal: null };
+  }
   const [base, mr, normal] = await Promise.all([
     loadNPCTexture(spec.base, true),
     loadNPCTexture(spec.mr, false),
@@ -5532,11 +6816,11 @@ function applyNPCPBR(root, maps, spec) {
     const mat = new THREE.MeshStandardMaterial({
       name: `NPC_${spec.label}`,
       map: maps.base,
-      normalMap: maps.normal,
-      roughnessMap: maps.mr,
-      metalnessMap: maps.mr,
-      roughness: 1.0,
-      metalness: spec.metalness,
+      normalMap: maps.normal || null,
+      roughnessMap: maps.mr || null,
+      metalnessMap: maps.mr || null,
+      roughness: TOUCH_DEVICE ? .92 : 1.0,
+      metalness: TOUCH_DEVICE ? 0.0 : spec.metalness,
       side: THREE.DoubleSide,
     });
     // Preserve obvious alpha/cutout behavior if the FBX material had any.
@@ -5631,7 +6915,8 @@ async function spawnRiggedNPC(spec, idleSource) {
     kind: 'npc',
     npcKey: spec.npcKey,
     radius: 2.45,
-    text: `E — поговорить · ${spec.label}`
+    text: `E — поговорить · ${spec.label}`,
+    requiresLook: true
   });
 }
 
@@ -5645,6 +6930,16 @@ function idleEmbeddedRig(root, idleSource, label) {
   console.log(`${label}: Neutral Idle, ${clip.tracks.length} tracks`);
 }
 
+function lockBabaToGround() {
+  if (!babaGroundLockEnabled || !babaWorldRoot) return;
+  babaWorldRoot.visible = true;
+  // Keep a safety leash against the old falling bug, while allowing millimetre-scale idle breathing.
+  if (Math.abs(babaWorldRoot.position.y - babaLockedY) > .08) {
+    babaWorldRoot.position.y = babaLockedY;
+    babaWorldRoot.updateWorldMatrix(true, true);
+  }
+}
+
 async function startSceneNPCs() {
   if (npcSpawnStarted || !layoutRoot) return;
   npcSpawnStarted = true;
@@ -5653,8 +6948,9 @@ async function startSceneNPCs() {
     const idleSource = await npcIdlePromise;
     if (!idleSource.animations?.length) throw new Error('Neutral Idle.fbx has no animation');
 
-    // Characters already rigged inside the latest scene also get Neutral Idle.
-    idleEmbeddedRig(layoutRoot.getObjectByName('BabaKapa'), idleSource, 'BabaKapa');
+    // Rigged embedded characters use Neutral Idle. Baba has no skin in FINAL, so her
+    // relaxed pose + breathing idle are handled procedurally instead of retargeting Mixamo.
+    lockBabaToGround();
     idleEmbeddedRig(layoutRoot.getObjectByName('Armature.001'), idleSource, 'SceneCharacter');
 
     await Promise.all(NPC_SPECS.map(spec => spawnRiggedNPC(spec, idleSource)));
@@ -5680,10 +6976,12 @@ function followBoneWithProp(holder, bone, offset, rotOffset) {
 }
 
 const PROP_DEFAULTS = {
-  cigarette: { pos:[.006,.010,.016], rot:[0,-Math.PI/3,0] },
-  lighter:   { pos:[-.012,.012,.030], rot:[0,Math.PI/2,-Math.PI/2] },
-  energy:    { pos:[.000,-.010,.016], rot:[0,0,-Math.PI/2] },
-  beer:      { pos:[.000,-.012,.018], rot:[0,0,-Math.PI/2] },
+  // v51.70: exact final values exported after the user's manual Blender placement.
+  // Cigarette uses the v51.69 PROP-aware export; cans use the final GRIP exports.
+  cigarette: { pos:[-0.022603,0.024538,-0.387868], rot:[0.059999,-1.47,-0.139999] },
+  lighter:   { pos:[-.010,.012,.028], rot:[0,Math.PI/2,-Math.PI/2] },
+  energy:    { pos:[-0.010038,0.034809,-0.10974], rot:[0.58435,-1.925996,0.824049] },
+  beer:      { pos:[-0.018673,0.044952,-0.115111], rot:[-0.516996,1.929938,1.121659] },
   rake:      { pos:[.70,-.60,-1.62], rot:[-.20,-1.615,-.50] }
 };
 
@@ -5728,6 +7026,79 @@ if (localStorage.getItem('beton_cigarette_grip_v528') !== '1') {
   localStorage.setItem('beton_cigarette_grip_v528','1');
 }
 
+if (localStorage.getItem('beton_prop_grip_fix_v533') !== '1') {
+  for (const name of ['cigarette','energy','beer']) {
+    localStorage.removeItem(`beton_prop_${name}`);
+    const d = PROP_DEFAULTS[name];
+    propConfigs[name].pos.set(...d.pos);
+    propConfigs[name].euler.set(...d.rot);
+    propConfigs[name].quat.setFromEuler(propConfigs[name].euler);
+  }
+  localStorage.setItem('beton_prop_grip_fix_v533', '1');
+}
+
+// v51.50: discard all old production grip offsets. These props now use one fixed authored grip.
+if (localStorage.getItem('beton_prop_grip_fix_v5155') !== '1') {
+  for (const name of ['cigarette','energy','beer']) {
+    localStorage.removeItem(`beton_prop_${name}`);
+    const d = PROP_DEFAULTS[name];
+    propConfigs[name].pos.set(...d.pos);
+    propConfigs[name].euler.set(...d.rot);
+    propConfigs[name].quat.setFromEuler(propConfigs[name].euler);
+  }
+  localStorage.setItem('beton_prop_grip_fix_v5155', '1');
+}
+
+// v51.60: final cigarette grip: attach to the hand, not the finger bone, and reset stale saved rotation once.
+if (localStorage.getItem('beton_cigarette_grip_v5160') !== '1') {
+  localStorage.removeItem('beton_prop_cigarette');
+  const d = PROP_DEFAULTS.cigarette;
+  propConfigs.cigarette.pos.set(...d.pos);
+  propConfigs.cigarette.euler.set(...d.rot);
+  propConfigs.cigarette.quat.setFromEuler(propConfigs.cigarette.euler);
+  localStorage.setItem('beton_cigarette_grip_v5160', '1');
+}
+
+// v51.62: final Blender-authored prop grips. Reset any older localStorage overrides once.
+if (localStorage.getItem('beton_prop_grip_final_v5162') !== '1') {
+  for (const name of ['cigarette','energy','beer']) {
+    localStorage.removeItem(`beton_prop_${name}`);
+    const d = PROP_DEFAULTS[name];
+    propConfigs[name].pos.set(...d.pos);
+    propConfigs[name].euler.set(...d.rot);
+    propConfigs[name].quat.setFromEuler(propConfigs[name].euler);
+  }
+  localStorage.setItem('beton_prop_grip_final_v5162', '1');
+}
+
+// v51.68: runtime grip correction after Blender verification.
+// Force a clean reload once so a browser that already ran v51.62 cannot keep
+// stale localStorage offsets. Cigarette uses the non-folded GRIP value; cans use
+// the authored Blender GRIPs unchanged.
+if (localStorage.getItem('beton_prop_grip_runtimefix_v5168') !== '1') {
+  for (const name of ['cigarette','energy','beer']) {
+    localStorage.removeItem(`beton_prop_${name}`);
+    const d = PROP_DEFAULTS[name];
+    propConfigs[name].pos.set(...d.pos);
+    propConfigs[name].euler.set(...d.rot);
+    propConfigs[name].quat.setFromEuler(propConfigs[name].euler);
+  }
+  localStorage.setItem('beton_prop_grip_runtimefix_v5168', '1');
+}
+
+// v51.70: force the final user-authored Blender grips once, even on browsers
+// that already cached earlier v51.68/v51.69 prop offsets.
+if (localStorage.getItem('beton_prop_grip_final_v5170') !== '1') {
+  for (const name of ['cigarette','energy','beer']) {
+    localStorage.removeItem(`beton_prop_${name}`);
+    const d = PROP_DEFAULTS[name];
+    propConfigs[name].pos.set(...d.pos);
+    propConfigs[name].euler.set(...d.rot);
+    propConfigs[name].quat.setFromEuler(propConfigs[name].euler);
+  }
+  localStorage.setItem('beton_prop_grip_final_v5170', '1');
+}
+
 // v0.48: discard stale broken rake transforms from older localStorage.
 if (localStorage.getItem('beton_rake_vm_safe_v528') !== '1') {
   localStorage.removeItem('beton_prop_rake');
@@ -5750,44 +7121,58 @@ function syncPropQuat(name) {
 
 const playerTextureLoader = new THREE.TextureLoader();
 async function applyNewPlayerMaterials(root) {
-  const [baseMap, normalMap, roughnessMap] = await Promise.all([
-    playerTextureLoader.loadAsync('./assets/player/player_base.webp'),
-    playerTextureLoader.loadAsync('./assets/player/player_normal.webp'),
-    playerTextureLoader.loadAsync('./assets/player/player_roughness.webp'),
-  ]);
+  const baseMap = await playerTextureLoader.loadAsync(MOBILE_SAFE_MODE ? './assets/player/player_base_mobile_safe.webp' : './assets/player/player_base.webp');
+  const normalMap = TOUCH_DEVICE ? null : await playerTextureLoader.loadAsync('./assets/player/player_normal.webp');
+  const roughnessMap = TOUCH_DEVICE ? null : await playerTextureLoader.loadAsync('./assets/player/player_roughness.webp');
   baseMap.colorSpace = THREE.SRGBColorSpace;
-  normalMap.colorSpace = THREE.NoColorSpace;
-  roughnessMap.colorSpace = THREE.NoColorSpace;
-  baseMap.flipY = normalMap.flipY = roughnessMap.flipY = false;
-  const aniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
-  baseMap.anisotropy = normalMap.anisotropy = roughnessMap.anisotropy = aniso;
+  if (normalMap) normalMap.colorSpace = THREE.NoColorSpace;
+  if (roughnessMap) roughnessMap.colorSpace = THREE.NoColorSpace;
+  // FBX UVs expect TextureLoader's flipped-Y convention. The previous glTF-style false
+  // setting mirrored the atlas and sampled its black padding on large parts of the body.
+  baseMap.flipY = true;
+  if (normalMap) normalMap.flipY = true;
+  if (roughnessMap) roughnessMap.flipY = true;
+  const aniso = Math.min(TOUCH_DEVICE ? 2 : 8, renderer.capabilities.getMaxAnisotropy());
+  baseMap.anisotropy = aniso;
+  if (normalMap) normalMap.anisotropy = aniso;
+  if (roughnessMap) roughnessMap.anisotropy = aniso;
 
-  const mat = new THREE.MeshStandardMaterial({
-    name: 'PLAYER_NEW_PBR',
-    map: baseMap,
-    normalMap,
-    normalScale: new THREE.Vector2(.72, .72),
-    roughnessMap,
-    roughness: 1.0,
-    metalness: 0.0,
-    side: THREE.FrontSide,
-    transparent: false,
-    opacity: 1,
-    depthTest: true,
-    depthWrite: true,
-  });
-  root.traverse(o => {
-    if (o.isMesh || o.isSkinnedMesh) {
-      o.material = mat;
-      o.castShadow = !TOUCH_DEVICE;
-      o.receiveShadow = true;
-      o.renderOrder = 0;
+  const makeMat = (source, slotIndex = 0) => {
+    const mat = new THREE.MeshStandardMaterial({
+      name: `PLAYER_PBR_${slotIndex}`,
+      map: baseMap,
+      normalMap: normalMap || null,
+      normalScale: new THREE.Vector2(.48, .48),
+      roughnessMap: roughnessMap || null,
+      roughness: .92,
+      metalness: 0.0,
+      side: THREE.DoubleSide,
+      transparent: false,
+      opacity: 1,
+      depthTest: true,
+      depthWrite: true,
+      shadowSide: THREE.DoubleSide,
+    });
+    // Preserve slot-specific vertex colors / alpha test semantics from the FBX if present.
+    if (source) {
+      mat.vertexColors = !!source.vertexColors;
+      if (source.alphaTest > 0) mat.alphaTest = source.alphaTest;
     }
+    return mat;
+  };
+  root.traverse(o => {
+    if (!(o.isMesh || o.isSkinnedMesh)) return;
+    const sourceMats = Array.isArray(o.material) ? o.material : [o.material];
+    const mats = sourceMats.map((m, i) => makeMat(m, i));
+    o.material = Array.isArray(o.material) ? mats : mats[0];
+    o.castShadow = !TOUCH_DEVICE;
+    o.receiveShadow = false;
+    o.renderOrder = 0;
   });
 }
 
 function setPlayerLocomotion(moving, sprinting) {
-  if (!armsReady || !armsMixer || specialMode || propTuneMode) return;
+  if (!armsReady || !armsMixer || specialMode) return;
   const desired = !moving ? 'idle' : (sprinting ? 'run' : 'walk');
   if (playerLocomotionState === desired) return;
 
@@ -5809,6 +7194,7 @@ function setPlayerLocomotion(moving, sprinting) {
 
 async function loadArmsViewModel() {
   loadState.textContent = 'Загрузка FPS-тела и анимаций…';
+  mobileDebugStage('player-loading');
   try {
     const character = await loadFBX('./assets/player/rabochka_rigged.fbx');
     await applyNewPlayerMaterials(character);
@@ -5828,7 +7214,7 @@ async function loadArmsViewModel() {
       syncCameraToPlayer();
     }
     // Crop using the ORIGINAL full-body bounds before any skin-weight deletion can shrink them.
-    forceHeadlessWorldCut(character, fullCharacterBox);
+    ensurePlayerHeadShadowCaster(character);
     trimCharacterToArms(character);
     character.updateWorldMatrix(true,true);
     prepPlayerWorldBody(character);
@@ -5901,6 +7287,7 @@ async function loadArmsViewModel() {
       );
     }
     armsReady = true;
+    mobileDebugStage('player-ready');
     armsIdleAction = armsMixer.clipAction(idleClip);
     armsIdleAction.reset();
     armsIdleAction.enabled = true;
@@ -5924,7 +7311,15 @@ async function loadArmsViewModel() {
     loadState.textContent = 'Сцена готова · руки не загрузились';
   }
 }
-loadArmsViewModel();
+if (TOUCH_DEVICE) {
+  const startMobilePlayerLoad = () => {
+    if (sceneReady) loadArmsViewModel();
+    else setTimeout(startMobilePlayerLoad, 220);
+  };
+  setTimeout(startMobilePlayerLoad, 500);
+} else {
+  loadArmsViewModel();
+}
 
 function resumePlayerIdle() {
   if (!armsReady || !armsMixer || !armsCharacter) return;
@@ -5968,7 +7363,7 @@ function startProceduralSpecial(kind) {
   proceduralSpecialElapsed = 0;
   proceduralSpecialDuration =
     kind === 'smoke' ? 6.2 :
-    kind === 'beer' ? 3.1 :
+    (kind === 'beer' || kind === 'drink') ? 4.35 :
     2.65;
   return proceduralSpecialDuration;
 }
@@ -6052,8 +7447,8 @@ function applyProceduralSmokePose(t) {
       procPulse(t, .79, .115)
     );
 
-  cameraLocalToWorld(.32, -.50, -.43, procTargetA);   // relaxed right hand
-  cameraLocalToWorld(.16, -.084, -.31, procTargetB);  // lips · +30% higher smoking hand
+  cameraLocalToWorld(.33, -.58, -.48, procTargetA);   // relaxed right hand lower in frame
+  cameraLocalToWorld(.18, -.205, -.37, procTargetB); // drag position: around lower third of the screen
   procTargetC.copy(procTargetA).lerp(procTargetB, drag);
   solveArmCCD(
     rightUpperArmBone,
@@ -6084,13 +7479,13 @@ function applyProceduralSmokePose(t) {
 }
 
 function applyProceduralDrinkPose(t, beer = false) {
-  // Lift -> hold at lips -> lower.
-  const raise = procSmooth01(THREE.MathUtils.clamp(t / .24, 0, 1));
-  const lower = procSmooth01(THREE.MathUtils.clamp((t - .76) / .24, 0, 1));
+  // Open low -> lift -> hold at lips -> lower.
+  const raise = procSmooth01(THREE.MathUtils.clamp((t - .10) / .22, 0, 1));
+  const lower = procSmooth01(THREE.MathUtils.clamp((t - .79) / .21, 0, 1));
   const hold = raise * (1 - lower);
 
-  cameraLocalToWorld(-.32, -.50, -.43, procTargetA);
-  cameraLocalToWorld(-.15, -.19, -.31, procTargetB);
+  cameraLocalToWorld(-.28, -.47, -.41, procTargetA);
+  cameraLocalToWorld(-.12, -.16, -.29, procTargetB);
   procTargetC.copy(procTargetA).lerp(procTargetB, hold);
 
   solveArmCCD(
@@ -6111,8 +7506,55 @@ function applyProceduralDrinkPose(t, beer = false) {
   );
 }
 
+const rakeProximityRay = new THREE.Ray();
+const rakeProximityOrigin = new THREE.Vector3();
+const rakeProximityDir = new THREE.Vector3();
+const rakeProximityHit = new THREE.Vector3();
+const rakeProximityBox = new THREE.Box3();
+let rakeProximityScaleBlend = 0;
+
+// v51.65 — depth-aware FPS rake scale.
+// The rake is a camera-layer viewmodel, so its screen size would normally stay
+// constant even when the player puts the camera right against a real surface.
+// Sample the actual gameplay collision depth in the look direction and smoothly
+// increase ONLY the viewmodel scale as clearance shrinks. No object-name hacks.
+function updateRakeProximity(dt) {
+  if (!rakeEquipped || !rakeVM.visible) {
+    rakeProximityScaleBlend = THREE.MathUtils.damp(rakeProximityScaleBlend, 0, 14, dt);
+    return;
+  }
+  camera.getWorldPosition(rakeProximityOrigin);
+  camera.getWorldDirection(rakeProximityDir).normalize();
+  rakeProximityRay.set(rakeProximityOrigin, rakeProximityDir);
+  let nearest = Infinity;
+
+  for (const c of meshColliders) {
+    const hit = c.obb?.intersectRay?.(rakeProximityRay, rakeProximityHit);
+    if (hit) {
+      const d = rakeProximityOrigin.distanceTo(hit);
+      if (d > .05 && d < nearest) nearest = d;
+    }
+  }
+  for (const c of colliders) {
+    rakeProximityBox.min.set(c.minX, Number.isFinite(c.minY) ? c.minY : -20, c.minZ);
+    rakeProximityBox.max.set(c.maxX, Number.isFinite(c.maxY) ? c.maxY : 20, c.maxZ);
+    const hit = rakeProximityRay.intersectBox(rakeProximityBox, rakeProximityHit);
+    if (hit) {
+      const d = rakeProximityOrigin.distanceTo(hit);
+      if (d > .05 && d < nearest) nearest = d;
+    }
+  }
+
+  // Starts imperceptibly around 1.8 m and reaches full correction close to a wall.
+  const target = nearest < 1.80
+    ? THREE.MathUtils.clamp((1.80 - nearest) / 1.35, 0, 1)
+    : 0;
+  rakeProximityScaleBlend = THREE.MathUtils.damp(rakeProximityScaleBlend, target, 16, dt);
+}
+
 function applyProceduralRakePose(dt) {
   if (!rakeEquipped) return;
+  updateRakeProximity(dt);
 
   rakeSweepWorkBlend = THREE.MathUtils.damp(
     rakeSweepWorkBlend,
@@ -6128,223 +7570,40 @@ function applyProceduralRakePose(dt) {
     dt
   );
 
-  // Rest: lower-right with the handle returning toward the player.
-  // Work: rake head is pushed farther forward/down toward the slab.
+  // Holding LMB now produces a real visible push/pull stroke even if the
+  // player is standing still.  This is viewmodel-only; concrete work logic
+  // still uses the actual rake work point below.
+  if (raking) rakeAnimClock += dt * 8.4;
+  else rakeAnimClock = 0;
+
   const work = rakeSweepWorkBlend;
-  const motion = rakeSweepTravel;
+  const travel = rakeSweepTravel;
+  const stroke = raking ? Math.sin(rakeAnimClock) : 0;
+  const strokeForward = stroke * work;
+  const strokeForwardWide = strokeForward * 1.5;
 
+  // v51.32: much stronger front/back motion.  At full work the rake travels
+  // roughly half a metre in camera depth from back extreme to front extreme.
   rakeVM.position.set(
-    RAKE_VM_BASE_POS.x - work * .030 + motion * .010,
-    RAKE_VM_BASE_POS.y - work * .058 - motion * .009,
-    RAKE_VM_BASE_POS.z - work * .18
+    RAKE_VM_BASE_POS.x - work * .030 + strokeForward * .018 + travel * .010,
+    RAKE_VM_BASE_POS.y - work * .070 - Math.abs(strokeForwardWide) * .018 - travel * .009,
+    RAKE_VM_BASE_POS.z - work * .285 - strokeForwardWide * .255
   );
 
+  // Keep the rake head visually level; only a tiny natural pitch/yaw follows
+  // the stroke instead of rolling the head diagonally across the screen.
   rakeVM.rotation.set(
-    RAKE_VM_BASE_ROT.x - work * .070,
-    RAKE_VM_BASE_ROT.y + motion * .024,
-    RAKE_VM_BASE_ROT.z + work * .032 - motion * .026
+    RAKE_VM_BASE_ROT.x - work * .055 - strokeForward * .035,
+    RAKE_VM_BASE_ROT.y + strokeForward * .018 + travel * .018,
+    RAKE_VM_BASE_ROT.z + strokeForward * .008
   );
+
+  // When the world surface gets very close, a fixed-size overlay looks tiny.
+  // Grow it continuously from measured scene depth instead of per-object rules.
+  const nearSurfaceScale = 1 + rakeProximityScaleBlend * .48;
+  rakeVM.scale.setScalar(nearSurfaceScale);
 }
 
-
-// -----------------------------
-// Manual tuning modes
-// -----------------------------
-let propTuneMode = false;
-let cameraTuneMode = false;
-const tunePropOrder = ['cigarette','lighter','energy','beer','rake'];
-let tunePropIndex = 0;
-let tuneAnimTime = 0;
-let tuneClipDuration = 1;
-
-function currentTuneProp() { return tunePropOrder[tunePropIndex]; }
-
-function setTuneHUD(title, lines) {
-  tuneTitleEl.textContent = title;
-  tuneLinesEl.innerHTML = lines.join('<br>');
-  tuneHudEl.classList.remove('hidden');
-}
-function closeTuneHUD() {
-  tuneHudEl.classList.add('hidden');
-}
-
-function tuneHolderFor(name) {
-  if (name === 'cigarette') return cigaretteVM;
-  if (name === 'lighter') return lighterVM;
-  if (name === 'energy') return energyVM;
-  if (name === 'beer') return beerVM;
-  if (name === 'rake') return rakeVM;
-  return null;
-}
-function hideAllTuneProps() {
-  cigaretteVM.visible = false;
-  lighterVM.visible = false;
-  energyVM.visible = false;
-  beerVM.visible = false;
-  rakeVM.visible = false;
-}
-
-function startTuneAnimationFor(name) {
-  if (!armsReady || !armsMixer || !armsCharacter || name === 'rake') {
-    armsRig.visible = name !== 'rake' ? armsRig.visible : false;
-    return;
-  }
-  const clip = (name === 'cigarette' || name === 'lighter')
-    ? armsCharacter.userData.smokeClip
-    : armsCharacter.userData.drinkClip;
-  if (!clip) return;
-
-  if (armsAction) { armsAction.stop(); armsAction = null; }
-  stopPlayerIdle();
-  armsRig.visible = true;
-  armsAction = armsMixer.clipAction(clip);
-  armsAction.reset();
-  armsAction.enabled = true;
-  armsAction.setLoop(THREE.LoopOnce, 1);
-  armsAction.clampWhenFinished = true;
-  armsAction.play();
-  armsAction.paused = true;
-  tuneClipDuration = clip.duration;
-  tuneAnimTime = Math.min(tuneAnimTime, tuneClipDuration);
-  armsAction.time = tuneAnimTime;
-  armsMixer.update(0);
-}
-
-function refreshPropTunePreview() {
-  hideAllTuneProps();
-  const name = currentTuneProp();
-  const holder = tuneHolderFor(name);
-  if (holder) holder.visible = true;
-
-  if (name === 'rake') {
-    rakeVM.visible = true;
-    rakeVM.position.copy(propConfigs.rake.pos);
-    rakeVM.rotation.copy(propConfigs.rake.euler);
-    armsRig.visible = false;
-  } else {
-    startTuneAnimationFor(name);
-  }
-  updateTuneHUD();
-}
-
-function updateTuneHUD() {
-  if (cameraTuneMode) {
-    setTuneHUD('F5 · CAMERA TUNE', [
-      `КАМЕРА ВПЕРЁД/НАЗАД: ${playerCameraDepthOffset >= 0 ? '+' : ''}${playerCameraDepthOffset.toFixed(3)} м`,
-      `ВЫСОТА: ${eyeHeight.toFixed(3)} м`,
-      '↑ / ↓ — камера относительно тела вперёд / назад',
-      '[ / ] — выше / ниже',
-      'Backspace — сброс · F5 — выйти'
-    ]);
-    return;
-  }
-  if (!propTuneMode) { closeTuneHUD(); return; }
-
-  const name = currentTuneProp();
-  const c = propConfigs[name];
-  const deg = v => (THREE.MathUtils.radToDeg(v)).toFixed(1);
-  setTuneHUD(`F4 · PROP TUNE · ${name.toUpperCase()}`, [
-    `POS X ${c.pos.x.toFixed(3)} · Y ${c.pos.y.toFixed(3)} · Z ${c.pos.z.toFixed(3)}`,
-    `ROT X ${deg(c.euler.x)}° · Y ${deg(c.euler.y)}° · Z ${deg(c.euler.z)}°`,
-    name === 'rake' ? 'Без анимации' : `АНИМАЦИЯ ${tuneAnimTime.toFixed(2)} / ${tuneClipDuration.toFixed(2)} сек`,
-    'Tab — следующий предмет',
-    'W/S = Z · A/D = X · Q/E = Y',
-    'I/K = rot X · J/L = rot Y · U/O = rot Z',
-    '[ / ] — скраб анимации',
-    'Shift = крупный шаг · Backspace = reset · F4 = сохранить/выйти'
-  ]);
-}
-
-function enterPropTune() {
-  if (cameraTuneMode) cameraTuneMode = false;
-  propTuneMode = !propTuneMode;
-  pouring = false;
-  raking = false;
-
-  if (propTuneMode) {
-    finishSpecial();
-    rakeEquipped = false;
-    tuneAnimTime = .55;
-    refreshPropTunePreview();
-    showToast('PROP TUNE · F4 выход');
-  } else {
-    hideAllTuneProps();
-    if (armsAction) { armsAction.stop(); armsAction = null; }
-    armsRig.visible = armsReady;
-    resumePlayerIdle();
-    closeTuneHUD();
-    showToast('Позиции предметов сохранены');
-  }
-}
-function enterCameraTune() {
-  if (propTuneMode) {
-    propTuneMode = false;
-    hideAllTuneProps();
-    if (armsAction) { armsAction.stop(); armsAction = null; }
-    armsRig.visible = armsReady;
-    resumePlayerIdle();
-  }
-  cameraTuneMode = !cameraTuneMode;
-  if (cameraTuneMode) {
-    updateTuneHUD();
-    showToast('CAMERA TUNE · стрелки ↑↓');
-  } else {
-    closeTuneHUD();
-    showToast('Положение камеры сохранено');
-  }
-}
-
-function resetCurrentPropTune() {
-  const name = currentTuneProp();
-  const d = PROP_DEFAULTS[name];
-  propConfigs[name].pos.set(...d.pos);
-  propConfigs[name].euler.set(...d.rot);
-  syncPropQuat(name);
-  savePropConfig(name);
-  refreshPropTunePreview();
-}
-
-function adjustPropTune(code, shift) {
-  const name = currentTuneProp();
-  const c = propConfigs[name];
-  const move = shift ? .010 : .002;
-  const rot = THREE.MathUtils.degToRad(shift ? 2.0 : .5);
-  let changed = true;
-
-  if (code === 'KeyA') c.pos.x -= move;
-  else if (code === 'KeyD') c.pos.x += move;
-  else if (code === 'KeyQ') c.pos.y += move;
-  else if (code === 'KeyE') c.pos.y -= move;
-  else if (code === 'KeyW') c.pos.z -= move;
-  else if (code === 'KeyS') c.pos.z += move;
-  else if (code === 'KeyI') c.euler.x += rot;
-  else if (code === 'KeyK') c.euler.x -= rot;
-  else if (code === 'KeyJ') c.euler.y += rot;
-  else if (code === 'KeyL') c.euler.y -= rot;
-  else if (code === 'KeyU') c.euler.z += rot;
-  else if (code === 'KeyO') c.euler.z -= rot;
-  else changed = false;
-
-  if (changed) {
-    syncPropQuat(name);
-    savePropConfig(name);
-    if (name === 'rake') {
-      rakeVM.position.copy(c.pos);
-      rakeVM.rotation.copy(c.euler);
-    }
-    updateTuneHUD();
-  }
-  return changed;
-}
-
-function scrubTuneAnimation(delta) {
-  const name = currentTuneProp();
-  if (name === 'rake' || !armsAction) return;
-  tuneAnimTime = THREE.MathUtils.clamp(tuneAnimTime + delta, 0, tuneClipDuration);
-  armsAction.time = tuneAnimTime;
-  armsMixer.update(0);
-  updateTuneHUD();
-}
 
 const mainThemeAudio = new Audio('./assets/audio/music/main_theme_v528.wav');
 mainThemeAudio.loop = true;
@@ -6354,7 +7613,30 @@ mainThemeAudio.volume = 0.14;
 function startMainTheme() {
   if (!mainThemeAudio.paused) return;
   const p = mainThemeAudio.play();
-  if (p && typeof p.catch === 'function') p.catch(() => {});
+  if (p && typeof p.catch === 'function') p.catch(err => {
+    if (TOUCH_DEVICE) mobileDebugLog(`menu music autoplay blocked: ${err?.name || err}`);
+  });
+}
+// Play in the menu as early as browser policy allows. If autoplay is blocked, the very first
+// tap/swipe/key on the menu unlocks the soundtrack — it no longer waits for PLAY.
+startMainTheme();
+const unlockMenuMusic = () => {
+  if (!started && start && !start.classList.contains('hidden')) startMainTheme();
+};
+document.addEventListener('pointerdown', unlockMenuMusic, { passive:true });
+document.addEventListener('touchstart', unlockMenuMusic, { passive:true });
+document.addEventListener('keydown', unlockMenuMusic, { passive:true });
+
+function requestImmersiveMode() {
+  if (!TOUCH_DEVICE) return;
+  try {
+    const root = document.documentElement;
+    const req = root.requestFullscreen || root.webkitRequestFullscreen || document.body.requestFullscreen || document.body.webkitRequestFullscreen;
+    if (typeof req === 'function') req.call(root, { navigationUI: 'hide' });
+  } catch (_) {}
+  try { screen.orientation?.lock?.('landscape').catch(() => {}); } catch (_) {}
+  setTimeout(() => { try { window.scrollTo(0, 1); } catch (_) {} }, 60);
+  setTimeout(() => { try { window.scrollTo(0, 1); } catch (_) {} }, 360);
 }
 
 function requestMouseLock() {
@@ -6363,16 +7645,18 @@ function requestMouseLock() {
   try { renderer.domElement.requestPointerLock(); } catch (_) {}
 }
 function enterSite() {
+  if (!sceneReady || !layoutRoot || !layoutRoot.parent) { showToast('ДОЖДИСЬ ЗАГРУЗКИ СЦЕНЫ'); return; }
   resolveMachineAudioWorldPositions();
   if (loadState) loadState.style.opacity = '0';
   startMainTheme();
   initGameAudio();
   started = true;
+  mobileDebugStage('running');
   start.classList.add('hidden');
   document.body.classList.add('gameStarted');
   if (TOUCH_DEVICE) {
     locked = true;
-    screen.orientation?.lock?.('landscape').catch(() => {});
+    requestImmersiveMode();
   } else requestMouseLock();
 }
 startBtn.addEventListener('click', enterSite);
@@ -6394,21 +7678,10 @@ document.addEventListener('mousemove', e => {
     return;
   }
 
-  if (debugMode) {
-    debugYaw -= e.movementX * .00175;
-    debugPitch -= e.movementY * .00155;
-    debugPitch = THREE.MathUtils.clamp(debugPitch, -0.12, 1.05);
-    return;
-  }
   yaw -= e.movementX * .00155;
   pitch -= e.movementY * .00145;
   pitch = THREE.MathUtils.clamp(pitch, -FPS_PITCH_LIMIT, FPS_PITCH_LIMIT);
 });
-renderer.domElement.addEventListener('wheel', e => {
-  if (!debugMode) return;
-  e.preventDefault();
-  debugDistance = THREE.MathUtils.clamp(debugDistance + Math.sign(e.deltaY) * .45, 2.3, 11.0);
-}, { passive: false });
 
 function primaryActionDown() {
   if (!started || !locked || shopOpen || resultOpen || dialogueOpen) return;
@@ -6439,78 +7712,30 @@ renderer.domElement.addEventListener('mousedown', e => {
 });
 window.addEventListener('mouseup', e => { if (e.button === 0) primaryActionUp(); });
 
-function setCameraHeightOffset(nextOffset, save = true) {
-  cameraHeightOffset = THREE.MathUtils.clamp(nextOffset, -0.30, 0.30);
-  eyeHeight = THREE.MathUtils.clamp(calibratedEyeHeight + cameraHeightOffset, 1.35, 1.95);
-  cameraHeightOffset = eyeHeight - calibratedEyeHeight;
-  syncCameraToPlayer();
-  if (save) localStorage.setItem('betonshchik_camera_height_offset', cameraHeightOffset.toFixed(3));
-  const sign = cameraHeightOffset >= 0 ? '+' : '';
-  showToast(`Высота глаз: ${eyeHeight.toFixed(2)} м (${sign}${cameraHeightOffset.toFixed(2)} м)`);
-}
 document.addEventListener('keydown', e => {
   keys[e.code] = true;
 
+  if (dialogueOpen) {
+    if (e.code === 'Escape' && !e.repeat) {
+      e.preventDefault();
+      closeDialogue();
+      return;
+    }
+    const m = /^Digit([1-9])$/.exec(e.code);
+    if (m && !e.repeat) {
+      const idx = Number(m[1]) - 1;
+      const btn = dialogueOptionsEl.children[idx];
+      if (btn) btn.click();
+      e.preventDefault();
+      return;
+    }
+  }
+
   const handledCodes = [
-    'KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','KeyI','KeyK','KeyJ','KeyL','KeyU','KeyO',
-    'ShiftLeft','ShiftRight','Digit1','Digit2','Digit3','Digit4','KeyM',
-    'BracketLeft','BracketRight','Backslash','F3','F4','F5',
-    'ArrowUp','ArrowDown','Tab','Backspace'
+    'KeyW','KeyA','KeyS','KeyD','ShiftLeft','ShiftRight',
+    'Digit1','Digit2','Digit3','Digit4','KeyM','KeyE'
   ];
   if (handledCodes.includes(e.code)) e.preventDefault();
-
-  if (e.code === 'F4' && !e.repeat) { enterPropTune(); return; }
-  if (e.code === 'F5' && !e.repeat) { enterCameraTune(); return; }
-
-  if (propTuneMode) {
-    if (e.code === 'Tab' && !e.repeat) {
-      tunePropIndex = (tunePropIndex + 1) % tunePropOrder.length;
-      tuneAnimTime = .55;
-      refreshPropTunePreview();
-      return;
-    }
-    if (e.code === 'BracketLeft' && !e.repeat) { scrubTuneAnimation(-.05); return; }
-    if (e.code === 'BracketRight' && !e.repeat) { scrubTuneAnimation(.05); return; }
-    if (e.code === 'Backspace' && !e.repeat) { resetCurrentPropTune(); return; }
-    if (adjustPropTune(e.code, e.shiftKey)) return;
-    return;
-  }
-
-  if (cameraTuneMode) {
-    if (e.code === 'ArrowUp') {
-      playerCameraDepthOffset = THREE.MathUtils.clamp(playerCameraDepthOffset + (e.shiftKey ? .03 : .008), .18, .48);
-      localStorage.setItem('betonshchik_player_camera_depth_offset', playerCameraDepthOffset.toFixed(3));
-      syncPlayerViewModelDepth();
-      updateTuneHUD();
-      return;
-    }
-    if (e.code === 'ArrowDown') {
-      playerCameraDepthOffset = THREE.MathUtils.clamp(playerCameraDepthOffset - (e.shiftKey ? .03 : .008), .18, .48);
-      localStorage.setItem('betonshchik_player_camera_depth_offset', playerCameraDepthOffset.toFixed(3));
-      syncPlayerViewModelDepth();
-      updateTuneHUD();
-      return;
-    }
-    if (e.code === 'BracketLeft') {
-      setCameraHeightOffset(cameraHeightOffset - .005);
-      updateTuneHUD();
-      return;
-    }
-    if (e.code === 'BracketRight') {
-      setCameraHeightOffset(cameraHeightOffset + .005);
-      updateTuneHUD();
-      return;
-    }
-    if (e.code === 'Backspace' && !e.repeat) {
-      playerCameraDepthOffset = 0.27;
-      localStorage.setItem('betonshchik_player_camera_depth_offset', '0.27');
-      syncPlayerViewModelDepth();
-      setCameraHeightOffset(0);
-      updateTuneHUD();
-      return;
-    }
-    return;
-  }
 
   if (e.code === 'KeyE' && !e.repeat) interact();
   if (e.code === 'Digit1' && !e.repeat) smokeCigarette();
@@ -6524,64 +7749,194 @@ document.addEventListener('keydown', e => {
     mapVisible = !mapVisible;
     minimap.style.display = mapVisible ? 'block' : 'none';
   }
-  if (e.code === 'BracketLeft' && !e.repeat) setCameraHeightOffset(cameraHeightOffset - .01);
-  if (e.code === 'BracketRight' && !e.repeat) setCameraHeightOffset(cameraHeightOffset + .01);
-  if (e.code === 'Backslash' && !e.repeat) setCameraHeightOffset(0);
-  if (e.code === 'F3' && !e.repeat) setDebugMode(!debugMode);
 });
 document.addEventListener('keyup', e => { keys[e.code] = false; });
 window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 
 // ---------------------------------------------------------------------------
-// MOBILE LANDSCAPE CONTROLS — two analogue sticks + gameplay buttons
+// MOBILE LANDSCAPE CONTROLS v51.57
+// Right fixed joystick = movement. Camera = direct swipe anywhere on gameplay canvas.
+// This allows simultaneous move + look with two thumbs without a second virtual stick.
 // ---------------------------------------------------------------------------
-let mobileMoveX=0, mobileMoveY=0, mobileLookX=0, mobileLookY=0;
+let mobileMoveX=0, mobileMoveY=0;
+let mobileLookPointer=null, mobileLookLastX=0, mobileLookLastY=0;
+let mobileLookTravel=0;
+const MOBILE_LOOK_SENS_X = 0.00435;
+const MOBILE_LOOK_SENS_Y = 0.00365;
+
 function setupMobileStick(el, knob, onValue) {
   if (!el || !knob) return;
   let pid=null;
+  const deadzone=.055;
   const set=(e) => {
     const r=el.getBoundingClientRect();
     const cx=r.left+r.width*.5, cy=r.top+r.height*.5;
     const radius=r.width*.34;
     let dx=e.clientX-cx, dy=e.clientY-cy;
-    const len=Math.hypot(dx,dy);
-    if (len>radius) { dx*=radius/len; dy*=radius/len; }
+    let len=Math.hypot(dx,dy);
+    if (len>radius) { dx*=radius/len; dy*=radius/len; len=radius; }
     knob.style.transform=`translate(${dx}px,${dy}px)`;
-    onValue(dx/radius,dy/radius);
+
+    let nx=dx/radius, ny=dy/radius;
+    const mag=Math.hypot(nx,ny);
+    if (mag<=deadzone) { onValue(0,0); return; }
+    const remapped=THREE.MathUtils.clamp((mag-deadzone)/(1-deadzone),0,1);
+    const response=THREE.MathUtils.clamp(Math.pow(remapped,.72)*1.06,0,1);
+    nx=nx/mag*response; ny=ny/mag*response;
+    onValue(nx,ny);
   };
-  el.addEventListener('pointerdown',e=>{ pid=e.pointerId; el.setPointerCapture(pid); set(e); e.preventDefault(); });
-  el.addEventListener('pointermove',e=>{ if(e.pointerId===pid){ set(e); e.preventDefault(); } });
-  const end=e=>{ if(e.pointerId!==pid)return; pid=null; knob.style.transform='translate(0,0)'; onValue(0,0); e.preventDefault(); };
+  el.addEventListener('pointerdown',e=>{
+    if(!mobileInputAllowed())return;
+    pid=e.pointerId; el.setPointerCapture(pid); set(e); e.preventDefault(); e.stopPropagation();
+  });
+  el.addEventListener('pointermove',e=>{ if(e.pointerId===pid){ set(e); e.preventDefault(); e.stopPropagation(); } });
+  const end=e=>{
+    if(e.pointerId!==pid)return;
+    pid=null; knob.style.transform='translate(0,0)'; onValue(0,0); e.preventDefault(); e.stopPropagation();
+  };
   el.addEventListener('pointerup',end); el.addEventListener('pointercancel',end);
 }
 function mobileInputAllowed(){ return TOUCH_DEVICE && started && !shopOpen && !resultOpen && !dialogueOpen; }
+function mobileHaptic(ms=9){ try{ if(navigator.vibrate) navigator.vibrate(ms); }catch(_){} }
+function setupMobileSwipeLook(){
+  const surface=renderer.domElement;
+  if(!surface)return;
+  const begin=e=>{
+    if(!mobileInputAllowed() || qteActive || e.pointerType==='mouse')return;
+    if(mobileLookPointer!==null)return;
+    mobileLookPointer=e.pointerId;
+    mobileLookLastX=e.clientX; mobileLookLastY=e.clientY; mobileLookTravel=0;
+    try{ surface.setPointerCapture(e.pointerId); }catch(_){}
+    e.preventDefault();
+  };
+  const move=e=>{
+    if(e.pointerId!==mobileLookPointer || !mobileInputAllowed() || qteActive)return;
+    const events=e.getCoalescedEvents?.() || [e];
+    for(const pe of events){
+      const dx=pe.clientX-mobileLookLastX;
+      const dy=pe.clientY-mobileLookLastY;
+      mobileLookLastX=pe.clientX; mobileLookLastY=pe.clientY;
+      if(!Number.isFinite(dx)||!Number.isFinite(dy))continue;
+      mobileLookTravel+=Math.hypot(dx,dy);
+      yaw -= dx*MOBILE_LOOK_SENS_X;
+      pitch -= dy*MOBILE_LOOK_SENS_Y;
+      pitch=THREE.MathUtils.clamp(pitch,-FPS_PITCH_LIMIT,FPS_PITCH_LIMIT);
+    }
+    e.preventDefault();
+  };
+  const end=e=>{
+    if(e.pointerId!==mobileLookPointer)return;
+    mobileLookPointer=null; mobileLookTravel=0;
+    try{ surface.releasePointerCapture(e.pointerId); }catch(_){}
+    e.preventDefault();
+  };
+  surface.addEventListener('pointerdown',begin,{passive:false});
+  surface.addEventListener('pointermove',move,{passive:false});
+  surface.addEventListener('pointerup',end,{passive:false});
+  surface.addEventListener('pointercancel',end,{passive:false});
+}
+function setMobileButtonVisible(btn, visible) {
+  if (!btn) return;
+  btn.classList.toggle('isHidden', !visible);
+}
+function updateMobileContextButtons(it) {
+  if (!TOUCH_DEVICE) return;
+
+  let interactVisible = false;
+  if (it) {
+    interactVisible = true;
+    let label = 'ДЕЙСТВИЕ';
+    if (it.kind === 'npc') label = 'ГОВОРИТЬ';
+    else if (it.kind === 'shop') label = 'МАГАЗИН';
+    else if (it.kind === 'worldPickup') label = 'ВЗЯТЬ';
+    else if (it.kind === 'rakePickup') label = 'ВЗЯТЬ ГРАБЛИ';
+    else if (it.kind === 'hose') label = hoseHeld ? 'БРОСИТЬ ШЛАНГ' : 'ВЗЯТЬ ШЛАНГ';
+    if (mobileInteractBtn) mobileInteractBtn.textContent = label;
+  }
+  setMobileButtonVisible(mobileInteractBtn, interactVisible);
+
+  let actionVisible = false;
+  if (hoseHeld && jobState === 'active') {
+    actionVisible = true;
+    if (mobileActionBtn) mobileActionBtn.textContent = pouring ? 'ВЫКЛ БЕТОН' : 'ВКЛ БЕТОН';
+  } else if (rakeEquipped && jobState === 'active') {
+    actionVisible = true;
+    if (mobileActionBtn) mobileActionBtn.textContent = 'РАВНЯТЬ';
+  }
+  setMobileButtonVisible(mobileActionBtn, actionVisible);
+}
+
+function syncMobileHud() {
+  if (!TOUCH_DEVICE || !mobileHudEl) return;
+  if (mobileMoneyTextEl) mobileMoneyTextEl.textContent = `${money} ₽`;
+  if (mobileStaminaFillEl) mobileStaminaFillEl.style.width = `${Math.min(100, stamina / staminaMax * 100)}%`;
+  if (mobileStaminaTextEl) mobileStaminaTextEl.textContent = String(Math.round(stamina));
+  if (mobileFillPercentEl) mobileFillPercentEl.textContent = fillPercentEl?.textContent || '0.0%';
+  if (mobileLevelPercentEl) mobileLevelPercentEl.textContent = fillLevelEl?.textContent || '0%';
+  if (mobileSmokeCountEl) mobileSmokeCountEl.textContent = String(cigarettes);
+  if (mobileDrinkCountEl) mobileDrinkCountEl.textContent = String(energyCans);
+  if (mobileBeerCountEl) mobileBeerCountEl.textContent = String(beerCans);
+  if (mobileRakeStateEl) mobileRakeStateEl.textContent = rakeOwned ? (rakeEquipped ? 'ON' : '✓') : '—';
+
+  mobileSmokeSlotEl?.classList.toggle('active', specialMode === 'smoke');
+  mobileDrinkSlotEl?.classList.toggle('active', specialMode === 'drink');
+  mobileBeerSlotEl?.classList.toggle('active', specialMode === 'beer');
+  mobileRakeSlotEl?.classList.toggle('active', rakeEquipped);
+  mobileSmokeSlotEl?.classList.toggle('empty', cigarettes <= 0);
+  mobileDrinkSlotEl?.classList.toggle('empty', energyCans <= 0);
+  mobileBeerSlotEl?.classList.toggle('empty', beerCans <= 0);
+  mobileRakeSlotEl?.classList.toggle('empty', !rakeOwned);
+}
 if (TOUCH_DEVICE) {
+  const debugToggle = document.querySelector('#mobileDebugToggle');
+  const debugPanel = document.querySelector('#mobileDebugPanel');
+  if (debugToggle && debugPanel) {
+    debugToggle.addEventListener('click', e => {
+      e.preventDefault(); e.stopPropagation();
+      debugPanel.classList.toggle('visible');
+      debugPanel.textContent = buildMobileDebugReport();
+    });
+  }
+  mobileDebugLog(`boot scene=${FINAL_SCENE_URL} safe=${MOBILE_SAFE_MODE}`);
   const moveStick=document.querySelector('#moveStick'), moveKnob=document.querySelector('#moveKnob');
-  const lookStick=document.querySelector('#lookStick'), lookKnob=document.querySelector('#lookKnob');
   setupMobileStick(moveStick,moveKnob,(x,y)=>{ mobileMoveX=x; mobileMoveY=y; });
-  setupMobileStick(lookStick,lookKnob,(x,y)=>{ mobileLookX=x; mobileLookY=y; });
-  const bindTap=(id,fn)=>document.querySelector(id)?.addEventListener('pointerdown',e=>{ e.preventDefault(); if(mobileInputAllowed())fn(); });
+  setupMobileSwipeLook();
+  const bindTap=(id,fn)=>document.querySelector(id)?.addEventListener('pointerdown',e=>{
+    e.preventDefault(); e.stopPropagation();
+    if(mobileInputAllowed()){ mobileHaptic(8); fn(); }
+  });
   bindTap('#mobileInteract',interact);
-  bindTap('#mobileSmoke',smokeCigarette);
-  bindTap('#mobileRewind',drinkEnergy);
-  bindTap('#mobileBeer',drinkBeer);
-  bindTap('#mobileRake',()=>{ if(!rakeOwned) showToast('СНАЧАЛА ПОДБЕРИ ГРАБЛИ'); else setRakeEquipped(!rakeEquipped); });
+  bindTap('#mobileSmokeSlot',smokeCigarette);
+  bindTap('#mobileDrinkSlot',drinkEnergy);
+  bindTap('#mobileBeerSlot',drinkBeer);
+  bindTap('#mobileRakeSlot',()=>{ if(!rakeOwned) showToast('СНАЧАЛА ПОДБЕРИ ГРАБЛИ'); else setRakeEquipped(!rakeEquipped); });
+  updateMobileContextButtons(null);
   const action=document.querySelector('#mobileAction');
-  action?.addEventListener('pointerdown',e=>{ e.preventDefault(); if(mobileInputAllowed()) primaryActionDown(); });
-  action?.addEventListener('pointerup',e=>{ e.preventDefault(); primaryActionUp(); });
-  action?.addEventListener('pointercancel',()=>primaryActionUp());
-  // On touch, QTE is a rhythm tap: tap the visible circle itself. Timing still decides PERFECT.
+  action?.addEventListener('pointerdown',e=>{ e.preventDefault(); e.stopPropagation(); if(mobileInputAllowed()){ mobileHaptic(10); primaryActionDown(); } });
+  action?.addEventListener('pointerup',e=>{ e.preventDefault(); e.stopPropagation(); primaryActionUp(); });
+  action?.addEventListener('pointercancel',e=>{ e.stopPropagation(); primaryActionUp(); });
   qteLayerEl.addEventListener('pointerdown',e=>{
     if(!qteActive)return;
     qteCursorX=e.clientX; qteCursorY=e.clientY;
     qteCursorEl.style.left=`${qteCursorX}px`; qteCursorEl.style.top=`${qteCursorY}px`;
-    clickQTE(); e.preventDefault();
+    mobileHaptic(7); clickQTE(); e.preventDefault();
   });
 }
 
 // Gracefully recover from mobile GPU/context eviction instead of leaving a black canvas.
-renderer.domElement.addEventListener('webglcontextlost',e=>{ e.preventDefault(); showToast('ВИДЕОПАМЯТЬ ОСВОБОЖДАЕТСЯ…'); });
-renderer.domElement.addEventListener('webglcontextrestored',()=>location.reload());
+renderer.domElement.addEventListener('webglcontextlost',e=>{
+  e.preventDefault();
+  mobileDebugLog('WEBGL CONTEXT LOST');
+  mobileDebugStage('context-lost');
+  if (TOUCH_DEVICE && !MOBILE_SAFE_MODE) {
+    try { localStorage.setItem(MOBILE_SAFE_KEY, '1'); } catch (_) {}
+  }
+  showToast('ВОССТАНАВЛИВАЮ ГРАФИКУ…');
+  setTimeout(() => recoverBrokenScene('WebGL context lost'), 250);
+});
+renderer.domElement.addEventListener('webglcontextrestored',()=>{ if (!sceneRecoveryPending) location.reload(); });
+window.addEventListener('orientationchange',()=>setTimeout(()=>{ try { window.scrollTo(0,1); } catch(_) {} },80));
+
 
 function refreshMobileOrientationUI(){
   document.documentElement.classList.toggle('mobileLandscape', MOBILE_LANDSCAPE());
@@ -6590,12 +7945,13 @@ function refreshMobileOrientationUI(){
 refreshMobileOrientationUI();
 window.addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
-  debugCamera.aspect = camera.aspect; debugCamera.updateProjectionMatrix();
   renderer.setPixelRatio(TOUCH_DEVICE ? Math.min(devicePixelRatio,mobileRenderScale) : Math.min(devicePixelRatio,1.55));
   renderer.setSize(innerWidth, innerHeight);
-  composer?.setPixelRatio(Math.min(devicePixelRatio,1.15));
-  composer?.setSize(innerWidth, innerHeight);
-  bloomPass?.setSize(innerWidth,innerHeight);
+  if (composer) {
+    composer.setPixelRatio(Math.min(devicePixelRatio,1.15));
+    composer.setSize(innerWidth, innerHeight);
+    bloomPass?.setSize(innerWidth,innerHeight);
+  }
   refreshMobileOrientationUI();
 });
 
@@ -6652,6 +8008,10 @@ function moveAxis(dx, dz) {
 function showToast(t) {
   toastEl.textContent = t;
   toastEl.classList.add('show');
+  if (mobileToastEl) {
+    mobileToastEl.textContent = t;
+    mobileToastEl.classList.add('show');
+  }
   toastTimer = 2.2;
 }
 
@@ -6660,23 +8020,81 @@ let dialogueNpcKey = null;
 let shopOpen = false;
 let resultOpen = false;
 
+const DIALOGUE_NAMES = {
+  pavel: 'Павел Петрович',
+  mandarin: 'Серёга',
+  george: 'Джордж',
+  baba: 'Баба Капа',
+};
+
+const DIALOGUE_SKINS = {
+  pavel: {
+    portrait: './assets/dialogue_v5/pavel.webp',
+    paint: null,
+    accent: '#5f8fe6',
+    accentDark: '#2b5ca8',
+    accentSoft: 'rgba(95,143,230,.24)',
+  },
+  mandarin: {
+    portrait: './assets/dialogue_v5/serega.webp',
+    paint: null,
+    accent: '#ef8a34',
+    accentDark: '#9f4e19',
+    accentSoft: 'rgba(239,138,52,.25)',
+  },
+  george: {
+    portrait: './assets/dialogue_v5/george.webp',
+    paint: null,
+    accent: '#4ea9d8',
+    accentDark: '#23698e',
+    accentSoft: 'rgba(78,169,216,.24)',
+  },
+  baba: {
+    portrait: './assets/dialogue_v5/baba.webp',
+    paint: null,
+    accent: '#e4c14a',
+    accentDark: '#997c1a',
+    accentSoft: 'rgba(228,193,74,.24)',
+  },
+};
+
+function applyDialogueSkin(npcKey) {
+  const skin = DIALOGUE_SKINS[npcKey] || DIALOGUE_SKINS.pavel;
+  dialogueEl.dataset.npc = npcKey || 'pavel';
+  dialogueEl.style.setProperty('--dialog-accent', skin.accent);
+  dialogueEl.style.setProperty('--dialog-accent-soft', skin.accentSoft);
+  dialogueEl.style.setProperty('--dialog-accent-dark', skin.accentDark || skin.accent);
+  if (skin.paint) dialogueEl.style.setProperty('--dialog-paint', `url("${skin.paint}")`);
+  else dialogueEl.style.setProperty('--dialog-paint', 'none');
+  if (dialoguePortraitEl) dialoguePortraitEl.src = skin.portrait;
+}
+
 function setDialogue(name, text, options = []) {
-  dialogueNameEl.textContent = name;
+  dialogueNameEl.textContent = DIALOGUE_NAMES[dialogueNpcKey] || name;
   dialogueTextEl.textContent = text;
   dialogueOptionsEl.innerHTML = '';
-  for (const opt of options) {
+  options.forEach((opt, index) => {
     const btn = document.createElement('button');
     btn.className = 'dialogueOption';
-    btn.textContent = opt.label;
+    btn.dataset.optionIndex = String(index + 1);
+    const key = document.createElement('span');
+    key.className = 'dialogueOptionKey';
+    key.textContent = String(index + 1);
+    const label = document.createElement('span');
+    label.className = 'dialogueOptionLabel';
+    label.textContent = opt.label;
+    btn.append(key, label);
     btn.addEventListener('click', opt.action);
     dialogueOptionsEl.appendChild(btn);
-  }
+  });
 }
 
 function openDialogue(npcKey) {
   if (dialogueOpen || shopOpen || resultOpen) return;
   dialogueOpen = true;
   dialogueNpcKey = npcKey;
+  applyDialogueSkin(npcKey);
+  document.body.classList.add('dialogueActive');
   pouring = false;
   if (document.pointerLockElement) document.exitPointerLock();
   dialogueEl.classList.remove('hidden');
@@ -6701,6 +8119,7 @@ function closeDialogue() {
   dialogueOpen = false;
   dialogueNpcKey = null;
   dialogueEl.classList.add('hidden');
+  document.body.classList.remove('dialogueActive');
 
   // `mandarin` is Серёга internally.
   if (closingNpcKey === 'mandarin') {
@@ -6750,7 +8169,13 @@ async function playPavelDance() {
   if (!rt?.mixer || !rt.character) return;
 
   try {
-    const url = PAVEL_DANCES[Math.floor(Math.random() * PAVEL_DANCES.length)];
+    let danceIndex = Math.floor(Math.random() * PAVEL_DANCES.length);
+    // Random every settlement, but avoid an immediate repeat so the variety is visible.
+    if (PAVEL_DANCES.length > 1 && danceIndex === pavelLastDanceIndex) {
+      danceIndex = (danceIndex + 1 + Math.floor(Math.random() * (PAVEL_DANCES.length - 1))) % PAVEL_DANCES.length;
+    }
+    pavelLastDanceIndex = danceIndex;
+    const url = PAVEL_DANCES[danceIndex];
     const source = await loadDanceSource(url);
     if (!source.animations?.length) return;
 
@@ -6848,7 +8273,7 @@ function pavelDialogue() {
               const level = zoneLevelStats(worstZone);
               note = ratio < .985
                 ? `Карта №${worstZone.id}: мало бетона — ${Math.round(ratio * 100)}%.`
-                : `Карта №${worstZone.id}: слой кривой — ровность ${Math.round(level.score * 100)}%. Нужно ${Math.round(worstZone.levelRequired * 100)}%.`;
+                : `Карта №${worstZone.id}: слой кривой — ровность ${Math.round(THREE.MathUtils.clamp(level.score / Math.max(.001, worstZone.levelRequired), 0, 1) * 100)}%. Нужно 100%.`;
             } else {
               note = `Не гони. Готово ${done} из 6 карт.`;
             }
@@ -6873,6 +8298,11 @@ function pavelDialogue() {
           paidPourZoneCount += unpaid;
           saveProgression();
 
+          // v51.32: every successful settlement is a celebration. Previously
+          // Pavel only danced on the final six-map handover, so normal payouts
+          // looked broken even though the dance system itself was present.
+          playPavelDance();
+
           // A successful map settlement should not trigger Pavel's ordinary farewell.
           pavelFarewellAllowedThisDialogue = false;
 
@@ -6883,7 +8313,6 @@ function pavelDialogue() {
             jobState = 'accepted';
             jobsCompleted++;
             saveProgression();
-            playPavelDance();
 
             setDialogue(
               'ПАВЕЛ ПЕТРОВИЧ',
@@ -6972,7 +8401,7 @@ function georgeDialogue() {
   ];
 
   if (pumpLevel >= 3) {
-    setDialogue('GEORGE', 'Насос уже выкручен как надо. Быстрее — только проблемы искать.', [
+    setDialogue('Джордж', 'Насос уже выкручен как надо. Быстрее — только проблемы искать.', [
       { label: 'Выход', action: closeDialogue }
     ]);
     return;
@@ -6980,14 +8409,14 @@ function georgeDialogue() {
 
   const next = levels[pumpLevel];
   const percent = Math.round((next.mult - 1) * 100);
-  setDialogue('GEORGE', 'Могу разбавить бетон, но не просто так.', [
+  setDialogue('Джордж', 'Могу разбавить бетон, но не просто так.', [
     {
       label: `Ускорить подачу +${percent}% — ${next.cost.toLocaleString('ru-RU')} ₽`,
       action: () => {
         if (money < next.cost) {
           playGeorgeNoMoneyVoice();
 
-          setDialogue('GEORGE', 'Не хватает денег. Подкопи и приходи.', [
+          setDialogue('Джордж', 'Не хватает денег. Подкопи и приходи.', [
             { label: 'Выход', action: closeDialogue }
           ]);
           return;
@@ -7001,7 +8430,7 @@ function georgeDialogue() {
         saveEconomy();
         saveProgression();
         updateEconomyUI();
-        setDialogue('GEORGE', next.text, [
+        setDialogue('Джордж', next.text, [
           { label: 'Выход', action: closeDialogue }
         ]);
       }
@@ -7014,6 +8443,7 @@ function openShopFromBaba() {
   dialogueOpen = false;
   dialogueNpcKey = null;
   dialogueEl.classList.add('hidden');
+  document.body.classList.remove('dialogueActive');
 
   openShop(true);
 }
@@ -7224,7 +8654,19 @@ function rakePickupAimOK(it) {
 function pickupIsUnderCrosshair(it) {
   if (!it || !it.requiresLook) return true;
   const target = it.source || it.rakeSource || null;
-  if (!target || !target.visible) return false;
+  if (!target || !target.visible) {
+    const aimObj = it.obj || null;
+    if (!aimObj) return false;
+    camera.getWorldPosition(interactionCamPos);
+    camera.getWorldDirection(interactionCamDir).normalize();
+    if (it.bounds) it.bounds.getCenter(interactionAimPoint);
+    else interactionAimPoint.copy(worldPos(aimObj));
+    interactionAimVec.copy(interactionAimPoint).sub(interactionCamPos);
+    const dist = interactionAimVec.length();
+    if (dist > (it.radius || 2.6) + .45 || dist < .01) return false;
+    interactionAimVec.multiplyScalar(1 / dist);
+    return interactionCamDir.dot(interactionAimVec) >= (it.kind === 'npc' ? 0.965 : 0.955);
+  }
 
   interactionRaycaster.setFromCamera(interactionNDC, camera);
   interactionRaycaster.near = 0;
@@ -7298,6 +8740,7 @@ function drinkEnergy() {
   specialMode = 'drink';
   specialTimer = startProceduralSpecial('drink');
   energyVM.visible = !!energyProp;
+  playCanDrinkAudio();
   energyBoost = 100;
   showToast('Перемотка: спринт усилен.');
 }
@@ -7310,9 +8753,11 @@ function drinkBeer() {
   specialMode = 'beer';
   specialTimer = startProceduralSpecial('beer');
   beerVM.visible = !!beerProp;
+  playCanDrinkAudio();
   showToast('Балтика 9.');
 }
 function finishSpecial() {
+  stopDrinkAudio();
   specialMode = null;
   specialTimer = 0;
   cigaretteVM.visible = false;
@@ -7328,29 +8773,15 @@ function finishSpecial() {
   restoreRakeAfterSpecial();
 }
 function updateFirstPersonProps(dt) {
-  if (armsMixer && !propTuneMode) armsMixer.update(dt);
+  if (armsMixer) armsMixer.update(dt);
 
-  // Persistent first-person hands/body outside the explicit rake preview in F4.
-  if (!propTuneMode && armsReady && !armsRig.visible) {
+  if (armsReady && !armsRig.visible) {
     armsRig.visible = true;
   }
-  if (!propTuneMode && !specialMode && armsReady) {
+  if (!specialMode && armsReady) {
     setPlayerLocomotion(playerMovingNow, playerSprintingNow);
   }
 
-  if (propTuneMode) {
-    const name = currentTuneProp();
-    if (name === 'cigarette' && cigaretteProp) {
-      followBoneWithProp(cigaretteVM, rightIndexBone || rightHandBone, propConfigs.cigarette.pos, propConfigs.cigarette.quat);
-    } else if (name === 'lighter' && lighterProp) {
-      followBoneWithProp(lighterVM, leftHandBone, propConfigs.lighter.pos, propConfigs.lighter.quat);
-    } else if (name === 'energy' && energyProp) {
-      followBoneWithProp(energyVM, leftHandBone, propConfigs.energy.pos, propConfigs.energy.quat);
-    } else if (name === 'beer' && beerProp) {
-      followBoneWithProp(beerVM, leftHandBone, propConfigs.beer.pos, propConfigs.beer.quat);
-    }
-    return;
-  }
 
   if (!specialMode) return;
   specialTimer -= dt;
@@ -7372,18 +8803,18 @@ function updateFirstPersonProps(dt) {
 
   // Props follow the procedurally posed hands/fingers.
   if (specialMode === 'smoke' && cigaretteProp) {
-    followBoneWithProp(cigaretteVM, rightIndexBone || rightHandBone, propConfigs.cigarette.pos, propConfigs.cigarette.quat);
+    followBoneWithProp(cigaretteVM, rightHandBone || rightIndexBone, propConfigs.cigarette.pos, propConfigs.cigarette.quat);
     if (lighterProp && lighterVM.visible) {
       followBoneWithProp(lighterVM, leftHandBone, propConfigs.lighter.pos, propConfigs.lighter.quat);
     }
   } else if (specialMode === 'drink' && energyProp) {
+    // The Blender grip already contains the exact can orientation relative to
+    // the hand. The procedural hand pose provides the drinking tilt itself.
+    // Do NOT rotate the can a second time here — that was why the authored grip
+    // looked crooked in-game.
     followBoneWithProp(energyVM, leftHandBone, propConfigs.energy.pos, propConfigs.energy.quat);
-    procTiltQ.setFromEuler(new THREE.Euler(0, 0, .35 * procPulse(procT, .52, .32)));
-    energyVM.quaternion.multiply(procTiltQ);
   } else if (specialMode === 'beer' && beerProp) {
     followBoneWithProp(beerVM, leftHandBone, propConfigs.beer.pos, propConfigs.beer.quat);
-    procTiltQ.setFromEuler(new THREE.Euler(0, 0, .48 * procPulse(procT, .52, .34)));
-    beerVM.quaternion.multiply(procTiltQ);
   }
 }
 
@@ -7546,11 +8977,11 @@ let mobilePerfTimer=0, mobileFrameCounter=0, mobileFpsFrames=0, mobileFpsAccum=0
 function updateMobileRenderBudget(dt){
   if(!TOUCH_DEVICE)return;
   mobilePerfTimer+=dt; mobileFpsFrames++; mobileFpsAccum+=dt;
-  if(mobilePerfTimer<3.0)return;
+  if(mobilePerfTimer<2.5)return;
   const fps=mobileFpsFrames/Math.max(.001,mobileFpsAccum);
   let next=mobileRenderScale;
-  if(fps<42) next=Math.max(.68,mobileRenderScale-.08);
-  else if(fps>56) next=Math.min(.88,mobileRenderScale+.04);
+  if(fps<44) next=Math.max(MOBILE_DPR_MIN,mobileRenderScale-.08);
+  else if(fps>57) next=Math.min(Math.min(devicePixelRatio,MOBILE_DPR_MAX),mobileRenderScale+.045);
   if(Math.abs(next-mobileRenderScale)>.001){
     mobileRenderScale=next;
     renderer.setPixelRatio(Math.min(devicePixelRatio,mobileRenderScale));
@@ -7562,6 +8993,8 @@ function loop() {
   const dt = Math.min(clock.getDelta(), .05);
   updateMobileRenderBudget(dt);
   for (const mixer of npcMixers) mixer.update(dt);
+  lockBabaToGround();
+  updateBabaProceduralIdle(dt);
 
   if (started) {
     const inputBlocked = shopOpen || resultOpen || dialogueOpen;
@@ -7569,15 +9002,10 @@ function loop() {
     const kbStrafe = (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
     const forwardInput = inputBlocked ? 0 : THREE.MathUtils.clamp(kbForward - mobileMoveY, -1, 1);
     const strafeInput = inputBlocked ? 0 : THREE.MathUtils.clamp(kbStrafe + mobileMoveX, -1, 1);
-    if (TOUCH_DEVICE && !inputBlocked && !qteActive) {
-      yaw -= mobileLookX * dt * 2.35;
-      pitch -= mobileLookY * dt * 1.95;
-      pitch = THREE.MathUtils.clamp(pitch, -FPS_PITCH_LIMIT, FPS_PITCH_LIMIT);
-    }
 
     // Direct yaw-based vectors. This does not depend on camera interpolation and cannot flip
     // direction as the previous third-person implementation did.
-    const moveYaw = debugMode ? debugYaw : yaw;
+    const moveYaw = yaw;
     moveForward.set(-Math.sin(moveYaw), 0, -Math.cos(moveYaw));
     moveRight.set(Math.cos(moveYaw), 0, -Math.sin(moveYaw));
     moveWorld.set(0, 0, 0)
@@ -7586,7 +9014,7 @@ function loop() {
     if (moveWorld.lengthSq() > 1) moveWorld.normalize();
 
     const moving = moveWorld.lengthSq() > .0001;
-    const sprint = !!(keys.ShiftLeft || keys.ShiftRight) || (TOUCH_DEVICE && Math.hypot(mobileMoveX,mobileMoveY) > .82);
+    const sprint = !!(keys.ShiftLeft || keys.ShiftRight) || (TOUCH_DEVICE && Math.hypot(mobileMoveX,mobileMoveY) > .70);
     playerMovingNow = moving;
     playerSprintingNow = sprint;
     let speed = 3.35;
@@ -7627,7 +9055,6 @@ function loop() {
 
     syncCameraToPlayer();
     syncPlayerBodyToWorld();
-    if (debugMode) syncDebugCamera();
     updateFirstPersonProps(dt);
     updateCigaretteSmoke(dt);
     updateRake(dt);
@@ -7636,17 +9063,33 @@ function loop() {
     updatePhysicalHose(dt);
     updateActivePourOutline(dt);
 
+    if (!layoutRoot || !layoutRoot.parent) {
+      sceneMissingTimer += dt;
+      if (sceneMissingTimer > .45) recoverBrokenScene('layout root disappeared');
+    } else {
+      sceneMissingTimer = 0;
+    }
     const it = nearestInteractive();
+    // Selection flow: look at hose -> hose outline; pick it up -> active pour map outline.
+    hoseOutline.visible = !!(it && it.kind === 'hose' && !hoseHeld && hoseGroup.visible);
+    if (hoseOutline.visible) {
+      const pulse = .5 + .5 * Math.sin(performance.now() * .006);
+      hoseOutlineMat.uniforms.uOpacity.value = .72 + pulse * .24;
+      hoseOutlineMat.uniforms.uExpand.value = .024 + pulse * .010;
+    }
     promptEl.textContent = it ? it.text : '';
+    updateMobileContextButtons(it);
     zoneLabel.textContent = currentZone();
   } else {
     syncCameraToPlayer();
     syncPlayerBodyToWorld();
     updateCigaretteSmoke(dt);
     stopPourAudio();
+    hoseOutline.visible = false;
+    updateMobileContextButtons(null);
   }
 
-  renderHotbar3DPreviews(dt);
+  if (!TOUCH_DEVICE) renderHotbar3DPreviews(dt);
 
   staminaBar.style.width = `${Math.min(100, stamina / staminaMax * 100)}%`; staminaText.textContent = Math.round(stamina);
   energyBar.style.width = `${energyBoost}%`; energyText.textContent = Math.round(energyBoost);
@@ -7662,6 +9105,7 @@ function loop() {
   hotbarSmokeSlotEl.classList.toggle('active', specialMode === 'smoke');
   hotbarDrinkSlotEl.classList.toggle('active', specialMode === 'drink');
   hotbarBeerSlotEl.classList.toggle('active', specialMode === 'beer');
+  syncMobileHud();
   hotbarRakeSlotEl.classList.toggle('active', rakeEquipped);
   hotbarSmokeSlotEl.classList.toggle('empty', cigarettes <= 0);
   hotbarDrinkSlotEl.classList.toggle('empty', energyCans <= 0);
@@ -7672,33 +9116,32 @@ function loop() {
   updatePourHUD();
   if (toastTimer > 0) {
     toastTimer -= dt;
-    if (toastTimer <= 0) toastEl.classList.remove('show');
+    if (toastTimer <= 0) toastEl.classList.remove('show'); if (mobileToastEl) mobileToastEl.classList.remove('show');
   }
-  drawMap();
+  if (!TOUCH_DEVICE && minimap.style.display !== 'none') drawMap();
   updateSunShadowFollow();
   if (TOUCH_DEVICE) {
-    // Update soft sun shadows every other frame on mobile; direction is unchanged and this
-    // halves the most expensive extra scene render while keeping visible quality stable.
+    // Static scene: refresh the shadow atlas at ~20 Hz while moving and much less while idle.
+    // Direct lighting stays continuous; only the expensive depth atlas is throttled.
     mobileFrameCounter++;
     renderer.shadowMap.autoUpdate = false;
-    renderer.shadowMap.needsUpdate = (mobileFrameCounter & 1) === 0;
+    const shadowStride = playerMovingNow ? 3 : 10;
+    renderer.shadowMap.needsUpdate = (mobileFrameCounter % shadowStride) === 0;
   }
-  if (debugMode) {
-    renderer.render(scene, debugCamera);
-  } else if (TOUCH_DEVICE) {
+  if (TOUCH_DEVICE) {
     camera.layers.set(0);
     renderer.render(scene, camera);
   } else {
     camera.layers.set(0);
     renderPass.camera = camera;
-    composer.render(dt);
+    composer?.render(dt);
   }
 
   // Dedicated FPS rake pass.
   // World depth is cleared so the tool always stays visible, but the rake has
   // its own depthTest/depthWrite, so its rear faces can no longer overdraw its
   // front faces and fake transparency.
-  if (!debugMode && rakeEquipped && !rakeHiddenBySpecial && rakeVM.visible) {
+  if (rakeEquipped && !rakeHiddenBySpecial && rakeVM.visible) {
     // IMPORTANT:
     // The world/composer has already rendered the color buffer.
     // A normal renderer.render() with autoClear=true would wipe that color
@@ -7727,7 +9170,7 @@ function loop() {
   if (shopOpen) {
     shopPreviewSpin += dt * .78;
     shopPreviewRoot.rotation.y = shopPreviewSpin;
-    shopPreviewRenderer?.render(shopPreviewScene, shopPreviewCamera);
+    ensureShopPreviewRenderer().render(shopPreviewScene, shopPreviewCamera);
   }
   requestAnimationFrame(loop);
 }
