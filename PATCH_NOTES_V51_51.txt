@@ -1,5 +1,0 @@
-v51.51
-- Replaced Pavel Petrovich dialogue portrait with the newly approved portrait.
-- Preserved its blue/black construction brush backdrop.
-- Disabled the extra Pavel paint layer to avoid a double backdrop.
-- Dialogue logic and all other gameplay systems unchanged from v51.50.

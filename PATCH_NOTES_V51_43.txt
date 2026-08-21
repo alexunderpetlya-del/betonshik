@@ -1,4 +1,0 @@
-v51.43
-- In-hand rake increased by roughly one third relative to v51.42.
-- Rake base position adjusted slightly outward/down-back for the larger scale.
-- Rake base rotation corrected a bit so it lies straighter in the hand.

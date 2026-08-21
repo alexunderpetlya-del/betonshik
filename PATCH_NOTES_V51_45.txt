@@ -1,9 +1,0 @@
-v51.45 — Dialogue HUD concept implemented
-
-- Rebuilt the dialogue presentation around the approved concept: cutout character portrait overlapping a dirty metal panel, rough paint splash behind the portrait, accent nameplate, hazard-stripe corners, numbered answer rows.
-- New separated assets in assets/dialogue_v2/: four portraits, four paint backdrops, metal grain tile, hazard stripe tile.
-- Correct character names remain: Павел Петрович, Серёга, Джордж, Баба Капа.
-- Existing in-game dialogue lines, dialogue branches, actions, voices, shop flow, upgrades and payments are untouched.
-- Character themes: Pavel yellow, Serega orange, George blue, Baba Kapa warm yellow.
-- Mobile landscape uses the same visual language with compact touch-sized answers.
-- Cache version bumped to 51.45.

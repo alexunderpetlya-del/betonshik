@@ -1,7 +1,0 @@
-v51.34
-- Removed F3 third-person debug camera completely.
-- Removed F4 prop-tuning mode completely.
-- Removed F5 camera-tuning mode completely.
-- Removed debug player marker geometry and orbit controls.
-- Removed developer tune HUD from HTML/CSS.
-- Removed associated prop/camera tuning hotkeys from release key handling.

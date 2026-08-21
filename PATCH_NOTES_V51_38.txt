@@ -1,5 +1,0 @@
-v51.38
-- iOS Add to Home Screen default app name forced to БЕТОНЩИК via apple-mobile-web-app-title.
-- Added application-name and PWA manifest with name/short_name БЕТОНЩИК.
-- Manifest requests fullscreen + landscape when launched as installed web app where supported.
-- Cache-bust bumped to 51.38.

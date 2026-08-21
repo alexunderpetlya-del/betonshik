@@ -1,9 +1,0 @@
-v51.36 — grey-screen recovery
-- Grey screen treated as a general scene/render failure, not a mobile-only issue.
-- PLAY stays disabled until the final layout is mounted and survives two animation frames.
-- If the main GLTF fails, gameplay no longer opens into an empty grey scene.
-- Automatic scene recovery/reload up to two attempts for transient asset failures.
-- WebGL context loss now triggers recovery instead of leaving a grey/empty render.
-- Runtime watchdog detects a missing final layout and recovers it.
-- Renderer fallback background changed from grey to dark so an unloaded scene can never look like a valid game frame.
-- Cache-bust bumped to 51.36.

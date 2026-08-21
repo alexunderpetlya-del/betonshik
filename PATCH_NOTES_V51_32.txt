@@ -1,5 +1,0 @@
-BETONSHCHIK v51.32
-
-- Rake viewmodel rotated so rake head sits level in first-person view.
-- Holding primary action now drives a stronger continuous forward/back rake stroke.
-- Pavel now starts his success dance after every successful settlement/payment, including partial map payouts; final payout no longer relies on a separate special-case trigger.

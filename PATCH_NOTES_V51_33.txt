@@ -1,7 +1,0 @@
-v51.33
-- Fixed broken-looking first-person body shading: player body no longer receives harsh scene shadows, materials render double-sided for more stable shading.
-- Added invisible head shadow caster so the hidden FPS head still casts a shadow.
-- Corrected cigarette grip: now attached to the right hand instead of the finger chain and retuned default offset/rotation.
-- Corrected energy drink and Baltika 9 grip offsets/rotations so cans sit more naturally in the hand.
-- Added localStorage grip reset version v533 so old broken prop transforms are discarded automatically.
-- Slightly improved drinking reach path.
