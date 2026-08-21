@@ -3291,7 +3291,7 @@ function addShopInteraction(root) {
   interactive.push(shopInteraction);
 }
 
-loader.load('./assets/BETONSHCHIK_SCENE.glb', gltf => {
+loader.load('./assets/BETONSHCHIK_SCENE.gltf', gltf => {
   layoutRoot = gltf.scene;
   layoutRoot.name = 'BETONSHCHIK_FINAL_LAYOUT';
   prepModel(layoutRoot);
