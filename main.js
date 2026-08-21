@@ -159,7 +159,7 @@ function buildMobileDebugReport() {
     else if (gl) glInfo = `webgl: ${gl.getParameter(gl.VERSION)}`;
   } catch (_) {}
   return [
-    'BETONSHCHIK MOBILE DEBUG v51.62',
+    'BETONSHCHIK MOBILE DEBUG v51.72',
     `safe=${MOBILE_SAFE_MODE} scene=${FINAL_SCENE_URL}`,
     `screen=${innerWidth}x${innerHeight} dpr=${devicePixelRatio}`,
     `ua=${navigator.userAgent}`,
@@ -1476,17 +1476,18 @@ function updateActivePourOutline(dt) {
 }
 
 const slabMat = new THREE.MeshStandardMaterial({
-  color: 0xa7a8a2, roughness: .90, side: THREE.DoubleSide
+  // Mobile top slab is intentionally a little lighter than the authored asphalt.
+  // The stronger value separation makes the 18 cm structural recess readable on a phone.
+  color: TOUCH_DEVICE ? 0xb8b5ab : 0xa7a8a2, roughness: .90, side: THREE.DoubleSide
 });
 const pitWallMat = new THREE.MeshStandardMaterial({
-  // Slightly stronger contrast on touch devices: mobile has no dynamic contact shadows,
-  // so the recess side needs to read from geometry/material alone.
-  color: TOUCH_DEVICE ? 0x777a75 : 0x8d8f8a,
-  roughness: .95, side: THREE.DoubleSide,
+  // Strong inner-wall contrast substitutes for contact shadows on mobile.
+  color: TOUCH_DEVICE ? 0x4b504d : 0x8d8f8a,
+  roughness: .97, side: THREE.DoubleSide,
   polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1
 });
 const pitBottomMat = new THREE.MeshStandardMaterial({
-  color: TOUCH_DEVICE ? 0x4f534f : 0x626560,
+  color: TOUCH_DEVICE ? 0x343936 : 0x626560,
   roughness: 1.0, side: THREE.DoubleSide,
   polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2
 });
@@ -1560,10 +1561,11 @@ for (let zi = 0; zi < zCuts.length - 1; zi++) {
 
 // Bottom + four vertical walls for every bay.
 for (const zone of POUR_ZONES) {
-  // The imported site ground sits almost exactly at the recess bottom. On mobile GPUs
-  // the tiny depth difference can collapse and visually fill the hole. Put the visual
-  // pit floor a couple of centimetres above that ground while keeping gameplay depth intact.
-  const visualPitTopY = Math.max(zone.bottomY + .020, .016);
+  // v51.72: mobile cuts SITE_GROUND away under the pour slab, so the visual floor can
+  // finally sit at the authored bay bottom instead of being lifted onto the asphalt.
+  const visualPitTopY = TOUCH_DEVICE
+    ? zone.bottomY + .004
+    : Math.max(zone.bottomY + .020, .016);
   addPitBox(
     `PIT_${zone.id}_BOTTOM`,
     (zone.minX + zone.maxX) * .5,
@@ -1590,6 +1592,94 @@ for (const zone of POUR_ZONES) {
   addPitBox(`PIT_${zone.id}_WALL_B`,
     (zone.minX + zone.maxX) * .5, wallY, zone.maxZ + .05,
     zone.w, wallH, .10, pitWallMat);
+
+  // A short dark band directly below the rim gives the recess a stable contact-shadow cue
+  // even when mobile shadow quality is reduced.
+  if (TOUCH_DEVICE) {
+    const lipH = .055;
+    const lipT = .105;
+    const lipY = zone.floorY - .012 - lipH * .5;
+    addPitBox(`PIT_${zone.id}_LIP_L`,
+      zone.minX + lipT * .5, lipY, (zone.minZ + zone.maxZ) * .5,
+      lipT, lipH, zone.d, pitBottomMat);
+    addPitBox(`PIT_${zone.id}_LIP_R`,
+      zone.maxX - lipT * .5, lipY, (zone.minZ + zone.maxZ) * .5,
+      lipT, lipH, zone.d, pitBottomMat);
+    addPitBox(`PIT_${zone.id}_LIP_F`,
+      (zone.minX + zone.maxX) * .5, lipY, zone.minZ + lipT * .5,
+      zone.w, lipH, lipT, pitBottomMat);
+    addPitBox(`PIT_${zone.id}_LIP_B`,
+      (zone.minX + zone.maxX) * .5, lipY, zone.maxZ - lipT * .5,
+      zone.w, lipH, lipT, pitBottomMat);
+  }
+}
+
+// v51.72 MOBILE GROUND CUTOUT ------------------------------------------------
+// FINAL_MOBILE's SITE_GROUND is one large asphalt box whose top is y=0.
+// The bay bottom is ~y=-0.004, so that box visually caps every recess even though
+// gameplay/camera height already follows the lower pit. On touch devices replace the
+// single ground box with a four-piece frame around the slab. Outside the slab the
+// authored asphalt/material is preserved; under the slab there is now an actual hole.
+let mobileSiteGroundFrame = null;
+function cutMobileSiteGroundUnderPourSlab(root) {
+  if (!TOUCH_DEVICE || !root || mobileSiteGroundFrame) return false;
+
+  const ground = root.getObjectByName('SITE_GROUND');
+  if (!ground || !ground.isMesh || !ground.geometry || !ground.material) {
+    mobileDebugLog('pit cutout: SITE_GROUND not found');
+    return false;
+  }
+
+  ground.updateWorldMatrix(true, false);
+  const bb = new THREE.Box3().setFromObject(ground);
+  if (!Number.isFinite(bb.min.x) || !Number.isFinite(bb.max.x)) {
+    mobileDebugLog('pit cutout: invalid SITE_GROUND bounds');
+    return false;
+  }
+
+  const minX = bb.min.x, maxX = bb.max.x;
+  const minZ = bb.min.z, maxZ = bb.max.z;
+  const bottomY = bb.min.y, topY = bb.max.y;
+  const h = Math.max(.04, topY - bottomY);
+  const cy = (bottomY + topY) * .5;
+
+  const parent = ground.parent || root;
+  const frame = new THREE.Group();
+  frame.name = 'MOBILE_SITE_GROUND_FRAME';
+
+  const addFrameBox = (name, x0, x1, z0, z1) => {
+    const w = x1 - x0;
+    const d = z1 - z0;
+    if (w <= .01 || d <= .01) return;
+
+    const mat = Array.isArray(ground.material)
+      ? ground.material.map(m => m?.clone?.() || m)
+      : (ground.material.clone?.() || ground.material);
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    mesh.name = name;
+    mesh.position.set((x0 + x1) * .5, cy, (z0 + z1) * .5);
+    mesh.castShadow = false;
+    mesh.receiveShadow = ground.receiveShadow;
+    mesh.frustumCulled = true;
+    mesh.userData.walkOnly = true;
+    frame.add(mesh);
+  };
+
+  // Full authored ground minus the exact runtime slab rectangle.
+  addFrameBox('MOBILE_SITE_GROUND_W', minX, SLAB.minX, minZ, maxZ);
+  addFrameBox('MOBILE_SITE_GROUND_E', SLAB.maxX, maxX, minZ, maxZ);
+  addFrameBox('MOBILE_SITE_GROUND_S', SLAB.minX, SLAB.maxX, minZ, SLAB.minZ);
+  addFrameBox('MOBILE_SITE_GROUND_N', SLAB.minX, SLAB.maxX, SLAB.maxZ, maxZ);
+
+  ground.visible = false;
+  parent.add(frame);
+  mobileSiteGroundFrame = frame;
+  frame.updateWorldMatrix(true, true);
+
+  mobileDebugLog(
+    `pit cutout active: SITE_GROUND ${Math.round(maxX-minX)}x${Math.round(maxZ-minZ)}m -> frame; slab opening ${SLAB.minX}..${SLAB.maxX}/${SLAB.minZ}..${SLAB.maxZ}`
+  );
+  return true;
 }
 
 // -----------------------------
@@ -4328,6 +4418,9 @@ loader.load(FINAL_SCENE_URL, gltf => {
   layoutRoot.traverse(o => {
     if (String(o.name || '').toLowerCase().includes('pour_slab')) o.visible = false;
   });
+  // Mobile: remove the authored asphalt cap only under the runtime pour slab.
+  // This is the missing piece that makes the physical depressions actually visible.
+  cutMobileSiteGroundUnderPourSlab(layoutRoot);
   pitGroup.visible = true;
   pitGroup.traverse(o => { if (o.isMesh) { o.visible = true; o.frustumCulled = false; } });
   if (TOUCH_DEVICE) {

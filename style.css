@@ -2472,7 +2472,7 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.86)!important}
     opacity:.94!important;
   }
 }
-\n\n/* ============================================================
+/* ============================================================
    v51.71 — MOBILE LEFT STICK
    Final cascade override: movement joystick lives on the LEFT.
    Context action buttons move to the RIGHT so thumbs never overlap.
@@ -2493,5 +2493,94 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.86)!important}
   .touchDevice.mobileLandscape .mobileWorldButton{
     left:auto!important;
     right:max(12px,calc(env(safe-area-inset-right) + 6px))!important;
+  }
+}
+
+/* ============================================================
+   v51.72 — MOBILE UI / MENU POLISH
+   Accent sampled from the authored lung + wallet icons.
+   Also re-assert the left movement stick after every legacy rule.
+   ============================================================ */
+:root{
+  --mobile-ui-gold:#c5a872;
+  --mobile-ui-gold-rgb:197,168,114;
+}
+
+/* Main-menu PLAY artwork was oversized on phone landscape. */
+.touchDevice.mobileLandscape #start .menuPlayButton{
+  width:min(34vw,520px)!important;
+  bottom:5.0%!important;
+}
+
+/* Final control placement: movement LEFT, contextual actions RIGHT. */
+.touchDevice.mobileLandscape #moveStick{
+  left:max(18px,calc(env(safe-area-inset-left) + 10px))!important;
+  right:auto!important;
+}
+.touchDevice.mobileLandscape .mobileWorldButton{
+  left:auto!important;
+  right:max(18px,calc(env(safe-area-inset-right) + 10px))!important;
+}
+
+/* Beige-gold accent matched to the lung / wallet artwork instead of lemon yellow. */
+.touchDevice.mobileLandscape #moveStick{
+  background:rgba(var(--mobile-ui-gold-rgb),.10)!important;
+  border-color:rgba(var(--mobile-ui-gold-rgb),.36)!important;
+  box-shadow:0 10px 32px rgba(0,0,0,.20),inset 0 0 34px rgba(var(--mobile-ui-gold-rgb),.08)!important;
+}
+.touchDevice.mobileLandscape #moveStick .stickRing{
+  border-color:rgba(var(--mobile-ui-gold-rgb),.58)!important;
+  background:rgba(var(--mobile-ui-gold-rgb),.065)!important;
+}
+.touchDevice.mobileLandscape #moveStick .stickKnob{
+  background:var(--mobile-ui-gold)!important;
+  border-color:#e5cf9f!important;
+  box-shadow:0 5px 16px rgba(0,0,0,.30),inset 0 1px 0 rgba(255,247,224,.32)!important;
+}
+.touchDevice.mobileLandscape #moveStick>span{
+  color:rgba(218,193,148,.82)!important;
+}
+.touchDevice.mobileLandscape #mobileLookHint b,
+#mobileJobMini>span,
+#mobileJobMini strong{
+  color:var(--mobile-ui-gold)!important;
+}
+.mobileStaminaTrack i{
+  background:var(--mobile-ui-gold)!important;
+}
+.mobileHotbarSlot b{
+  background:var(--mobile-ui-gold)!important;
+  color:#181510!important;
+}
+.mobileHotbarSlot.active{
+  border-color:var(--mobile-ui-gold)!important;
+  box-shadow:0 0 0 2px rgba(var(--mobile-ui-gold-rgb),.20),0 8px 24px rgba(0,0,0,.22)!important;
+}
+.touchDevice.mobileLandscape #mobileAction{
+  border-color:rgba(var(--mobile-ui-gold-rgb),.56)!important;
+  background:rgba(55,45,29,.88)!important;
+  color:#e3cda4!important;
+}
+.touchDevice.mobileLandscape .mobileWorldButton:active{
+  background:var(--mobile-ui-gold)!important;
+  border-color:#ead7b0!important;
+  color:#181510!important;
+}
+#mobileAim{
+  background:rgba(229,215,187,.86)!important;
+  box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 9px rgba(var(--mobile-ui-gold-rgb),.28)!important;
+}
+
+@media(pointer:coarse) and (orientation:landscape) and (max-height:520px){
+  .touchDevice.mobileLandscape #moveStick{
+    left:max(12px,calc(env(safe-area-inset-left) + 6px))!important;
+    right:auto!important;
+  }
+  .touchDevice.mobileLandscape .mobileWorldButton{
+    left:auto!important;
+    right:max(12px,calc(env(safe-area-inset-right) + 6px))!important;
+  }
+  .touchDevice.mobileLandscape #start .menuPlayButton{
+    width:min(35vw,470px)!important;
   }
 }
