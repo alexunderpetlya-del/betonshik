@@ -162,7 +162,7 @@ function buildMobileDebugReport() {
     else if (gl) glInfo = `webgl: ${gl.getParameter(gl.VERSION)}`;
   } catch (_) {}
   return [
-    'BETONSHCHIK MOBILE DEBUG v51.79',
+    'BETONSHCHIK MOBILE DEBUG v51.80',
     `safe=${MOBILE_SAFE_MODE} scene=${FINAL_SCENE_URL}`,
     `screen=${innerWidth}x${innerHeight} dpr=${devicePixelRatio}`,
     `ua=${navigator.userAgent}`,
@@ -211,9 +211,9 @@ const renderer = new THREE.WebGLRenderer({
 });
 // Adaptive mobile DPR: starts crisp, then moves only when sustained FPS proves the GPU budget.
 // Desktop rendering is unchanged.
-const MOBILE_DPR_MIN = 0.68;
-const MOBILE_DPR_MAX = 1.0;
-let mobileRenderScale = TOUCH_DEVICE ? Math.min(devicePixelRatio, 0.82) : 1.0;
+const MOBILE_DPR_MIN = 0.90;
+const MOBILE_DPR_MAX = 1.35;
+let mobileRenderScale = TOUCH_DEVICE ? Math.min(devicePixelRatio, 1.16) : 1.0;
 renderer.setPixelRatio(TOUCH_DEVICE ? Math.min(devicePixelRatio, mobileRenderScale) : Math.min(devicePixelRatio, 1.55));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = !TOUCH_DEVICE;
@@ -1055,6 +1055,12 @@ function prepModel(root) {
     for (const mat of ms) {
       if (!mat) continue;
       if (mat.map) mat.map.colorSpace = THREE.SRGBColorSpace;
+      // Keep road/floor textures sharp at grazing angles on phones. This costs
+      // almost no extra memory and avoids the smeared, low-resolution look.
+      const maxSceneAnisotropy = Math.min(TOUCH_DEVICE ? 4 : 8, renderer.capabilities.getMaxAnisotropy());
+      for (const tex of [mat.map, mat.normalMap, mat.roughnessMap, mat.metalnessMap]) {
+        if (tex) tex.anisotropy = maxSceneAnisotropy;
+      }
 
       // v0.23: restore double-sided scene materials.
       mat.side = THREE.DoubleSide;
@@ -1124,6 +1130,9 @@ let shopProxy = null;
 let shopInteraction = null;
 let hoseHeld = false;
 let pouring = false;
+const HOSE_TUTORIAL_HINT_KEY = 'beton_tutorial_hose_hint_seen_v1';
+const HOSE_FIRST_PICKUP_KEY = 'beton_hose_first_pickup_v1';
+let hoseHeldAtLeastOnce = localStorage.getItem(HOSE_FIRST_PICKUP_KEY) === '1';
 const hoseAnchorFallback = new THREE.Vector3();
 let hoseAnchorFallbackValid = false;
 
@@ -6969,10 +6978,10 @@ const handWorldPos = new THREE.Vector3();
 const handWorldQuat = new THREE.Quaternion();
 const cameraWorldQuatInv = new THREE.Quaternion();
 const localHandQuat = new THREE.Quaternion();
-function followBoneWithProp(holder, bone, offset, rotOffset) {
+function followBoneWithProp(holder, bone, offset, rotOffset, orientationBone = bone) {
   if (!holder || !bone) return;
   bone.getWorldPosition(handWorldPos);
-  bone.getWorldQuaternion(handWorldQuat);
+  (orientationBone || bone).getWorldQuaternion(handWorldQuat);
   camera.worldToLocal(handWorldPos);
   camera.getWorldQuaternion(cameraWorldQuatInv).invert();
   localHandQuat.copy(cameraWorldQuatInv).multiply(handWorldQuat);
@@ -6983,7 +6992,7 @@ function followBoneWithProp(holder, bone, offset, rotOffset) {
 const PROP_DEFAULTS = {
   // v51.70: exact final values exported after the user's manual Blender placement.
   // Cigarette uses the v51.69 PROP-aware export; cans use the final GRIP exports.
-  cigarette: { pos:[-0.022603,0.024538,-0.387868], rot:[0.059999,-1.47,-0.139999] },
+  cigarette: { pos:[0.006,0.010,0.014], rot:[0.059999,-1.47,-0.139999] },
   lighter:   { pos:[-.010,.012,.028], rot:[0,Math.PI/2,-Math.PI/2] },
   energy:    { pos:[-0.010038,0.034809,-0.10974], rot:[0.58435,-1.925996,0.824049] },
   beer:      { pos:[-0.018673,0.044952,-0.115111], rot:[-0.516996,1.929938,1.121659] },
@@ -7102,6 +7111,17 @@ if (localStorage.getItem('beton_prop_grip_final_v5170') !== '1') {
     propConfigs[name].quat.setFromEuler(propConfigs[name].euler);
   }
   localStorage.setItem('beton_prop_grip_final_v5170', '1');
+}
+
+// v51.80: the old cigarette grip sat almost 39 cm behind the hand. Anchor the
+// prop at the index-finger base and discard that stale production offset once.
+if (localStorage.getItem('beton_cigarette_grip_v5180') !== '1') {
+  localStorage.removeItem('beton_prop_cigarette');
+  const d = PROP_DEFAULTS.cigarette;
+  propConfigs.cigarette.pos.set(...d.pos);
+  propConfigs.cigarette.euler.set(...d.rot);
+  propConfigs.cigarette.quat.setFromEuler(propConfigs.cigarette.euler);
+  localStorage.setItem('beton_cigarette_grip_v5180', '1');
 }
 
 // v0.48: discard stale broken rake transforms from older localStorage.
@@ -7232,7 +7252,7 @@ async function loadArmsViewModel() {
     armsRig.add(character);
     rightHandBone = findBone(character, 'RightHand');
     leftHandBone = findBone(character, 'LeftHand');
-    rightIndexBone = findBone(character, 'RightHandIndex2') || findBone(character, 'RightHandIndex1') || rightHandBone;
+    rightIndexBone = findBone(character, 'RightHandIndex1') || findBone(character, 'RightHandIndex2') || rightHandBone;
     rightUpperArmBone = findBone(character, 'RightArm');
     rightForeArmBone = findBone(character, 'RightForeArm');
     leftUpperArmBone = findBone(character, 'LeftArm');
@@ -7663,6 +7683,17 @@ function enterSite() {
     locked = true;
     requestImmersiveMode();
   } else requestMouseLock();
+
+  // First-session objective. Mark it immediately so a refresh cannot repeat it;
+  // the hose itself remains highlighted until it has actually been picked up.
+  if (localStorage.getItem(HOSE_TUTORIAL_HINT_KEY) !== '1') {
+    localStorage.setItem(HOSE_TUTORIAL_HINT_KEY, '1');
+    setTimeout(() => {
+      if (started) {
+        showToast('ВОЗЬМИТЕ В РУКИ ШЛАНГ. ЕГО МОЖНО НАЙТИ НА СТРОЙПЛОЩАДКЕ.', 6.2);
+      }
+    }, 850);
+  }
 }
 startBtn.addEventListener('click', enterSite);
 renderer.domElement.addEventListener('click', () => { if (!TOUCH_DEVICE && started && !locked && !shopOpen && !resultOpen && !dialogueOpen) requestMouseLock(); });
@@ -8010,14 +8041,14 @@ function moveAxis(dx, dz) {
   const nz = playerPos.z + dz;
   if (!blocked(playerPos.x, nz)) playerPos.z = nz;
 }
-function showToast(t) {
+function showToast(t, duration = 2.2) {
   toastEl.textContent = t;
   toastEl.classList.add('show');
   if (mobileToastEl) {
     mobileToastEl.textContent = t;
     mobileToastEl.classList.add('show');
   }
-  toastTimer = 2.2;
+  toastTimer = duration;
 }
 
 let dialogueOpen = false;
@@ -8034,29 +8065,29 @@ const DIALOGUE_NAMES = {
 
 const DIALOGUE_SKINS = {
   pavel: {
-    portrait: './assets/dialogue_v5/pavel.webp',
-    paint: null,
+    portrait: './assets/dialogue_v2/pavel.webp',
+    paint: './assets/dialogue_v3/paint_pavel.png',
     accent: '#5f8fe6',
     accentDark: '#2b5ca8',
     accentSoft: 'rgba(95,143,230,.24)',
   },
   mandarin: {
-    portrait: './assets/dialogue_v5/serega.webp',
-    paint: null,
+    portrait: './assets/dialogue_v3/serega.webp',
+    paint: './assets/dialogue_v3/paint_serega.png',
     accent: '#ef8a34',
     accentDark: '#9f4e19',
     accentSoft: 'rgba(239,138,52,.25)',
   },
   george: {
-    portrait: './assets/dialogue_v5/george.webp',
-    paint: null,
+    portrait: './assets/dialogue_v3/george.webp',
+    paint: './assets/dialogue_v3/paint_george.png',
     accent: '#4ea9d8',
     accentDark: '#23698e',
     accentSoft: 'rgba(78,169,216,.24)',
   },
   baba: {
-    portrait: './assets/dialogue_v5/baba.webp',
-    paint: null,
+    portrait: './assets/dialogue_v3/baba.webp',
+    paint: './assets/dialogue_v3/paint_baba.png',
     accent: '#e4c14a',
     accentDark: '#997c1a',
     accentSoft: 'rgba(228,193,74,.24)',
@@ -8808,7 +8839,15 @@ function updateFirstPersonProps(dt) {
 
   // Props follow the procedurally posed hands/fingers.
   if (specialMode === 'smoke' && cigaretteProp) {
-    followBoneWithProp(cigaretteVM, rightHandBone || rightIndexBone, propConfigs.cigarette.pos, propConfigs.cigarette.quat);
+    // Position at the finger base, but preserve the authored orientation relative
+    // to the palm. This keeps the cigarette between the fingers instead of floating.
+    followBoneWithProp(
+      cigaretteVM,
+      rightIndexBone || rightHandBone,
+      propConfigs.cigarette.pos,
+      propConfigs.cigarette.quat,
+      rightHandBone || rightIndexBone,
+    );
     if (lighterProp && lighterVM.visible) {
       followBoneWithProp(lighterVM, leftHandBone, propConfigs.lighter.pos, propConfigs.lighter.quat);
     }
@@ -8856,6 +8895,11 @@ function interact() {
         : 'Шланг отпущен.');
     } else {
       hoseHeld = true;
+      if (!hoseHeldAtLeastOnce) {
+        hoseHeldAtLeastOnce = true;
+        localStorage.setItem(HOSE_FIRST_PICKUP_KEY, '1');
+        hoseOutline.visible = false;
+      }
       if (hoseInteraction) hoseInteraction.text = pouring
         ? 'E — бросить шланг · ЛКМ — выключить бетон'
         : 'E — бросить шланг · ЛКМ — включить бетон';
@@ -8985,8 +9029,8 @@ function updateMobileRenderBudget(dt){
   if(mobilePerfTimer<2.5)return;
   const fps=mobileFpsFrames/Math.max(.001,mobileFpsAccum);
   let next=mobileRenderScale;
-  if(fps<44) next=Math.max(MOBILE_DPR_MIN,mobileRenderScale-.08);
-  else if(fps>57) next=Math.min(Math.min(devicePixelRatio,MOBILE_DPR_MAX),mobileRenderScale+.045);
+  if(fps<42) next=Math.max(MOBILE_DPR_MIN,mobileRenderScale-.06);
+  else if(fps>54) next=Math.min(Math.min(devicePixelRatio,MOBILE_DPR_MAX),mobileRenderScale+.04);
   if(Math.abs(next-mobileRenderScale)>.001){
     mobileRenderScale=next;
     renderer.setPixelRatio(Math.min(devicePixelRatio,mobileRenderScale));
@@ -9075,8 +9119,9 @@ function loop() {
       sceneMissingTimer = 0;
     }
     const it = nearestInteractive();
-    // Selection flow: look at hose -> hose outline; pick it up -> active pour map outline.
-    hoseOutline.visible = !!(it && it.kind === 'hose' && !hoseHeld && hoseGroup.visible);
+    // Beginner guide: the hose glows continuously until the first successful
+    // pickup. Once collected, it never glows again — including after drops/QTE.
+    hoseOutline.visible = !hoseHeldAtLeastOnce && !hoseHeld && hoseGroup.visible;
     if (hoseOutline.visible) {
       const pulse = .5 + .5 * Math.sin(performance.now() * .006);
       hoseOutlineMat.uniforms.uOpacity.value = .72 + pulse * .24;
