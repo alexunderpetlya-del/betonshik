@@ -162,7 +162,7 @@ function buildMobileDebugReport() {
     else if (gl) glInfo = `webgl: ${gl.getParameter(gl.VERSION)}`;
   } catch (_) {}
   return [
-    'BETONSHCHIK MOBILE DEBUG v51.78',
+    'BETONSHCHIK MOBILE DEBUG v51.79',
     `safe=${MOBILE_SAFE_MODE} scene=${FINAL_SCENE_URL}`,
     `screen=${innerWidth}x${innerHeight} dpr=${devicePixelRatio}`,
     `ua=${navigator.userAgent}`,
@@ -4143,17 +4143,19 @@ function setupPlayerSpawn(root) {
   }
   spawn.updateWorldMatrix(true, true);
 
-  // The plane pivot is authored at the intended feet position.
-  // Blender +Y is glTF/Three -Z, and yaw=0 in this FPS looks down Three -Z.
+  // The plane pivot is authored at the intended feet position. The exported
+  // marker has no useful rotation, so face the actual construction yard
+  // instead of forcing yaw=0 (which points out of the map from this spawn).
   const p = spawn.getWorldPosition(new THREE.Vector3());
   playerPos.set(p.x, 0, p.z);
   authoredSpawnXZ.set(p.x, p.z);
   authoredSpawnReady = true;
-  yaw = 0;
+  const initialLookTarget = new THREE.Vector2(0, -6);
+  yaw = Math.atan2(p.x - initialLookTarget.x, p.z - initialLookTarget.y);
   pitch = 0;
   spawn.visible = false;
   syncCameraToPlayer();
-  console.log('PLAYER SPAWN FROM BLENDER:', p, 'yaw=0 => Blender +Y');
+  console.log('PLAYER SPAWN FROM BLENDER:', p, 'facing construction yard, yaw=', yaw);
 }
 
 function removeInteraction(it) {
