@@ -2584,9 +2584,3 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.86)!important}
     width:min(35vw,470px)!important;
   }
 }
-
-
-/* v51.74 — pit rendering uses desktop parity in main.js; v51.72 mobile UI retained. */
-
-
-/* v51.75 — unified pit geometry; mobile UI from v51.72 retained. */
