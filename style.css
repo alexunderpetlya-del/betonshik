@@ -4312,3 +4312,29 @@ body.dialogueActive #mobileHud>:not(#mobileMoney){
   .dialogueRewardBadge::after,.dialogueRewardFlyer::after{display:none!important}
   .dialogueOption.isRewardSelected .dialogueRewardBadge{animation:none!important}
 }
+
+/* ============================================================
+   v51.89 — approved precomposed NPC portrait cards
+   Серёга, Джордж and Баба Капа now use one authored square image
+   containing both the portrait and its correctly cropped brush backdrop.
+   Keeping the two parts together prevents independent scale/crop drift.
+   ============================================================ */
+.dialogueLayer[data-npc="mandarin"] .dialoguePaint,
+.dialogueLayer[data-npc="george"] .dialoguePaint,
+.dialogueLayer[data-npc="baba"] .dialoguePaint{
+  display:none!important;
+}
+.dialogueLayer[data-npc="mandarin"] .dialoguePortrait,
+.dialogueLayer[data-npc="george"] .dialoguePortrait,
+.dialogueLayer[data-npc="baba"] .dialoguePortrait{
+  inset:0!important;
+  width:100%!important;
+  height:100%!important;
+  max-width:none!important;
+  max-height:none!important;
+  object-fit:contain!important;
+  object-position:center!important;
+  transform:none!important;
+  transform-origin:center!important;
+  filter:none!important;
+}

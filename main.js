@@ -199,7 +199,7 @@ function buildMobileDebugReport() {
     else if (gl) glInfo = `webgl: ${gl.getParameter(gl.VERSION)}`;
   } catch (_) {}
   return [
-    'BETONSHCHIK MOBILE DEBUG v51.87',
+    'BETONSHCHIK MOBILE DEBUG v51.89',
     `safe=${MOBILE_SAFE_MODE} scene=${FINAL_SCENE_URL}`,
     `screen=${innerWidth}x${innerHeight} dpr=${devicePixelRatio}`,
     `staticGeomCPUReleased=${(mobileStaticGeometryReleasedBytes / (1024 * 1024)).toFixed(1)} MiB`,
@@ -1650,6 +1650,42 @@ const pitBottomMat = new THREE.MeshStandardMaterial({
   roughness: 1.0, side: THREE.DoubleSide,
   polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2
 });
+
+// Transparent tied-rebar layer at the physical bottom of every pour bay.
+// It is deliberately a visual-only plane: player grounding continues to use
+// zone.bottomY, it is never registered as a collider and raycasts ignore it.
+const rebarLayerMat = new THREE.MeshBasicMaterial({
+  color: 0xffffff,
+  transparent: true,
+  opacity: 0,
+  alphaTest: .07,
+  depthTest: true,
+  depthWrite: true,
+  side: THREE.DoubleSide,
+  toneMapped: true,
+  polygonOffset: true,
+  polygonOffsetFactor: -3,
+  polygonOffsetUnits: -3,
+});
+
+new THREE.TextureLoader().load(
+  './assets/textures/rebar_grid_transparent.webp',
+  texture => {
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    // Four repeats give a readable reinforcement pitch without giant bars.
+    texture.repeat.set(4, 4);
+    texture.anisotropy = Math.min(TOUCH_DEVICE ? 4 : 8, renderer.capabilities.getMaxAnisotropy());
+    rebarLayerMat.map = texture;
+    rebarLayerMat.opacity = TOUCH_DEVICE ? .92 : .97;
+    rebarLayerMat.needsUpdate = true;
+    mobileDebugLog('rebar texture ready');
+  },
+  undefined,
+  () => mobileDebugLog('rebar texture missing; layers kept hidden')
+);
+
 const wetConcreteMat = new THREE.MeshStandardMaterial({
   color: 0x626a67,
   roughness: .34,
@@ -1675,6 +1711,33 @@ function addPitBox(name, x, y, z, w, h, d, mat) {
   m.renderOrder = TOUCH_DEVICE ? 2 : 0;
   pitGroup.add(m);
   return m;
+}
+
+function addPitRebarLayer(zone, visualBottomY) {
+  const inset = .10;
+  const geometry = new THREE.PlaneGeometry(
+    Math.max(.10, zone.w - inset * 2),
+    Math.max(.10, zone.d - inset * 2)
+  );
+  geometry.rotateX(-Math.PI * .5);
+
+  const mesh = new THREE.Mesh(geometry, rebarLayerMat);
+  mesh.name = `PIT_${zone.id}_REBAR_LAYER`;
+  mesh.position.set(
+    (zone.minX + zone.maxX) * .5,
+    visualBottomY + .006,
+    (zone.minZ + zone.maxZ) * .5
+  );
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  mesh.frustumCulled = false;
+  mesh.renderOrder = TOUCH_DEVICE ? 4 : 1;
+  mesh.userData.visualOnly = true;
+  mesh.userData.noCollision = true;
+  mesh.raycast = () => {};
+  pitGroup.add(mesh);
+  zone.rebarLayer = mesh;
+  return mesh;
 }
 
 // Build the structural top slab as a tiled grid.
@@ -1794,6 +1857,7 @@ for (const zone of POUR_ZONES) {
     zone.w, .05, zone.d,
     pitBottomMat
   );
+  addPitRebarLayer(zone, visualPitTopY);
 
   // Leave a tiny top gap so the pit wall and slab edge never become coplanar.
   const wallTopGap = .008;
@@ -8986,22 +9050,24 @@ const DIALOGUE_SKINS = {
     accentSoft: 'rgba(79,158,232,.24)',
   },
   mandarin: {
-    portrait: './assets/dialogue_v6/serega.webp',
-    paint: './assets/dialogue_backgrounds/serega_construction.webp',
+    // The supplied square art already contains the correctly cropped
+    // construction brush behind the portrait.
+    portrait: './assets/dialogue_v7/serega_card.webp',
+    paint: null,
     accent: '#ef8a34',
     accentDark: '#9f4e19',
     accentSoft: 'rgba(239,138,52,.25)',
   },
   george: {
-    portrait: './assets/dialogue_v6/george.webp',
-    paint: './assets/dialogue_backgrounds/george_flag_leaves.webp',
+    portrait: './assets/dialogue_v7/george_card.webp',
+    paint: null,
     accent: '#4ea9d8',
     accentDark: '#23698e',
     accentSoft: 'rgba(78,169,216,.24)',
   },
   baba: {
-    portrait: './assets/dialogue_v6/baba.webp',
-    paint: './assets/dialogue_backgrounds/baba_yarn_flowers.webp',
+    portrait: './assets/dialogue_v7/baba_card.webp',
+    paint: null,
     accent: '#e4c14a',
     accentDark: '#997c1a',
     accentSoft: 'rgba(228,193,74,.24)',
