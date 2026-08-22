@@ -199,7 +199,7 @@ function buildMobileDebugReport() {
     else if (gl) glInfo = `webgl: ${gl.getParameter(gl.VERSION)}`;
   } catch (_) {}
   return [
-    'BETONSHCHIK MOBILE DEBUG v51.89',
+    'BETONSHCHIK MOBILE DEBUG v51.92',
     `safe=${MOBILE_SAFE_MODE} scene=${FINAL_SCENE_URL}`,
     `screen=${innerWidth}x${innerHeight} dpr=${devicePixelRatio}`,
     `staticGeomCPUReleased=${(mobileStaticGeometryReleasedBytes / (1024 * 1024)).toFixed(1)} MiB`,
@@ -803,11 +803,11 @@ function repaintConstructionVehicles(root) {
   // meshes, so colour the actual parts instead.
   const mixerRoles = {
     'Geom3D':'orange',          // mixer cab shell
-    'Geom3D.001':'orange',      // mixer drum + main painted body
+    'Geom3D.001':'orange2',     // mixer drum stripe / secondary shell
     'Geom3D.002':'rubber',      // tyres
     'Geom3D.003':'dark',        // chassis
     'Geom3D.004':'metal',       // frame / metal fittings
-    'Geom3D.005':'cream',       // light panels
+    'Geom3D.005':'orange',      // broad white export shell: cab + mixer drum
     'Geom3D.006':'metal2',      // mechanical parts
     'Geom3D.007':'metal2',
     'Geom3D.008':'metal',
@@ -834,7 +834,7 @@ function repaintConstructionVehicles(root) {
     'Geom3D.031':'orange2',
     'Geom3D.032':'yellow',
     'Geom3D.033':'yellow',
-    'Geom3D.034':'cream',
+    'Geom3D.034':'orange',      // broad upper pump housing
     'Geom3D.035':'dark',
     'Geom3D.036':'dark',
     'Geom3D.037':'orange',      // source was purple; painted structural part
@@ -846,13 +846,13 @@ function repaintConstructionVehicles(root) {
     'Geom3D.043':'dark',
     'Geom3D.044':'dark',
     'Geom3D.045':'metal2',
-    'Geom3D.046':'cream',
+    'Geom3D.046':'orange',      // broad white pump body export shell
     'Geom3D.047':'orange2',     // rear machinery body / painted structure
     'Geom3D.048':'dark',
     'Geom3D.049':'dark',
     'Geom3D.050':'dark',
     'Geom3D.051':'metal2',
-    'Geom3D.052':'cream',
+    'Geom3D.052':'orange2',     // long light pump cover
     'Geom3D.053':'orange',      // long pump body
     'Geom3D.054':'glass',
     'Geom3D.055':'red',
@@ -883,6 +883,18 @@ function repaintConstructionVehicles(root) {
   const mixerTruck = root.getObjectByName('Concrete Mixer Truck') || root.getObjectByName('Mixer Truck');
   const pumpTruck = root.getObjectByName('Hoze Truck');
   const boom = root.getObjectByName('Boom 1');
+
+  // FINAL contains a second, single-mesh copy of the whole pump truck. It uses
+  // an unrelated concrete texture and sits directly on top of the proper
+  // separated CAD parts, which produced a white body and a hard UV split down
+  // the middle. Keep the detailed parts and remove only that bad overlay.
+  const pumpTextureOverlay = root.getObjectByName('Geom3D_Hoze Truck');
+  if (pumpTextureOverlay) {
+    pumpTextureOverlay.visible = false;
+    pumpTextureOverlay.userData = pumpTextureOverlay.userData || {};
+    pumpTextureOverlay.userData.noCollision = true;
+    console.log('[SCENE] hidden duplicated textured pump overlay:', pumpTextureOverlay.name);
+  }
 
   paintNamedVehicleMeshes(mixerTruck, mixerRoles, palette, 'mixer');
   paintNamedVehicleMeshes(pumpTruck, pumpRoles, palette, 'pump');
@@ -1544,6 +1556,29 @@ function zoneAt(x, z) {
   }
   return null;
 }
+
+// Rake and hose contact can land a few centimetres onto the inner wall/lip
+// even though the visible tool is clearly inside the recess. Resolve that
+// narrow seam to the nearest bay instead of creating a broken strip or spill.
+function zoneNearEdge(x, z, padding = .20, preferredZone = null) {
+  let best = null;
+  let bestD2 = padding * padding;
+  const candidates = preferredZone ? [preferredZone] : POUR_ZONES;
+
+  for (const zone of candidates) {
+    if (!zone) continue;
+    const nearestX = THREE.MathUtils.clamp(x, zone.minX, zone.maxX);
+    const nearestZ = THREE.MathUtils.clamp(z, zone.minZ, zone.maxZ);
+    const dx = x - nearestX;
+    const dz = z - nearestZ;
+    const d2 = dx * dx + dz * dz;
+    if (d2 <= bestD2) {
+      bestD2 = d2;
+      best = zone;
+    }
+  }
+  return best;
+}
 function insidePit(x, z) { return zoneAt(x, z) !== null; }
 function insideSlab(x, z) {
   return x >= SLAB.minX && x <= SLAB.maxX && z >= SLAB.minZ && z <= SLAB.maxZ;
@@ -1646,7 +1681,8 @@ const pitWallMat = new THREE.MeshStandardMaterial({
   polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1
 });
 const pitBottomMat = new THREE.MeshStandardMaterial({
-  color: TOUCH_DEVICE ? 0x343936 : 0x626560,
+  // Light sub-base gives the dark steel enough contrast on a phone display.
+  color: TOUCH_DEVICE ? 0x777970 : 0x777a73,
   roughness: 1.0, side: THREE.DoubleSide,
   polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2
 });
@@ -1654,37 +1690,85 @@ const pitBottomMat = new THREE.MeshStandardMaterial({
 // Transparent tied-rebar layer at the physical bottom of every pour bay.
 // It is deliberately a visual-only plane: player grounding continues to use
 // zone.bottomY, it is never registered as a collider and raycasts ignore it.
+function createFallbackRebarTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, 256, 256);
+  ctx.strokeStyle = '#2b2927';
+  ctx.lineWidth = 12;
+  ctx.lineCap = 'round';
+  for (const p of [32, 96, 160, 224]) {
+    ctx.beginPath(); ctx.moveTo(p, -12); ctx.lineTo(p, 268); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-12, p); ctx.lineTo(268, p); ctx.stroke();
+  }
+  ctx.strokeStyle = '#171615';
+  ctx.lineWidth = 3;
+  for (const x of [32, 96, 160, 224]) {
+    for (const y of [32, 96, 160, 224]) {
+      ctx.beginPath();
+      ctx.arc(x, y, 13, -.7, Math.PI + .8);
+      ctx.stroke();
+    }
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(3, 3);
+  return texture;
+}
+
 const rebarLayerMat = new THREE.MeshBasicMaterial({
   color: 0xffffff,
+  map: createFallbackRebarTexture(),
   transparent: true,
-  opacity: 0,
-  alphaTest: .07,
+  opacity: .98,
+  alphaTest: .055,
   depthTest: true,
-  depthWrite: true,
+  depthWrite: false,
   side: THREE.DoubleSide,
   toneMapped: true,
   polygonOffset: true,
-  polygonOffsetFactor: -3,
-  polygonOffsetUnits: -3,
+  polygonOffsetFactor: -7,
+  polygonOffsetUnits: -7,
 });
 
-new THREE.TextureLoader().load(
-  './assets/textures/rebar_grid_transparent.webp',
-  texture => {
+const rebarTexturePaths = TOUCH_DEVICE
+  ? [
+      './assets/final_mobile_textures/rebar_grid_transparent.webp',
+      './assets/final_mobile_safe_textures/rebar_grid_transparent.webp',
+      './assets/textures/rebar_grid_transparent.webp',
+    ]
+  : [
+      './assets/final_pc_textures/rebar_grid_transparent.webp',
+      './assets/textures/rebar_grid_transparent.webp',
+    ];
+
+function loadRebarTexture(pathIndex = 0) {
+  if (pathIndex >= rebarTexturePaths.length) {
+    mobileDebugLog('rebar texture missing; procedural fallback active');
+    return;
+  }
+
+  const path = rebarTexturePaths[pathIndex];
+  new THREE.TextureLoader().load(path, texture => {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.wrapS = THREE.RepeatWrapping;
     texture.wrapT = THREE.RepeatWrapping;
-    // Four repeats give a readable reinforcement pitch without giant bars.
-    texture.repeat.set(4, 4);
+    // Three repeats keep the bars readable instead of aliasing into the dark
+    // bottom at mobile resolution.
+    texture.repeat.set(3, 3);
     texture.anisotropy = Math.min(TOUCH_DEVICE ? 4 : 8, renderer.capabilities.getMaxAnisotropy());
     rebarLayerMat.map = texture;
-    rebarLayerMat.opacity = TOUCH_DEVICE ? .92 : .97;
+    rebarLayerMat.opacity = .98;
     rebarLayerMat.needsUpdate = true;
-    mobileDebugLog('rebar texture ready');
-  },
-  undefined,
-  () => mobileDebugLog('rebar texture missing; layers kept hidden')
-);
+    mobileDebugLog(`rebar texture ready: ${path}`);
+  }, undefined, () => loadRebarTexture(pathIndex + 1));
+}
+
+loadRebarTexture();
 
 const wetConcreteMat = new THREE.MeshStandardMaterial({
   color: 0x626a67,
@@ -1725,13 +1809,13 @@ function addPitRebarLayer(zone, visualBottomY) {
   mesh.name = `PIT_${zone.id}_REBAR_LAYER`;
   mesh.position.set(
     (zone.minX + zone.maxX) * .5,
-    visualBottomY + .006,
+    visualBottomY + .014,
     (zone.minZ + zone.maxZ) * .5
   );
   mesh.castShadow = false;
   mesh.receiveShadow = false;
   mesh.frustumCulled = false;
-  mesh.renderOrder = TOUCH_DEVICE ? 4 : 1;
+  mesh.renderOrder = TOUCH_DEVICE ? 9 : 3;
   mesh.userData.visualOnly = true;
   mesh.userData.noCollision = true;
   mesh.raycast = () => {};
@@ -2049,7 +2133,23 @@ function refreshConcreteSurfaces() {
     for (let vr = 0; vr <= zone.rows; vr++) {
       for (let vc = 0; vc <= zone.cols; vc++) {
         const idx = vr * (zone.cols + 1) + vc;
-        const rawH = zoneVertexHeight(zone, vc, vr);
+        let rawH = zoneVertexHeight(zone, vc, vr);
+
+        // The final vertex row used to copy a single cell verbatim. Along the
+        // wall this exposed every cell transition as a jagged saw-tooth. Blend
+        // boundary vertices slightly toward the first interior row while the
+        // physical heightfield and its volume remain untouched.
+        if (zone.cols > 2 && zone.rows > 2 && (
+          vc === 0 || vc === zone.cols || vr === 0 || vr === zone.rows
+        )) {
+          const innerVC = THREE.MathUtils.clamp(vc, 1, zone.cols - 1);
+          const innerVR = THREE.MathUtils.clamp(vr, 1, zone.rows - 1);
+          rawH = THREE.MathUtils.lerp(
+            rawH,
+            zoneVertexHeight(zone, innerVC, innerVR),
+            .24
+          );
+        }
         const h = THREE.MathUtils.clamp(
           physicalAvgH + (rawH - physicalAvgH) * visualExaggeration,
           0,
@@ -2296,6 +2396,10 @@ let qteMisses = 0;
 let wastedVolume = 0;
 let concreteRelaxTimer = 0;
 let concreteVisualTimer = 0;
+const POUR_PROGRESS_KEY = 'beton_pour_progress_v2';
+let pourProgressDirty = false;
+let pourProgressSaveTimer = 0;
+let pourProgressLoading = false;
 
 const POUR_EVENT_TYPES = ['pressure', 'hose', 'pump', 'eye'];
 const POUR_EVENT_COPY = {
@@ -2367,6 +2471,7 @@ function showPourEventAlarm(zone) {
   }
   playQTEAppearAudio();
   mobileHaptic(35);
+  markPourProgressDirty();
 }
 
 function executePendingPourEvent() {
@@ -2394,6 +2499,7 @@ function executePendingPourEvent() {
     pouring = false;
     if (hoseInteraction) hoseInteraction.text = 'НАСОС СЛОМАН · ИДИ К ДЖОРДЖУ';
     showToast('НАСОС СЛОМАН · ИДИ К ДЖОРДЖУ', 5.2);
+    markPourProgressDirty();
     return;
   }
 
@@ -2426,22 +2532,23 @@ function updatePourEvents(dt) {
   if (ratio >= zone.eventThreshold) showPourEventAlarm(zone);
 }
 
+// Deliberately simple material ladder requested for settlement:
+// S/diamond = a HUD-clean 100.0%, A/gold <=105%, B/iron <=115%,
+// F/poop covers 115–125%; anything beyond the scale remains F.
 const POUR_GRADE_RULES = [
-  { grade: 'S', maxOverpour: 1.5, multiplier: 1.40, color: '#ffe28a' },
-  { grade: 'A', maxOverpour: 4.0, multiplier: 1.20, color: '#8ff0b1' },
-  { grade: 'B', maxOverpour: 8.0, multiplier: 1.00, color: '#82c8ff' },
-  { grade: 'C', maxOverpour: 15.0, multiplier: .70, color: '#ffbb72' },
-  { grade: 'F', maxOverpour: Infinity, multiplier: .35, color: '#ff6d6d' },
+  { grade: 'S', maxOverpour: .049, multiplier: 1.40, color: '#d8f4ff' },
+  { grade: 'A', maxOverpour: 5.0, multiplier: 1.15, color: '#ffe28a' },
+  { grade: 'B', maxOverpour: 15.0, multiplier: .75, color: '#b9c4cf' },
+  { grade: 'F', maxOverpour: 25.0, multiplier: .25, color: '#a96b47' },
 ];
 const BASE_ZONE_REWARD = 500;
 
 function zoneOverpourPercent(zone) {
   if (!zone) return 0;
-  // Count every cubic metre actually pumped into the bay, even when a local
-  // mound has reached its visual safety cap. Raking recovered spills still
-  // count through the live heightfield volume.
-  const judgedVolume = Math.max(zoneVolume(zone), zone.hosePouredVolume || 0);
-  return Math.max(0, judgedVolume / Math.max(.000001, zone.targetVolume) * 100 - 100);
+  // Use the same live physical volume that drives the HUD. The old hidden
+  // hosePouredVolume counter could keep counting concrete lost against a
+  // capped edge cell, so a visible 100.1% slab could incorrectly receive F.
+  return Math.max(0, zoneVolume(zone) / Math.max(.000001, zone.targetVolume) * 100 - 100);
 }
 
 function gradePourZone(zone) {
@@ -2664,6 +2771,7 @@ function addSurfaceSpillVolumeAt(
 
   if (!best) {
     createSpillClump(x, z, volumeM3, impactVX, impactVZ, impactSpeed);
+    markPourProgressDirty();
     return true;
   }
 
@@ -2683,6 +2791,7 @@ function addSurfaceSpillVolumeAt(
   best.spread = Math.min(best.spread || 1, .82);
   best.volume = newV;
   refreshSpillClump(best);
+  markPourProgressDirty();
   return true;
 }
 
@@ -2715,6 +2824,8 @@ function clearSurfaceSpills() {
 function relaxSurfaceSpills(dt) {
   if (jobState !== 'active' || !spillClumps.length) return;
 
+  let changed = false;
+
   for (const p of spillClumps) {
     if (p.volume <= .001) continue;
 
@@ -2738,6 +2849,7 @@ function relaxSurfaceSpills(dt) {
       );
       if (moved > 1e-6) {
         p.volume -= moved;
+        changed = true;
         addConcreteVolumeAt(
           nx, nz, moved,
           p.vx, p.vz,
@@ -2747,6 +2859,7 @@ function relaxSurfaceSpills(dt) {
       p.vx *= .55;
       p.vz *= .55;
     } else if (insideSlab(nx, nz) && !targetZone) {
+      if (Math.abs(nx - p.x) > 1e-5 || Math.abs(nz - p.z) > 1e-5) changed = true;
       p.x = nx;
       p.z = nz;
     } else {
@@ -2793,12 +2906,14 @@ function relaxSurfaceSpills(dt) {
       a.spread = Math.max(a.spread || 1, b.spread || 1);
       a.volume = total;
       b.volume = 0;
+      changed = true;
       refreshSpillClump(a);
       refreshSpillClump(b);
     }
   }
 
   deleteDeadSpills();
+  if (changed) markPourProgressDirty();
 }
 
 // -----------------------------
@@ -2896,10 +3011,18 @@ function depositConcreteImpact(
   );
   const r2 = radius * radius;
 
-  const minC = Math.max(0, Math.floor((cx - radius - zone.minX) / zone.cellX));
-  const maxC = Math.min(zone.cols - 1, Math.floor((cx + radius - zone.minX) / zone.cellX));
-  const minR = Math.max(0, Math.floor((cz - radius - zone.minZ) / zone.cellZ));
-  const maxR = Math.min(zone.rows - 1, Math.floor((cz + radius - zone.minZ) / zone.cellZ));
+  // Keep the numerical impact kernel inside the recess. Previously a circle
+  // centred against a wall was cut in half and the full volume was normalized
+  // into the few surviving cells, producing spikes and broken-looking seams.
+  const edgeInsetX = Math.min(radius * .68, zone.w * .45);
+  const edgeInsetZ = Math.min(radius * .68, zone.d * .45);
+  const kernelX = THREE.MathUtils.clamp(cx, zone.minX + edgeInsetX, zone.maxX - edgeInsetX);
+  const kernelZ = THREE.MathUtils.clamp(cz, zone.minZ + edgeInsetZ, zone.maxZ - edgeInsetZ);
+
+  const minC = Math.max(0, Math.floor((kernelX - radius - zone.minX) / zone.cellX));
+  const maxC = Math.min(zone.cols - 1, Math.floor((kernelX + radius - zone.minX) / zone.cellX));
+  const minR = Math.max(0, Math.floor((kernelZ - radius - zone.minZ) / zone.cellZ));
+  const maxR = Math.min(zone.rows - 1, Math.floor((kernelZ + radius - zone.minZ) / zone.cellZ));
 
   const cells = [];
   let weightSum = 0;
@@ -2908,7 +3031,7 @@ function depositConcreteImpact(
     for (let c = minC; c <= maxC; c++) {
       const x = zone.minX + (c + .5) * zone.cellX;
       const z = zone.minZ + (r + .5) * zone.cellZ;
-      const dx = x - cx, dz = z - cz;
+      const dx = x - kernelX, dz = z - kernelZ;
       const d2 = dx * dx + dz * dz;
       if (d2 > r2) continue;
 
@@ -2921,7 +3044,7 @@ function depositConcreteImpact(
   }
 
   if (!cells.length) {
-    cells.push([zoneCellAt(zone, cx, cz).index, 1]);
+    cells.push([zoneCellAt(zone, kernelX, kernelZ).index, 1]);
     weightSum = 1;
   }
 
@@ -2954,7 +3077,21 @@ function addConcreteVolumeAt(
 ) {
   if (jobState !== 'active' || volumeM3 <= 0) return false;
 
-  const zone = zoneAt(x, z);
+  let zone = zoneAt(x, z);
+  let depositX = x;
+  let depositZ = z;
+
+  // A ray/particle landing on the inner lip should feed the currently active
+  // recess, not create a thin spill exactly along its wall.
+  if (!zone) {
+    const targetZone = activePourZone();
+    const seamZone = zoneNearEdge(x, z, .18, targetZone);
+    if (seamZone) {
+      zone = seamZone;
+      depositX = THREE.MathUtils.clamp(x, zone.minX + zone.cellX * .35, zone.maxX - zone.cellX * .35);
+      depositZ = THREE.MathUtils.clamp(z, zone.minZ + zone.cellZ * .35, zone.maxZ - zone.cellZ * .35);
+    }
+  }
 
   // Keep the existing sequential job design.
   if (zone) {
@@ -2978,6 +3115,7 @@ function addConcreteVolumeAt(
       );
     }
     wastedVolume += volumeM3;
+    markPourProgressDirty();
     return false;
   }
 
@@ -2985,14 +3123,17 @@ function addConcreteVolumeAt(
 
   const changed = depositConcreteImpact(
     zone,
-    x, z,
+    depositX, depositZ,
     volumeM3,
     impactVX,
     impactVZ,
     impactSpeed
   );
 
-  if (changed) evaluateJob();
+  if (changed) {
+    markPourProgressDirty();
+    evaluateJob();
+  }
   return changed;
 }
 
@@ -3156,7 +3297,10 @@ function relaxZoneConcrete(zone, step) {
     changed = true;
   }
 
-  if (changed) markZoneDirty(zone);
+  if (changed) {
+    markZoneDirty(zone);
+    markPourProgressDirty();
+  }
 }
 
 const CONCRETE_SOLVER_DT = 1 / 30;
@@ -3267,7 +3411,9 @@ function updateHoseSplashes(dt) {
 // Pooled rake grooves sit a few millimetres above the wet heightfield and are
 // recycled after several seconds. They make each real sweep visible without
 // adding permanent geometry or textures.
-const RAKE_MARK_MAX = TOUCH_DEVICE ? 54 : 120;
+// v51.90: visual grooves/decals were removed at the player's request.
+// Physical leveling and rake coverage tracking remain unchanged.
+const RAKE_MARK_MAX = 0;
 const rakeMarkGeom = new THREE.PlaneGeometry(.032, .62);
 const rakeMarkMat = new THREE.MeshBasicMaterial({
   color: 0x303633,
@@ -3836,8 +3982,21 @@ function levelConcreteAtPoint(px, pz, step, moveDirX, moveDirZ) {
   // ------------------------------------------------
   // B) CONTINUOUS ARCADE LEVELING INSIDE A BAY
   // ------------------------------------------------
-  const zone = zoneAt(px, pz);
+  const zone = zoneAt(px, pz) || zoneNearEdge(px, pz, .62, activePourZone());
   if (!zone) return didSomething;
+
+  // Clamp only the simulation brush centre. The visible rake remains exactly
+  // under the player's aim, while its useful area now reaches the wall cells.
+  const workX = THREE.MathUtils.clamp(
+    px,
+    zone.minX + zone.cellX * .35,
+    zone.maxX - zone.cellX * .35
+  );
+  const workZ = THREE.MathUtils.clamp(
+    pz,
+    zone.minZ + zone.cellZ * .35,
+    zone.maxZ - zone.cellZ * .35
+  );
 
   const brushRadius = 1.55;
   const brushR2 = brushRadius * brushRadius;
@@ -3849,8 +4008,8 @@ function levelConcreteAtPoint(px, pz, step, moveDirX, moveDirZ) {
     for (let c = 0; c < zone.cols; c++) {
       const x = zone.minX + (c + .5) * zone.cellX;
       const z = zone.minZ + (r + .5) * zone.cellZ;
-      const dx = x - px;
-      const dz = z - pz;
+      const dx = x - workX;
+      const dz = z - workZ;
       const d2 = dx * dx + dz * dz;
       if (d2 > brushR2) continue;
 
@@ -4023,11 +4182,7 @@ function rakeContinuousSweepStep(step) {
   rakeSweepPrevPoint.copy(rakeSweepNowPoint);
 
   if (changed) {
-    if (travel > .018 && rakeMarkCooldown <= 0) {
-      spawnRakeMarks(rakeSweepNowPoint.x, rakeSweepNowPoint.z, dirX, dirZ);
-      rakeMarkCooldown = TOUCH_DEVICE ? .14 : .10;
-    }
-
+    markPourProgressDirty();
     // The supplied rake sample is ~0.6 s. Re-trigger only while the tool is
     // genuinely travelling through concrete, with enough spacing to avoid a
     // machine-gun repetition.
@@ -4145,8 +4300,10 @@ function endQTE(success, perfect = false) {
     } else {
       showToast('ДАВЛЕНИЕ СТАБИЛЬНО · QTE OK');
     }
+    markPourProgressDirty();
   } else {
     qteMisses++;
+    markPourProgressDirty();
     playHoseSlipAudio();
 
     // The pump does NOT magically switch off when the hose is ripped out of
@@ -4485,6 +4642,7 @@ function evaluateJob() {
   let settlementNoticeShown = false;
   if (currentZone && zoneReadyForSequence(currentZone) && !currentZone.readyNotified) {
     currentZone.readyNotified = true;
+    markPourProgressDirty();
     settlementNoticeShown = true;
     preloadSettlementRankSheet();
     showToast(`КАРТА №${currentZone.id} ЗАЛИТА · ДОСТУПЕН РАСЧЁТ — ПОДОЙДИ К ПАШЕ`, 5.4);
@@ -4497,6 +4655,7 @@ function evaluateJob() {
     }
   }
   if (activePourZoneIndex !== beforeAdvance) {
+    markPourProgressDirty();
     outlinedPourZoneId = -1;
     if (!settlementNoticeShown && activePourZoneIndex < POUR_ZONES.length) {
       showToast(`КАРТА №${beforeAdvance + 1} ВЫРОВНЕНА · ТЕПЕРЬ №${activePourZoneIndex + 1}`);
@@ -4514,6 +4673,7 @@ function evaluateJob() {
   const spillLeft = surfaceSpillVolume();
   if (allReady && spillLeft <= .015) {
     jobState = 'ready';
+    markPourProgressDirty();
     pouring = false;
     hoseHeld = false;
     if (hoseInteraction) hoseInteraction.text = 'E — взять шланг';
@@ -4536,11 +4696,13 @@ function finishJob(success, failedZone = null) {
 
   if (success) {
     jobState = 'ready';
+    markPourProgressDirty();
     showToast('ЗАЛИВКА ГОТОВА. СДАЙ ОБЪЕКТ ПАВЛУ ПЕТРОВИЧУ.');
     return;
   }
 
   jobState = 'failed';
+  markPourProgressDirty();
   openJobResult(
     'ПЕРЕЛИВ',
     `Сектор ${failedZone ? failedZone.id : '?'} перелит выше допуска. Переделываешь весь объект.`,
@@ -8975,13 +9137,13 @@ const settlementCameraState = {
 };
 
 const SETTLEMENT_GRADE_CAPTIONS = {
-  S: 'ИДЕАЛЬНАЯ ЗАЛИВКА',
-  A: 'ОТЛИЧНАЯ РАБОТА',
-  B: 'ХОРОШАЯ РАБОТА',
+  S: 'АЛМАЗ · РОВНО 100%',
+  A: 'ЗОЛОТО · ДО 105%',
+  B: 'ЖЕЛЕЗО · ДО 115%',
   C: 'ЕСТЬ ЗАМЕЧАНИЯ',
   D: 'СЛАБАЯ РАБОТА',
   E: 'ПЛОХАЯ РАБОТА',
-  F: 'ПРОВАЛ ЗАЛИВКИ',
+  F: 'ГОВНО · ПЕРЕЛИВ',
 };
 
 const BOOT_TIER_NAMES = ['Обычные', 'Сапоги новичка', 'Сапоги бетонщика', 'Мышеходы'];
@@ -9021,8 +9183,211 @@ function closeCharacterStats() {
   characterStatsEl?.classList.add('hidden');
   document.body.classList.remove('statsActive');
   saveCareerStats();
+  markPourProgressDirty();
+  savePourProgress(true);
   requestMouseLock();
 }
+
+function markPourProgressDirty() {
+  if (pourProgressLoading) return;
+  pourProgressDirty = true;
+}
+
+function serialisePourZone(zone) {
+  return {
+    fill: Array.from(zone.fill, height => Math.round(
+      THREE.MathUtils.clamp(Number(height) || 0, 0, zone.maxH) * 10000
+    )),
+    rakeTouched: Array.from(zone.rakeTouched, value => value ? 1 : 0),
+    levelPrompted: Boolean(zone.levelPrompted),
+    readyNotified: Boolean(zone.readyNotified),
+    settledGrade: typeof zone.settledGrade === 'string' ? zone.settledGrade : null,
+    eventType: POUR_EVENT_TYPES.includes(zone.eventType) ? zone.eventType : null,
+    eventThreshold: THREE.MathUtils.clamp(Number(zone.eventThreshold) || .4, .12, .88),
+    eventTriggered: Boolean(zone.eventTriggered),
+  };
+}
+
+function savePourProgress(force = false) {
+  if ((!pourProgressDirty && !force) || pourProgressLoading) return;
+
+  try {
+    const payload = {
+      version: 2,
+      savedAt: Date.now(),
+      jobState: ['active', 'ready', 'accepted', 'failed'].includes(jobState)
+        ? jobState
+        : 'active',
+      activePourZoneIndex: THREE.MathUtils.clamp(
+        Math.round(Number(activePourZoneIndex) || 0),
+        0,
+        POUR_ZONES.length
+      ),
+      paidPourZoneCount: THREE.MathUtils.clamp(
+        Math.round(Number(paidPourZoneCount) || 0),
+        0,
+        POUR_ZONES.length
+      ),
+      qteHits: Math.max(0, Math.round(Number(qteHits) || 0)),
+      qteMisses: Math.max(0, Math.round(Number(qteMisses) || 0)),
+      qtePerfects: Math.max(0, Math.round(Number(qtePerfects) || 0)),
+      wastedVolume: Math.max(0, Number(wastedVolume) || 0),
+      pumpBroken: Boolean(pumpBroken),
+      zones: POUR_ZONES.map(serialisePourZone),
+      spills: spillClumps
+        .filter(spill => spill.volume > .001)
+        .slice(0, SPILL_CLUMP_MAX)
+        .map(spill => ({
+          x: Number(spill.x) || 0,
+          z: Number(spill.z) || 0,
+          volume: Math.max(0, Number(spill.volume) || 0),
+          vx: THREE.MathUtils.clamp(Number(spill.vx) || 0, -.75, .75),
+          vz: THREE.MathUtils.clamp(Number(spill.vz) || 0, -.75, .75),
+          mobility: THREE.MathUtils.clamp(Number(spill.mobility) || .18, .18, 1),
+          spread: THREE.MathUtils.clamp(Number(spill.spread) || 1, .68, 1.35),
+          age: Math.max(0, Number(spill.age) || 0),
+        })),
+    };
+
+    localStorage.setItem(POUR_PROGRESS_KEY, JSON.stringify(payload));
+    pourProgressDirty = false;
+    pourProgressSaveTimer = 0;
+  } catch (error) {
+    console.warn('Pour progress save failed', error);
+  }
+}
+
+function loadPourProgress() {
+  let saved;
+  try {
+    saved = JSON.parse(localStorage.getItem(POUR_PROGRESS_KEY) || 'null');
+  } catch (error) {
+    console.warn('Pour progress parse failed', error);
+    return false;
+  }
+
+  if (!saved || saved.version !== 2 || !Array.isArray(saved.zones)) return false;
+
+  pourProgressLoading = true;
+  try {
+    for (let zoneIndex = 0; zoneIndex < POUR_ZONES.length; zoneIndex++) {
+      const zone = POUR_ZONES[zoneIndex];
+      const source = saved.zones[zoneIndex] || {};
+      zone.fill.fill(0);
+      zone.mobility.fill(0);
+      zone.velX.fill(0);
+      zone.velZ.fill(0);
+      zone.flowDelta.fill(0);
+      zone.flowBudget.fill(0);
+      zone.rakeTouched.fill(0);
+
+      if (Array.isArray(source.fill)) {
+        const count = Math.min(zone.fill.length, source.fill.length);
+        for (let i = 0; i < count; i++) {
+          const height = THREE.MathUtils.clamp((Number(source.fill[i]) || 0) / 10000, 0, zone.maxH);
+          zone.fill[i] = height;
+          if (height > .00035) zone.mobility[i] = .22;
+        }
+      }
+
+      if (Array.isArray(source.rakeTouched)) {
+        const count = Math.min(zone.rakeTouched.length, source.rakeTouched.length);
+        for (let i = 0; i < count; i++) zone.rakeTouched[i] = source.rakeTouched[i] ? 1 : 0;
+      }
+
+      zone.levelPrompted = Boolean(source.levelPrompted);
+      zone.readyNotified = Boolean(source.readyNotified);
+      zone.settledGrade = typeof source.settledGrade === 'string' ? source.settledGrade : null;
+      zone.eventType = POUR_EVENT_TYPES.includes(source.eventType) ? source.eventType : null;
+      zone.eventThreshold = THREE.MathUtils.clamp(Number(source.eventThreshold) || .4, .12, .88);
+      zone.eventTriggered = Boolean(source.eventTriggered);
+      if (!zone.eventType) prepareZoneRandomEvent(zone, zoneIndex);
+      zone.hosePouredVolume = zoneVolume(zone);
+      zone.piles.length = 0;
+      zone.dirty = true;
+    }
+
+    clearSurfaceSpills();
+    if (Array.isArray(saved.spills)) {
+      for (const source of saved.spills.slice(0, SPILL_CLUMP_MAX)) {
+        const x = THREE.MathUtils.clamp(Number(source.x) || 0, SLAB.minX, SLAB.maxX);
+        const z = THREE.MathUtils.clamp(Number(source.z) || 0, SLAB.minZ, SLAB.maxZ);
+        const volume = THREE.MathUtils.clamp(Number(source.volume) || 0, 0, 2.5);
+        if (volume <= .001 || zoneAt(x, z)) continue;
+        const spill = createSpillClump(x, z, volume);
+        spill.vx = THREE.MathUtils.clamp(Number(source.vx) || 0, -.75, .75);
+        spill.vz = THREE.MathUtils.clamp(Number(source.vz) || 0, -.75, .75);
+        spill.mobility = THREE.MathUtils.clamp(Number(source.mobility) || .18, .18, 1);
+        spill.spread = THREE.MathUtils.clamp(Number(source.spread) || 1, .68, 1.35);
+        spill.age = Math.max(0, Number(source.age) || 0);
+        refreshSpillClump(spill);
+      }
+    }
+
+    jobState = ['active', 'ready', 'accepted', 'failed'].includes(saved.jobState)
+      ? saved.jobState
+      : 'active';
+    activePourZoneIndex = THREE.MathUtils.clamp(
+      Math.round(Number(saved.activePourZoneIndex) || 0),
+      0,
+      POUR_ZONES.length
+    );
+    paidPourZoneCount = THREE.MathUtils.clamp(
+      Math.round(Number(saved.paidPourZoneCount) || 0),
+      0,
+      POUR_ZONES.length
+    );
+
+    // A session may have been closed immediately after the pump was switched
+    // off. Recompute the next map from the restored physical surfaces instead
+    // of leaving the outline on an already completed bay.
+    if (jobState === 'active' || jobState === 'ready') {
+      const firstIncomplete = POUR_ZONES.findIndex(zone => !zoneReadyForSequence(zone));
+      activePourZoneIndex = firstIncomplete < 0 ? POUR_ZONES.length : firstIncomplete;
+      if (activePourZoneIndex >= POUR_ZONES.length && surfaceSpillVolume() <= .015) {
+        jobState = 'ready';
+      } else if (jobState === 'ready') {
+        jobState = 'active';
+      }
+    }
+
+    qteHits = Math.max(0, Math.round(Number(saved.qteHits) || 0));
+    qteMisses = Math.max(0, Math.round(Number(saved.qteMisses) || 0));
+    qtePerfects = Math.max(0, Math.round(Number(saved.qtePerfects) || 0));
+    wastedVolume = Math.max(0, Number(saved.wastedVolume) || 0);
+    pumpBroken = Boolean(saved.pumpBroken);
+
+    pouring = false;
+    hoseHeld = false;
+    pendingPourEvent = null;
+    eventAlarmTimer = 0;
+    pressureSpikePending = false;
+    blindnessTimer = 0;
+    outlinedPourZoneId = -1;
+    activePourOutline.visible = false;
+    refreshConcreteSurfaces();
+    return true;
+  } catch (error) {
+    console.warn('Pour progress restore failed', error);
+    return false;
+  } finally {
+    pourProgressLoading = false;
+    pourProgressDirty = false;
+    pourProgressSaveTimer = 0;
+  }
+}
+
+function updatePourProgressPersistence(dt) {
+  if (!pourProgressDirty) return;
+  pourProgressSaveTimer += dt;
+  if (pourProgressSaveTimer >= 1.8) savePourProgress();
+}
+
+loadPourProgress();
+window.addEventListener('pagehide', () => savePourProgress(true));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') savePourProgress(true);
+});
 
 characterStatsButtonEl?.addEventListener('click', openCharacterStats);
 mobileCharacterStatsButtonEl?.addEventListener('pointerdown', e => {
@@ -9043,7 +9408,7 @@ const DIALOGUE_SKINS = {
   pavel: {
     // Restore the approved square Pavel art with its original blue
     // construction backdrop baked into the portrait.
-    portrait: './assets/dialogue_v5/pavel.webp',
+    portrait: './assets/dialogue_v7/pavel_card.webp',
     paint: null,
     accent: '#4f9ee8',
     accentDark: '#265f9a',
@@ -9082,7 +9447,17 @@ function applyDialogueSkin(npcKey) {
   dialogueEl.style.setProperty('--dialog-accent-dark', skin.accentDark || skin.accent);
   if (skin.paint) dialogueEl.style.setProperty('--dialog-paint', `url("${skin.paint}")`);
   else dialogueEl.style.setProperty('--dialog-paint', 'none');
-  if (dialoguePortraitEl) dialoguePortraitEl.src = skin.portrait;
+  if (dialoguePortraitEl) {
+    dialoguePortraitEl.hidden = false;
+    dialoguePortraitEl.style.removeProperty('display');
+    dialoguePortraitEl.style.removeProperty('opacity');
+    dialoguePortraitEl.onerror = () => {
+      if (npcKey === 'pavel' && !dialoguePortraitEl.src.endsWith('/assets/dialogue_v5/pavel.webp')) {
+        dialoguePortraitEl.src = './assets/dialogue_v5/pavel.webp';
+      }
+    };
+    dialoguePortraitEl.src = skin.portrait;
+  }
 }
 
 function dialogueWalletTarget() {
@@ -9382,9 +9757,12 @@ function revealSettlementRank(grade, reward) {
   settlementRankTextEl.textContent = safeGrade;
   settlementRankCaptionEl.textContent = SETTLEMENT_GRADE_CAPTIONS[safeGrade];
   settlementRankRewardEl.textContent = `+${Math.max(0, Math.round(reward)).toLocaleString('ru-RU')} ₽`;
-  // The supplied sheet contains A–F. Keep the requested S rank by using its
-  // diamond A cell as a base and replacing only the central letter in CSS.
-  settlementRankOverrideEl.textContent = safeGrade === 'S' ? 'S' : '';
+  // The supplied material sheet is ordered A=diamond, B=gold, C=iron.
+  // Our gameplay ladder is S/A/B, so replace those baked letters while
+  // retaining the correct material artwork underneath.
+  settlementRankOverrideEl.textContent = ['S', 'A', 'B'].includes(safeGrade)
+    ? safeGrade
+    : '';
   settlementRankCardEl.classList.remove('isVisible');
   void settlementRankCardEl.offsetWidth;
   settlementRankCardEl.classList.add('isVisible');
@@ -9629,6 +10007,8 @@ function pavelDialogue() {
           paidPourZoneCount += unpaid;
           saveProgression();
           saveCareerStats();
+          markPourProgressDirty();
+          savePourProgress(true);
 
           // A successful map settlement should not trigger Pavel's ordinary farewell.
           pavelFarewellAllowedThisDialogue = false;
@@ -9642,6 +10022,7 @@ function pavelDialogue() {
             jobState = 'accepted';
             jobsCompleted++;
             saveProgression();
+            savePourProgress(true);
 
             restoreResultDialogue = () => {
               setDialogue(
@@ -9741,6 +10122,8 @@ function georgeDialogue() {
         label: 'Починить насос',
         action: () => {
           pumpBroken = false;
+          markPourProgressDirty();
+          savePourProgress(true);
           if (hoseInteraction) hoseInteraction.text = hoseHeld
             ? 'E — бросить шланг · ЛКМ — включить бетон'
             : 'E — взять шланг';
@@ -10432,6 +10815,7 @@ function loop() {
   const dt = Math.min(clock.getDelta(), .05);
   updateMobileRenderBudget(dt);
   updateCareerStatsPersistence(dt);
+  updatePourProgressPersistence(dt);
   mobileUiAccumulator += dt;
   const updateUiNow = !TOUCH_DEVICE || mobileUiAccumulator >= .10;
   if (updateUiNow) mobileUiAccumulator = 0;
