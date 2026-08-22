@@ -3234,3 +3234,342 @@ body.dialogueActive #hud{filter:brightness(.52) saturate(.82)!important}
   .dialogueOption{min-height:22px!important;grid-template-columns:24px 1fr!important}
   .dialogueOptionLabel{font-size:8.4px!important}
 }
+
+/* ============================================================
+   v51.84 — separate square portrait card + compact dialogue panel
+   The portrait never overlaps the copy, and both cards stay wholly inside
+   short phone-landscape viewports without scrolling.
+   ============================================================ */
+.dialogueLayer{
+  --dialogue-card-size:min(330px,calc(100dvh - 44px));
+  display:flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  box-sizing:border-box!important;
+  padding:max(14px,env(safe-area-inset-top)) max(18px,env(safe-area-inset-right)) max(14px,env(safe-area-inset-bottom)) max(18px,env(safe-area-inset-left))!important;
+  overflow:hidden!important;
+  background:rgba(3,5,9,.46)!important;
+  pointer-events:none!important;
+}
+.dialogueLayer.hidden{display:none!important}
+body.dialogueActive #hud{filter:brightness(.48) saturate(.82)!important}
+.dialogueCard{
+  position:relative!important;
+  display:grid!important;
+  grid-template-columns:var(--dialogue-card-size) minmax(0,1fr)!important;
+  align-items:stretch!important;
+  gap:16px!important;
+  width:min(1120px,calc(100vw - 44px))!important;
+  height:var(--dialogue-card-size)!important;
+  min-height:0!important;
+  max-height:none!important;
+  margin:0!important;
+  padding:0!important;
+  overflow:visible!important;
+  border:0!important;
+  border-radius:0!important;
+  background:transparent!important;
+  box-shadow:none!important;
+  pointer-events:auto!important;
+}
+.dialogueCard::before,.dialogueCard::after{display:none!important}
+.dialoguePortraitStage{
+  position:relative!important;
+  inset:auto!important;
+  z-index:4!important;
+  align-self:center!important;
+  width:var(--dialogue-card-size)!important;
+  height:var(--dialogue-card-size)!important;
+  min-width:0!important;
+  min-height:0!important;
+  aspect-ratio:1/1!important;
+  display:block!important;
+  overflow:hidden!important;
+  border:1px solid color-mix(in srgb,var(--dialog-accent) 58%,rgba(255,255,255,.18))!important;
+  border-radius:22px!important;
+  background:
+    radial-gradient(circle at 50% 28%,var(--dialog-accent-soft),transparent 58%),
+    linear-gradient(155deg,rgba(20,25,33,.97),rgba(7,10,16,.99))!important;
+  box-shadow:0 20px 54px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.08)!important;
+  backdrop-filter:none!important;
+  pointer-events:none!important;
+}
+.dialoguePortraitStage::before{
+  content:""!important;
+  display:block!important;
+  position:absolute!important;
+  inset:8px!important;
+  z-index:5!important;
+  border:1px solid rgba(255,255,255,.08)!important;
+  border-radius:16px!important;
+  background:none!important;
+  filter:none!important;
+  opacity:1!important;
+  pointer-events:none!important;
+}
+.dialoguePortraitStage::after{
+  content:""!important;
+  display:block!important;
+  position:absolute!important;
+  inset:auto 0 0!important;
+  z-index:4!important;
+  height:28%!important;
+  background:linear-gradient(to top,rgba(4,6,10,.42),transparent)!important;
+  pointer-events:none!important;
+}
+.dialoguePortraitShadow{display:none!important}
+.dialoguePaint{
+  display:block!important;
+  position:absolute!important;
+  inset:0!important;
+  z-index:1!important;
+  width:100%!important;
+  height:100%!important;
+  background:transparent var(--dialog-paint) center/cover no-repeat!important;
+  -webkit-mask-image:none!important;
+  mask-image:none!important;
+  opacity:.92!important;
+  filter:none!important;
+  pointer-events:none!important;
+}
+.dialoguePortrait,
+.dialogueLayer[data-npc="pavel"] .dialoguePortrait,
+.dialogueLayer[data-npc="mandarin"] .dialoguePortrait,
+.dialogueLayer[data-npc="george"] .dialoguePortrait,
+.dialogueLayer[data-npc="baba"] .dialoguePortrait{
+  position:absolute!important;
+  inset:0!important;
+  z-index:3!important;
+  width:100%!important;
+  height:100%!important;
+  max-width:none!important;
+  max-height:none!important;
+  object-fit:contain!important;
+  object-position:center bottom!important;
+  transform:scale(.94) translateY(3%)!important;
+  transform-origin:center bottom!important;
+  filter:drop-shadow(0 12px 18px rgba(0,0,0,.42))!important;
+}
+.dialogueLayer[data-npc="pavel"] .dialoguePaint{display:none!important}
+.dialogueLayer[data-npc="pavel"] .dialoguePortrait{
+  object-fit:cover!important;
+  object-position:center!important;
+  transform:none!important;
+  filter:none!important;
+}
+.dialogueLayer[data-npc="mandarin"] .dialoguePortrait{transform:scale(.92) translateY(4%)!important}
+.dialogueLayer[data-npc="george"] .dialoguePortrait{transform:scale(.91) translateY(4%)!important}
+.dialogueLayer[data-npc="baba"] .dialoguePortrait{transform:scale(.92) translateY(4%)!important}
+.dialoguePanel{
+  position:relative!important;
+  inset:auto!important;
+  z-index:3!important;
+  box-sizing:border-box!important;
+  width:auto!important;
+  height:100%!important;
+  min-width:0!important;
+  min-height:0!important;
+  max-height:none!important;
+  display:flex!important;
+  flex-direction:column!important;
+  padding:58px 18px 14px!important;
+  overflow:hidden!important;
+  border:1px solid color-mix(in srgb,var(--dialog-accent) 52%,rgba(255,255,255,.16))!important;
+  border-radius:22px!important;
+  clip-path:none!important;
+  background:
+    linear-gradient(125deg,var(--dialog-accent-soft),transparent 34%),
+    linear-gradient(180deg,rgba(12,17,28,.97),rgba(6,9,17,.98))!important;
+  box-shadow:0 20px 54px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.07)!important;
+  -webkit-backdrop-filter:blur(10px)!important;
+  backdrop-filter:blur(10px)!important;
+}
+.dialoguePanel::before{
+  content:""!important;
+  display:block!important;
+  position:absolute!important;
+  inset:0 18px auto!important;
+  z-index:1!important;
+  height:3px!important;
+  border:0!important;
+  border-radius:0 0 4px 4px!important;
+  background:linear-gradient(90deg,var(--dialog-accent),transparent 78%)!important;
+  pointer-events:none!important;
+}
+.dialoguePanel::after,.dialoguePanelNoise,.dialogueHazardTop,.dialogueHazardCorner{display:none!important}
+.dialogueNameplate{
+  position:absolute!important;
+  z-index:6!important;
+  left:16px!important;
+  top:14px!important;
+  width:auto!important;
+  max-width:calc(100% - 66px)!important;
+  height:auto!important;
+  margin:0!important;
+  padding:0!important;
+  overflow:hidden!important;
+  background:none!important;
+  -webkit-mask:none!important;
+  mask:none!important;
+  transform:none!important;
+}
+.dialogueCard h2{
+  display:block!important;
+  max-width:100%!important;
+  margin:0!important;
+  padding:8px 14px 7px!important;
+  overflow:hidden!important;
+  border:1px solid rgba(255,255,255,.18)!important;
+  border-radius:10px!important;
+  background:linear-gradient(180deg,color-mix(in srgb,var(--dialog-accent) 92%,white 8%),var(--dialog-accent))!important;
+  color:#fff!important;
+  box-shadow:0 7px 18px rgba(0,0,0,.28)!important;
+  font-family:Arial,Helvetica,system-ui,sans-serif!important;
+  font-size:clamp(15px,1.35vw,20px)!important;
+  line-height:1!important;
+  font-weight:900!important;
+  letter-spacing:.02em!important;
+  text-transform:none!important;
+  text-overflow:ellipsis!important;
+  white-space:nowrap!important;
+}
+.dialoguePanel #dialogueText{
+  position:relative!important;
+  z-index:3!important;
+  flex:0 1 auto!important;
+  min-height:0!important;
+  max-width:none!important;
+  margin:0 38px 12px 0!important;
+  overflow:hidden!important;
+  color:#f7f4ed!important;
+  font-size:clamp(15px,1.2vw,19px)!important;
+  line-height:1.32!important;
+  font-weight:720!important;
+  letter-spacing:.002em!important;
+  text-wrap:pretty!important;
+  text-shadow:0 2px 4px rgba(0,0,0,.40)!important;
+}
+#dialogueOptions{
+  position:relative!important;
+  z-index:5!important;
+  flex:0 0 auto!important;
+  display:flex!important;
+  flex-direction:column!important;
+  gap:7px!important;
+  width:100%!important;
+  max-width:none!important;
+  margin:auto 0 0!important;
+  overflow:visible!important;
+}
+.dialogueOption{
+  min-height:44px!important;
+  display:grid!important;
+  grid-template-columns:43px minmax(0,1fr)!important;
+  overflow:hidden!important;
+  border:1px solid color-mix(in srgb,var(--dialog-accent) 42%,rgba(255,255,255,.14))!important;
+  border-radius:11px!important;
+  clip-path:none!important;
+  background:rgba(255,255,255,.055)!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.035)!important;
+  backdrop-filter:none!important;
+}
+.dialogueOptionKey{
+  display:grid!important;
+  place-items:center!important;
+  border:0!important;
+  border-right:1px solid rgba(0,0,0,.28)!important;
+  background:var(--dialog-accent)!important;
+  color:#fff!important;
+  font-family:Arial,Helvetica,system-ui,sans-serif!important;
+  font-size:15px!important;
+  font-weight:900!important;
+}
+.dialogueOptionLabel{
+  display:flex!important;
+  align-items:center!important;
+  min-width:0!important;
+  padding:0 13px!important;
+  color:#fff!important;
+  font-size:14px!important;
+  line-height:1.15!important;
+  font-weight:750!important;
+}
+.dialogueClose{
+  position:absolute!important;
+  z-index:9!important;
+  top:12px!important;
+  right:12px!important;
+  bottom:auto!important;
+  left:auto!important;
+  width:34px!important;
+  min-width:34px!important;
+  height:34px!important;
+  margin:0!important;
+  padding:0!important;
+  display:grid!important;
+  place-items:center!important;
+  border:1px solid rgba(255,255,255,.13)!important;
+  border-radius:50%!important;
+  background:rgba(255,255,255,.055)!important;
+  color:#fff!important;
+  box-shadow:none!important;
+}
+.dialogueClose kbd{display:none!important}
+.dialogueClose span{font-size:0!important}
+.dialogueClose span::before{content:"×"!important;color:rgba(255,255,255,.88)!important;font:400 23px/1 system-ui,sans-serif!important}
+
+/* Movement base, inner ring and thumb are exactly about one third smaller. */
+.touchDevice.mobileLandscape #moveStick{
+  width:94px!important;
+  height:94px!important;
+  left:max(14px,calc(env(safe-area-inset-left) + 7px))!important;
+  right:auto!important;
+  bottom:max(16px,calc(env(safe-area-inset-bottom) + 7px))!important;
+}
+.touchDevice.mobileLandscape #moveStick .stickRing{inset:15px!important}
+.touchDevice.mobileLandscape #moveStick .stickKnob{
+  width:38px!important;
+  height:38px!important;
+  margin:-19px!important;
+}
+.touchDevice.mobileLandscape #moveStick::before{inset:-18px!important}
+
+@media (pointer:coarse), (max-width:820px){
+  .dialogueLayer{
+    --dialogue-card-size:min(238px,calc(100dvh - 18px));
+    padding:max(8px,env(safe-area-inset-top)) max(9px,env(safe-area-inset-right)) max(8px,env(safe-area-inset-bottom)) max(9px,env(safe-area-inset-left))!important;
+    background:rgba(3,5,9,.52)!important;
+  }
+  .dialogueCard{
+    grid-template-columns:var(--dialogue-card-size) minmax(0,1fr)!important;
+    gap:10px!important;
+    width:calc(100vw - 18px)!important;
+    height:var(--dialogue-card-size)!important;
+  }
+  .dialoguePortraitStage{width:var(--dialogue-card-size)!important;height:var(--dialogue-card-size)!important;border-radius:16px!important}
+  .dialoguePortraitStage::before{inset:5px!important;border-radius:12px!important}
+  .dialoguePanel{height:100%!important;padding:43px 10px 9px!important;border-radius:16px!important}
+  .dialoguePanel::before{inset:0 12px auto!important;height:2px!important}
+  .dialogueNameplate{left:10px!important;top:10px!important;max-width:calc(100% - 50px)!important}
+  .dialogueCard h2{padding:6px 10px 5px!important;border-radius:8px!important;font-size:clamp(11px,2.7vh,14px)!important}
+  .dialoguePanel #dialogueText{margin:0 30px 7px 0!important;font-size:clamp(10.5px,2.55vh,13px)!important;line-height:1.20!important}
+  #dialogueOptions{gap:4px!important}
+  .dialogueOption{min-height:33px!important;grid-template-columns:32px minmax(0,1fr)!important;border-radius:8px!important}
+  .dialogueOptionKey{font-size:11px!important}
+  .dialogueOptionLabel{padding:0 8px!important;font-size:clamp(9px,1.72vw,11px)!important;line-height:1.08!important}
+  .dialogueClose{top:8px!important;right:8px!important;width:28px!important;min-width:28px!important;height:28px!important}
+  .dialogueClose span::before{font-size:19px!important}
+}
+
+@media (pointer:coarse) and (orientation:landscape) and (max-height:330px){
+  .dialogueLayer{--dialogue-card-size:min(204px,calc(100dvh - 12px));padding:6px!important}
+  .dialogueCard{width:calc(100vw - 12px)!important;gap:7px!important}
+  .dialoguePanel{padding:36px 8px 7px!important}
+  .dialogueNameplate{left:8px!important;top:7px!important}
+  .dialogueCard h2{padding:5px 8px 4px!important;font-size:10px!important}
+  .dialoguePanel #dialogueText{font-size:9.5px!important;margin:0 27px 5px 0!important;line-height:1.14!important}
+  .dialogueOption{min-height:28px!important;grid-template-columns:28px minmax(0,1fr)!important}
+  .dialogueOptionKey{font-size:9.5px!important}
+  .dialogueOptionLabel{padding:0 6px!important;font-size:8.7px!important}
+  .dialogueClose{top:6px!important;right:6px!important;width:25px!important;min-width:25px!important;height:25px!important}
+}

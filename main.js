@@ -162,7 +162,7 @@ function buildMobileDebugReport() {
     else if (gl) glInfo = `webgl: ${gl.getParameter(gl.VERSION)}`;
   } catch (_) {}
   return [
-    'BETONSHCHIK MOBILE DEBUG v51.83',
+    'BETONSHCHIK MOBILE DEBUG v51.84',
     `safe=${MOBILE_SAFE_MODE} scene=${FINAL_SCENE_URL}`,
     `screen=${innerWidth}x${innerHeight} dpr=${devicePixelRatio}`,
     `staticGeomCPUReleased=${(mobileStaticGeometryReleasedBytes / (1024 * 1024)).toFixed(1)} MiB`,
@@ -701,9 +701,15 @@ function cloneVehicleMaterialForRole(src, role, palette) {
     blue:   { color:palette.blue,  roughness:.56, metalness:.12, transparent:false, opacity:1, depthWrite:true },
   }[role] || { color:palette.metal2,roughness:.64,metalness:.18,transparent:false,opacity:1,depthWrite:true };
 
-  // Vehicles are plain CAD colours in FINAL. Keep any maps if they ever appear,
-  // but never let an imported helper tint multiply the authored palette.
+  // The large painted body panels in FINAL are plain CAD colours. Clear any
+  // inherited tint/texture flags on those parts so the cab shells and mixer
+  // drum use the requested construction palette on every scene build.
   if (mat.color) mat.color.set(cfg.color);
+  if (role === 'orange' || role === 'orange2' || role === 'cream') {
+    if ('map' in mat) mat.map = null;
+    if ('emissiveMap' in mat) mat.emissiveMap = null;
+    if ('vertexColors' in mat) mat.vertexColors = false;
+  }
   mat.transparent = cfg.transparent;
   mat.opacity = cfg.opacity;
   mat.depthWrite = cfg.depthWrite;
@@ -759,8 +765,8 @@ function repaintConstructionVehicles(root) {
   // giant orange/black slabs. FINAL already separates the truck into Geom3D
   // meshes, so colour the actual parts instead.
   const mixerRoles = {
-    'Geom3D':'cream',           // inner drum / light body hardware
-    'Geom3D.001':'orange',      // main painted body / drum
+    'Geom3D':'orange',          // mixer cab shell
+    'Geom3D.001':'orange',      // mixer drum + main painted body
     'Geom3D.002':'rubber',      // tyres
     'Geom3D.003':'dark',        // chassis
     'Geom3D.004':'metal',       // frame / metal fittings
@@ -773,7 +779,7 @@ function repaintConstructionVehicles(root) {
     'Geom3D.011':'dark',        // black hardware
     'Geom3D.012':'orange2',     // cab/body secondary paint
     'Geom3D.013':'glass',       // cab glass
-    'Geom3D.014':'cream',       // cab light panel
+    'Geom3D.014':'orange2',     // cab lower painted panel
     'Geom3D.015':'red',         // marker/tail lights
     'Geom3D.016':'glass',       // pale glass / lamp cover
   };
@@ -804,7 +810,7 @@ function repaintConstructionVehicles(root) {
     'Geom3D.044':'dark',
     'Geom3D.045':'metal2',
     'Geom3D.046':'cream',
-    'Geom3D.047':'orange2',     // cab lower/body structure
+    'Geom3D.047':'orange2',     // rear machinery body / painted structure
     'Geom3D.048':'dark',
     'Geom3D.049':'dark',
     'Geom3D.050':'dark',
@@ -815,12 +821,12 @@ function repaintConstructionVehicles(root) {
     'Geom3D.055':'red',
     'Geom3D.056':'red',
     'Geom3D.057':'glass',       // imported translucent shell/window set
-    'Geom3D.058':'cream',       // cab roof/trim
+    'Geom3D.058':'orange2',     // pump cab roof/trim
     'Geom3D.059':'dark',        // grille / mesh
     'Geom3D.060':'orange',      // main cab shell
     'Geom3D.061':'dark',        // lower trim
     'Geom3D.062':'rubber',      // tyres
-    'Geom3D.063':'cream',       // secondary cab panel
+    'Geom3D.063':'orange',      // secondary pump cab panel
     'Geom3D.064':'glass',
     'Geom3D.065':'glass',
     'Geom3D.066':'dark',        // bumper / grille
@@ -8410,11 +8416,13 @@ const DIALOGUE_NAMES = {
 
 const DIALOGUE_SKINS = {
   pavel: {
-    portrait: './assets/dialogue_v2/pavel.webp',
-    paint: './assets/dialogue_v3/paint_pavel.png',
-    accent: '#d8b847',
-    accentDark: '#806819',
-    accentSoft: 'rgba(216,184,71,.24)',
+    // Restore the approved square Pavel art with its original blue
+    // construction backdrop baked into the portrait.
+    portrait: './assets/dialogue_v5/pavel.webp',
+    paint: null,
+    accent: '#4f9ee8',
+    accentDark: '#265f9a',
+    accentSoft: 'rgba(79,158,232,.24)',
   },
   mandarin: {
     portrait: './assets/dialogue_v3/serega.webp',
@@ -8572,12 +8580,14 @@ async function playPavelDance() {
     const action = rt.mixer.clipAction(clip);
     rt.busyAction = action;
     action.reset();
-    action.setLoop(THREE.LoopOnce, 1);
+    action.setLoop(THREE.LoopRepeat, Infinity);
     action.clampWhenFinished = false;
 
-    // Whatever random source dance was chosen, make the visible celebration
-    // last the same ~6 seconds every time.
-    action.setDuration(PAVEL_SUCCESS_DANCE_SECONDS);
+    // Keep the authored Mixamo tempo. setDuration() used to stretch every
+    // source clip to six seconds, so short dances looked unnaturally slow and
+    // long dances looked sped up. Loop at native speed for the celebration
+    // window instead.
+    action.setEffectiveTimeScale(1.0);
 
     action.fadeIn(.12);
     action.play();
@@ -8586,15 +8596,14 @@ async function playPavelDance() {
     playPavelSuccessMusic();
     playPavelSuccessDanceVoice();
 
-    const onFinished = e => {
-      if (e.action !== action) return;
-      rt.mixer.removeEventListener('finished', onFinished);
-      action.stop();
+    window.setTimeout(() => {
+      if (rt.busyAction !== action) return;
+      action.fadeOut(.18);
       stopPavelSuccessMusic(.10);
       rt.busyAction = null;
       rt.idleAction?.reset().fadeIn(.18).play();
-    };
-    rt.mixer.addEventListener('finished', onFinished);
+      window.setTimeout(() => action.stop(), 220);
+    }, PAVEL_SUCCESS_DANCE_SECONDS * 1000);
   } catch (e) {
     console.warn('Pavel dance failed', e);
   }
