@@ -162,7 +162,7 @@ function buildMobileDebugReport() {
     else if (gl) glInfo = `webgl: ${gl.getParameter(gl.VERSION)}`;
   } catch (_) {}
   return [
-    'BETONSHCHIK MOBILE DEBUG v51.80',
+    'BETONSHCHIK MOBILE DEBUG v51.81',
     `safe=${MOBILE_SAFE_MODE} scene=${FINAL_SCENE_URL}`,
     `screen=${innerWidth}x${innerHeight} dpr=${devicePixelRatio}`,
     `ua=${navigator.userAgent}`,
@@ -5831,6 +5831,9 @@ let rightHandBone = null;
 let leftHandBone = null;
 let playerHeadShadowCaster = null;
 let rightIndexBone = null;
+let rightMiddleBone = null;
+let leftIndexBone = null;
+let leftMiddleBone = null;
 
 // Procedural upper-body animation bones.
 // Locomotion remains authored FBX; smoking/drinking/raking are applied AFTER
@@ -6975,6 +6978,7 @@ async function startSceneNPCs() {
 }
 
 const handWorldPos = new THREE.Vector3();
+const handWorldPosB = new THREE.Vector3();
 const handWorldQuat = new THREE.Quaternion();
 const cameraWorldQuatInv = new THREE.Quaternion();
 const localHandQuat = new THREE.Quaternion();
@@ -6989,13 +6993,31 @@ function followBoneWithProp(holder, bone, offset, rotOffset, orientationBone = b
   holder.quaternion.copy(localHandQuat).multiply(rotOffset);
 }
 
+// Put a prop at the real grip centre between two hand bones.  This is more
+// stable than a large hand-local offset: fingers can animate freely while the
+// cigarette stays between them and cans stay centred in the palm.
+function followGripBetweenBones(holder, boneA, boneB, offset, rotOffset, orientationBone = boneA) {
+  if (!holder || !boneA) return;
+  boneA.getWorldPosition(handWorldPos);
+  if (boneB) {
+    boneB.getWorldPosition(handWorldPosB);
+    handWorldPos.lerp(handWorldPosB, .5);
+  }
+  (orientationBone || boneA).getWorldQuaternion(handWorldQuat);
+  camera.worldToLocal(handWorldPos);
+  camera.getWorldQuaternion(cameraWorldQuatInv).invert();
+  localHandQuat.copy(cameraWorldQuatInv).multiply(handWorldQuat);
+  holder.position.copy(handWorldPos).add(offset.clone().applyQuaternion(localHandQuat));
+  holder.quaternion.copy(localHandQuat).multiply(rotOffset);
+}
+
 const PROP_DEFAULTS = {
-  // v51.70: exact final values exported after the user's manual Blender placement.
-  // Cigarette uses the v51.69 PROP-aware export; cans use the final GRIP exports.
-  cigarette: { pos:[0.006,0.010,0.014], rot:[0.059999,-1.47,-0.139999] },
+  // v51.81: the anchor itself is now the physical grip centre.  The old can
+  // offsets pushed the models roughly 11 cm away from the palm on the phone.
+  cigarette: { pos:[0,0,0], rot:[0.059999,-1.47,-0.139999] },
   lighter:   { pos:[-.010,.012,.028], rot:[0,Math.PI/2,-Math.PI/2] },
-  energy:    { pos:[-0.010038,0.034809,-0.10974], rot:[0.58435,-1.925996,0.824049] },
-  beer:      { pos:[-0.018673,0.044952,-0.115111], rot:[-0.516996,1.929938,1.121659] },
+  energy:    { pos:[0,0,0], rot:[0.58435,-1.925996,0.824049] },
+  beer:      { pos:[0,0,0], rot:[-0.516996,1.929938,1.121659] },
   rake:      { pos:[.70,-.60,-1.62], rot:[-.20,-1.615,-.50] }
 };
 
@@ -7122,6 +7144,19 @@ if (localStorage.getItem('beton_cigarette_grip_v5180') !== '1') {
   propConfigs.cigarette.euler.set(...d.rot);
   propConfigs.cigarette.quat.setFromEuler(propConfigs.cigarette.euler);
   localStorage.setItem('beton_cigarette_grip_v5180', '1');
+}
+
+// v51.81: switch every hand prop to the bone-to-bone grip centre and clear
+// any manual/stale offsets left by the older single-bone placement.
+if (localStorage.getItem('beton_prop_grip_centred_v5181') !== '1') {
+  for (const name of ['cigarette','energy','beer']) {
+    localStorage.removeItem(`beton_prop_${name}`);
+    const d = PROP_DEFAULTS[name];
+    propConfigs[name].pos.set(...d.pos);
+    propConfigs[name].euler.set(...d.rot);
+    propConfigs[name].quat.setFromEuler(propConfigs[name].euler);
+  }
+  localStorage.setItem('beton_prop_grip_centred_v5181', '1');
 }
 
 // v0.48: discard stale broken rake transforms from older localStorage.
@@ -7252,7 +7287,12 @@ async function loadArmsViewModel() {
     armsRig.add(character);
     rightHandBone = findBone(character, 'RightHand');
     leftHandBone = findBone(character, 'LeftHand');
-    rightIndexBone = findBone(character, 'RightHandIndex1') || findBone(character, 'RightHandIndex2') || rightHandBone;
+    // Use the second phalanges for the cigarette pinch, and the first left
+    // knuckles for a stable palm centre around the cans.
+    rightIndexBone = findBone(character, 'RightHandIndex2') || findBone(character, 'RightHandIndex1') || rightHandBone;
+    rightMiddleBone = findBone(character, 'RightHandMiddle2') || findBone(character, 'RightHandMiddle1') || rightIndexBone;
+    leftIndexBone = findBone(character, 'LeftHandIndex1') || findBone(character, 'LeftHandIndex2') || leftHandBone;
+    leftMiddleBone = findBone(character, 'LeftHandMiddle1') || findBone(character, 'LeftHandMiddle2') || leftIndexBone;
     rightUpperArmBone = findBone(character, 'RightArm');
     rightForeArmBone = findBone(character, 'RightForeArm');
     leftUpperArmBone = findBone(character, 'LeftArm');
@@ -7285,13 +7325,13 @@ async function loadArmsViewModel() {
     try {
       const energyGLTF = await new Promise((resolve, reject) => loader.load('./assets/energy/litenergy_classic.gltf', resolve, undefined, reject));
       const eroot=energyGLTF.scene;
-      prepViewModel(eroot);forceOpaqueProp(eroot,true);normalizeProp(eroot,.165);
+      prepViewModel(eroot);forceOpaqueProp(eroot,true);normalizeProp(eroot,.155);
       energyProp=eroot;energyVM.add(eroot);setHotbar3DModel('energy',eroot);
     } catch (e) { console.warn('Energy failed', e); }
 
     try {
       const broot = await loadFBX('./assets/beer/Baltika.fbx');
-      prepViewModel(broot);forceOpaqueProp(broot,true);normalizeProp(broot,.19);
+      prepViewModel(broot);forceOpaqueProp(broot,true);normalizeProp(broot,.168);
       beerProp=broot;beerVM.add(broot);setHotbar3DModel('beer',broot);
     } catch (e) { console.warn('Beer failed', e); }
 
@@ -7794,7 +7834,7 @@ window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; }
 // Right fixed joystick = movement. Camera = direct swipe anywhere on gameplay canvas.
 // This allows simultaneous move + look with two thumbs without a second virtual stick.
 // ---------------------------------------------------------------------------
-let mobileMoveX=0, mobileMoveY=0;
+let mobileMoveX=0, mobileMoveY=0, mobileSprintIntent=false;
 let mobileLookPointer=null, mobileLookLastX=0, mobileLookLastY=0;
 let mobileLookTravel=0;
 const MOBILE_LOOK_SENS_X = 0.00435;
@@ -7807,19 +7847,33 @@ function setupMobileStick(el, knob, onValue) {
   const set=(e) => {
     const r=el.getBoundingClientRect();
     const cx=r.left+r.width*.5, cy=r.top+r.height*.5;
-    const radius=r.width*.34;
-    let dx=e.clientX-cx, dy=e.clientY-cy;
-    let len=Math.hypot(dx,dy);
-    if (len>radius) { dx*=radius/len; dy*=radius/len; len=radius; }
-    knob.style.transform=`translate(${dx}px,${dy}px)`;
+    const size=Math.min(r.width,r.height);
+    const walkRadius=size*.34;
+    const sprintRadius=size*.56;
+    const maxTravel=size*.72;
+    const rawDx=e.clientX-cx, rawDy=e.clientY-cy;
+    const rawLen=Math.hypot(rawDx,rawDy);
+    const dirX=rawLen>.001?rawDx/rawLen:0;
+    const dirY=rawLen>.001?rawDy/rawLen:0;
 
-    let nx=dx/radius, ny=dy/radius;
+    // The input reaches full walking speed on the inner ring, but the knob can
+    // keep travelling beyond the base. Sprint only engages on the larger outer
+    // boundary, matching the readable over-pull used by mobile shooters.
+    const travel=Math.min(rawLen,maxTravel);
+    knob.style.transform=`translate(${dirX*travel}px,${dirY*travel}px)`;
+    const sprintStrength=rawLen/sprintRadius;
+    el.style.setProperty('--stick-pull',String(THREE.MathUtils.clamp(sprintStrength,0,1.35)));
+    el.classList.toggle('sprintReady',sprintStrength>=.82 && sprintStrength<1);
+    el.classList.toggle('isSprinting',sprintStrength>=1);
+
+    let nx=dirX*Math.min(rawLen/walkRadius,1);
+    let ny=dirY*Math.min(rawLen/walkRadius,1);
     const mag=Math.hypot(nx,ny);
-    if (mag<=deadzone) { onValue(0,0); return; }
+    if (mag<=deadzone) { onValue(0,0,sprintStrength); return; }
     const remapped=THREE.MathUtils.clamp((mag-deadzone)/(1-deadzone),0,1);
     const response=THREE.MathUtils.clamp(Math.pow(remapped,.72)*1.06,0,1);
     nx=nx/mag*response; ny=ny/mag*response;
-    onValue(nx,ny);
+    onValue(nx,ny,sprintStrength);
   };
   el.addEventListener('pointerdown',e=>{
     if(!mobileInputAllowed())return;
@@ -7828,7 +7882,12 @@ function setupMobileStick(el, knob, onValue) {
   el.addEventListener('pointermove',e=>{ if(e.pointerId===pid){ set(e); e.preventDefault(); e.stopPropagation(); } });
   const end=e=>{
     if(e.pointerId!==pid)return;
-    pid=null; knob.style.transform='translate(0,0)'; onValue(0,0); e.preventDefault(); e.stopPropagation();
+    pid=null;
+    knob.style.transform='translate(0,0)';
+    el.style.removeProperty('--stick-pull');
+    el.classList.remove('sprintReady','isSprinting');
+    onValue(0,0,0);
+    e.preventDefault(); e.stopPropagation();
   };
   el.addEventListener('pointerup',end); el.addEventListener('pointercancel',end);
 }
@@ -7935,7 +7994,11 @@ if (TOUCH_DEVICE) {
   }
   mobileDebugLog(`boot scene=${FINAL_SCENE_URL} safe=${MOBILE_SAFE_MODE}`);
   const moveStick=document.querySelector('#moveStick'), moveKnob=document.querySelector('#moveKnob');
-  setupMobileStick(moveStick,moveKnob,(x,y)=>{ mobileMoveX=x; mobileMoveY=y; });
+  setupMobileStick(moveStick,moveKnob,(x,y,sprintStrength=0)=>{
+    mobileMoveX=x;
+    mobileMoveY=y;
+    mobileSprintIntent=sprintStrength>=1;
+  });
   setupMobileSwipeLook();
   const bindTap=(id,fn)=>document.querySelector(id)?.addEventListener('pointerdown',e=>{
     e.preventDefault(); e.stopPropagation();
@@ -8073,21 +8136,21 @@ const DIALOGUE_SKINS = {
   },
   mandarin: {
     portrait: './assets/dialogue_v3/serega.webp',
-    paint: './assets/dialogue_v3/paint_serega.png',
+    paint: './assets/dialogue_backgrounds/serega_construction.png',
     accent: '#ef8a34',
     accentDark: '#9f4e19',
     accentSoft: 'rgba(239,138,52,.25)',
   },
   george: {
     portrait: './assets/dialogue_v3/george.webp',
-    paint: './assets/dialogue_v3/paint_george.png',
+    paint: './assets/dialogue_backgrounds/george_flag_leaves.png',
     accent: '#4ea9d8',
     accentDark: '#23698e',
     accentSoft: 'rgba(78,169,216,.24)',
   },
   baba: {
     portrait: './assets/dialogue_v3/baba.webp',
-    paint: './assets/dialogue_v3/paint_baba.png',
+    paint: './assets/dialogue_backgrounds/baba_yarn_flowers.png',
     accent: '#e4c14a',
     accentDark: '#997c1a',
     accentSoft: 'rgba(228,193,74,.24)',
@@ -8666,6 +8729,33 @@ const interactionCamPos = new THREE.Vector3();
 const interactionCamDir = new THREE.Vector3();
 const interactionAimPoint = new THREE.Vector3();
 const interactionAimVec = new THREE.Vector3();
+const interactionNpcCapsuleBottom = new THREE.Vector3();
+const interactionNpcCapsuleTop = new THREE.Vector3();
+const interactionNpcRayPoint = new THREE.Vector3();
+const interactionNpcBodyPoint = new THREE.Vector3();
+
+// NPC interaction uses a vertical capsule instead of one tiny point in the
+// chest.  Looking at the torso OR the head now produces the dialogue action,
+// while aiming beside the character still does not.
+function npcIsUnderCrosshair(it) {
+  if (!it?.obj) return false;
+  camera.getWorldPosition(interactionCamPos);
+  camera.getWorldDirection(interactionCamDir).normalize();
+  interactionRaycaster.ray.set(interactionCamPos, interactionCamDir);
+
+  it.obj.getWorldPosition(interactionAimPoint);
+  interactionNpcCapsuleBottom.copy(interactionAimPoint).addScaledVector(THREE.Object3D.DEFAULT_UP, -.64);
+  interactionNpcCapsuleTop.copy(interactionAimPoint).addScaledVector(THREE.Object3D.DEFAULT_UP, .84);
+  const distanceSq = interactionRaycaster.ray.distanceSqToSegment(
+    interactionNpcCapsuleBottom,
+    interactionNpcCapsuleTop,
+    interactionNpcRayPoint,
+    interactionNpcBodyPoint,
+  );
+  const alongRay = interactionCamPos.distanceTo(interactionNpcRayPoint);
+  if (alongRay > (it.radius || 2.6) + .65) return false;
+  return distanceSq <= .50 * .50;
+}
 
 function rakePickupAimOK(it) {
   if (!it?.bounds) return false;
@@ -8689,6 +8779,7 @@ function rakePickupAimOK(it) {
 
 function pickupIsUnderCrosshair(it) {
   if (!it || !it.requiresLook) return true;
+  if (it.kind === 'npc') return npcIsUnderCrosshair(it);
   const target = it.source || it.rakeSource || null;
   if (!target || !target.visible) {
     const aimObj = it.obj || null;
@@ -8839,11 +8930,12 @@ function updateFirstPersonProps(dt) {
 
   // Props follow the procedurally posed hands/fingers.
   if (specialMode === 'smoke' && cigaretteProp) {
-    // Position at the finger base, but preserve the authored orientation relative
-    // to the palm. This keeps the cigarette between the fingers instead of floating.
-    followBoneWithProp(
+    // Pinch the cigarette between index and middle fingers.  Its orientation
+    // still follows the palm, so finger animation cannot roll it sideways.
+    followGripBetweenBones(
       cigaretteVM,
       rightIndexBone || rightHandBone,
+      rightMiddleBone || rightIndexBone || rightHandBone,
       propConfigs.cigarette.pos,
       propConfigs.cigarette.quat,
       rightHandBone || rightIndexBone,
@@ -8852,13 +8944,25 @@ function updateFirstPersonProps(dt) {
       followBoneWithProp(lighterVM, leftHandBone, propConfigs.lighter.pos, propConfigs.lighter.quat);
     }
   } else if (specialMode === 'drink' && energyProp) {
-    // The Blender grip already contains the exact can orientation relative to
-    // the hand. The procedural hand pose provides the drinking tilt itself.
-    // Do NOT rotate the can a second time here — that was why the authored grip
-    // looked crooked in-game.
-    followBoneWithProp(energyVM, leftHandBone, propConfigs.energy.pos, propConfigs.energy.quat);
+    // Wrist-to-knuckle midpoint is the centre of the palm.  The previous
+    // 11 cm offset placed the can beside the hand instead of inside the grip.
+    followGripBetweenBones(
+      energyVM,
+      leftHandBone,
+      leftMiddleBone || leftIndexBone || leftHandBone,
+      propConfigs.energy.pos,
+      propConfigs.energy.quat,
+      leftHandBone,
+    );
   } else if (specialMode === 'beer' && beerProp) {
-    followBoneWithProp(beerVM, leftHandBone, propConfigs.beer.pos, propConfigs.beer.quat);
+    followGripBetweenBones(
+      beerVM,
+      leftHandBone,
+      leftMiddleBone || leftIndexBone || leftHandBone,
+      propConfigs.beer.pos,
+      propConfigs.beer.quat,
+      leftHandBone,
+    );
   }
 }
 
@@ -9063,7 +9167,7 @@ function loop() {
     if (moveWorld.lengthSq() > 1) moveWorld.normalize();
 
     const moving = moveWorld.lengthSq() > .0001;
-    const sprint = !!(keys.ShiftLeft || keys.ShiftRight) || (TOUCH_DEVICE && Math.hypot(mobileMoveX,mobileMoveY) > .70);
+    const sprint = !inputBlocked && (!!(keys.ShiftLeft || keys.ShiftRight) || (TOUCH_DEVICE && mobileSprintIntent));
     playerMovingNow = moving;
     playerSprintingNow = sprint;
     let speed = 3.35;
