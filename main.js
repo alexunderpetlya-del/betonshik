@@ -199,7 +199,7 @@ function buildMobileDebugReport() {
     else if (gl) glInfo = `webgl: ${gl.getParameter(gl.VERSION)}`;
   } catch (_) {}
   return [
-    'BETONSHCHIK MOBILE DEBUG v51.92',
+    'BETONSHCHIK MOBILE DEBUG v51.95',
     `safe=${MOBILE_SAFE_MODE} scene=${FINAL_SCENE_URL}`,
     `screen=${innerWidth}x${innerHeight} dpr=${devicePixelRatio}`,
     `staticGeomCPUReleased=${(mobileStaticGeometryReleasedBytes / (1024 * 1024)).toFixed(1)} MiB`,
@@ -1771,8 +1771,8 @@ function loadRebarTexture(pathIndex = 0) {
 loadRebarTexture();
 
 const wetConcreteMat = new THREE.MeshStandardMaterial({
-  color: 0x626a67,
-  roughness: .34,
+  color: 0xd9dddb,
+  roughness: .20,
   metalness: 0.0,
   side: THREE.DoubleSide,
   // The wet top ends flush with the structural slab. Bias it slightly toward
@@ -1782,6 +1782,94 @@ const wetConcreteMat = new THREE.MeshStandardMaterial({
   polygonOffsetFactor: -1,
   polygonOffsetUnits: -2,
 });
+
+// Generated seamless actively-flowing concrete PBR set. It deliberately shows
+// wet cement slurry and exposed crushed aggregate instead of a finished floor.
+// Mobile receives 512 px maps; desktop receives 1024 px maps.
+const wetConcreteMaterials = new Set();
+let wetConcreteAlbedo = null;
+let wetConcreteNormal = null;
+let wetConcreteHeight = null;
+
+function applyWetConcreteTexture(material) {
+  if (!material) return;
+  if (wetConcreteAlbedo) material.map = wetConcreteAlbedo;
+  if (wetConcreteNormal) {
+    material.normalMap = wetConcreteNormal;
+    material.normalScale.setScalar(material.userData.concreteNormalScale ?? .34);
+  }
+  if (wetConcreteHeight) {
+    // Height drives micro-relief only. Real fill height remains controlled by
+    // the gameplay heightfield, so visuals never alter collision or volume.
+    material.bumpMap = wetConcreteHeight;
+    material.bumpScale = material.userData.concreteBumpScale ?? .018;
+  }
+  material.needsUpdate = true;
+}
+
+function registerWetConcreteMaterial(material, bumpScale = .018, normalScale = .34) {
+  material.userData.concreteBumpScale = bumpScale;
+  material.userData.concreteNormalScale = normalScale;
+  wetConcreteMaterials.add(material);
+  applyWetConcreteTexture(material);
+  return material;
+}
+
+registerWetConcreteMaterial(wetConcreteMat);
+
+const wetConcreteTextureDir = TOUCH_DEVICE
+  ? './assets/final_mobile_textures'
+  : './assets/final_pc_textures';
+const wetConcreteLoader = new THREE.TextureLoader();
+
+function configureConcreteMap(texture, colorSpace) {
+  texture.colorSpace = colorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(4, 4);
+  texture.anisotropy = Math.min(
+    TOUCH_DEVICE ? 4 : 8,
+    renderer.capabilities.getMaxAnisotropy()
+  );
+  return texture;
+}
+
+function refreshWetConcreteMaterials() {
+  for (const material of wetConcreteMaterials) applyWetConcreteTexture(material);
+}
+
+wetConcreteLoader.load(
+  `${wetConcreteTextureDir}/wet_concrete_v3_albedo.webp`,
+  texture => {
+    wetConcreteAlbedo = configureConcreteMap(texture, THREE.SRGBColorSpace);
+    refreshWetConcreteMaterials();
+    mobileDebugLog('wet aggregate concrete albedo ready');
+  },
+  undefined,
+  () => mobileDebugLog('wet concrete albedo missing; color fallback active')
+);
+
+wetConcreteLoader.load(
+  `${wetConcreteTextureDir}/wet_concrete_v3_normal.webp`,
+  texture => {
+    wetConcreteNormal = configureConcreteMap(texture, THREE.NoColorSpace);
+    refreshWetConcreteMaterials();
+    mobileDebugLog('wet aggregate concrete normal ready');
+  },
+  undefined,
+  () => mobileDebugLog('wet concrete normal map missing')
+);
+
+wetConcreteLoader.load(
+  `${wetConcreteTextureDir}/wet_concrete_v3_height.webp`,
+  texture => {
+    wetConcreteHeight = configureConcreteMap(texture, THREE.NoColorSpace);
+    refreshWetConcreteMaterials();
+    mobileDebugLog('wet aggregate concrete height ready');
+  },
+  undefined,
+  () => mobileDebugLog('wet concrete height map missing')
+);
 
 function addPitBox(name, x, y, z, w, h, d, mat) {
   if (w <= .001 || h <= .001 || d <= .001) return null;
@@ -1913,7 +2001,7 @@ function createConcreteEdgeSkirt(zone, edge) {
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
 
-  const mesh = new THREE.Mesh(geometry, wetConcreteMat);
+  const mesh = new THREE.Mesh(geometry, zone.edgeMaterial || wetConcreteMat);
   mesh.name = `FRESH_CONCRETE_ZONE_${zone.id}_SKIRT_${edge}`;
   mesh.position.copy(zone.surface.position);
   mesh.castShadow = false;
@@ -2093,7 +2181,15 @@ for (const zone of POUR_ZONES) {
   );
   zone.surfaceGeom.rotateX(-Math.PI / 2);
 
-  zone.surface = new THREE.Mesh(zone.surfaceGeom, wetConcreteMat);
+  zone.wetMaterial = registerWetConcreteMaterial(wetConcreteMat.clone());
+  zone.edgeMaterial = wetConcreteMat.clone();
+  zone.edgeMaterial.map = null;
+  zone.edgeMaterial.bumpMap = null;
+  zone.edgeMaterial.color.set(0x59615e);
+  zone.edgeMaterial.roughness = .52;
+  zone.visualWetness = 1;
+
+  zone.surface = new THREE.Mesh(zone.surfaceGeom, zone.wetMaterial);
   zone.surface.name = `FRESH_CONCRETE_ZONE_${zone.id}`;
   zone.surface.position.set(
     (zone.minX + zone.maxX) * .5,
@@ -2115,6 +2211,53 @@ for (const zone of POUR_ZONES) {
 function markZoneDirty(zone) { if (zone) zone.dirty = true; }
 function markConcreteDirty() {
   for (const zone of POUR_ZONES) zone.dirty = true;
+}
+
+const concreteWetColor = new THREE.Color(0xd9dddb);
+const concreteDryColor = new THREE.Color(0xffffff);
+let concreteAppearanceTimer = 0;
+
+function updateConcreteAppearance(dt) {
+  concreteAppearanceTimer += dt;
+  const interval = TOUCH_DEVICE ? .20 : .12;
+  if (concreteAppearanceTimer < interval) return;
+  const step = concreteAppearanceTimer;
+  concreteAppearanceTimer = 0;
+
+  for (const zone of POUR_ZONES) {
+    let mobilitySum = 0;
+    let filledCells = 0;
+    for (let i = 0; i < zone.fill.length; i++) {
+      if (zone.fill[i] <= .001) continue;
+      mobilitySum += zone.mobility[i];
+      filledCells++;
+    }
+
+    const averageMobility = filledCells ? mobilitySum / filledCells : 1;
+    const targetWetness = THREE.MathUtils.clamp(
+      (averageMobility - .14) / .80,
+      0,
+      1
+    );
+    zone.visualWetness = THREE.MathUtils.damp(
+      zone.visualWetness,
+      targetWetness,
+      2.2,
+      step
+    );
+
+    const wet = zone.visualWetness;
+    zone.wetMaterial.color.lerpColors(concreteDryColor, concreteWetColor, wet);
+    zone.wetMaterial.roughness = THREE.MathUtils.lerp(.84, .20, wet);
+    zone.wetMaterial.bumpScale = THREE.MathUtils.lerp(.022, .014, wet);
+    zone.wetMaterial.normalScale.setScalar(THREE.MathUtils.lerp(.24, .38, wet));
+    zone.wetMaterial.envMapIntensity = THREE.MathUtils.lerp(.38, 1.15, wet);
+
+    // A darker vertical contact band visually seals concrete against the bay
+    // wall and hides precision seams without changing collision or fill math.
+    zone.edgeMaterial.color.copy(zone.wetMaterial.color).multiplyScalar(.58);
+    zone.edgeMaterial.roughness = Math.min(1, zone.wetMaterial.roughness + .16);
+  }
 }
 
 function refreshConcreteSurfaces() {
@@ -2583,12 +2726,12 @@ const spillGeom = new THREE.SphereGeometry(
   0, Math.PI * 2,
   0, Math.PI * .5
 );
-const spillMat = new THREE.MeshStandardMaterial({
-  color: 0x6b726f,
-  roughness: .40,
+const spillMat = registerWetConcreteMaterial(new THREE.MeshStandardMaterial({
+  color: 0xa0a9a5,
+  roughness: .24,
   metalness: 0.0,
   side: THREE.DoubleSide
-});
+}), .022);
 let spillSerial = 1;
 
 function spillShapeFromVolume(volume, spread = 1) {
@@ -3372,6 +3515,51 @@ for (let i = 0; i < HOSE_SPLASH_MAX; i++) {
 let hoseSplashCursor = 0;
 let hoseSplashAccumulator = 0;
 
+// Short-lived flat wet spots sell the impact of droplets without becoming
+// permanent decals or adding collision. Every mesh is pooled up front.
+const SPLASH_SPOT_MAX = TOUCH_DEVICE ? 12 : 24;
+const splashSpotGeom = new THREE.CircleGeometry(1, 12);
+splashSpotGeom.rotateX(-Math.PI * .5);
+const splashSpotGroup = new THREE.Group();
+splashSpotGroup.name = 'HOSE_WET_SPOTS';
+scene.add(splashSpotGroup);
+const splashSpots = [];
+for (let i = 0; i < SPLASH_SPOT_MAX; i++) {
+  const material = new THREE.MeshBasicMaterial({
+    color: 0x424c48,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -3,
+    polygonOffsetUnits: -3,
+  });
+  const mesh = new THREE.Mesh(splashSpotGeom, material);
+  mesh.visible = false;
+  mesh.raycast = () => {};
+  splashSpotGroup.add(mesh);
+  splashSpots.push({ mesh, age: 0, life: 2, baseOpacity: .16 });
+}
+let splashSpotCursor = 0;
+
+function spawnWetSplashSpot(x, z, surfaceY, intensity) {
+  const spot = splashSpots[splashSpotCursor++ % splashSpots.length];
+  spot.age = 0;
+  spot.life = THREE.MathUtils.randFloat(1.6, 2.8);
+  spot.baseOpacity = THREE.MathUtils.clamp(.10 + intensity * .08, .10, .24);
+  spot.mesh.visible = true;
+  spot.mesh.material.opacity = spot.baseOpacity;
+  spot.mesh.position.set(
+    x + THREE.MathUtils.randFloatSpread(.16),
+    surfaceY + .008,
+    z + THREE.MathUtils.randFloatSpread(.16)
+  );
+  spot.mesh.rotation.y = Math.random() * Math.PI;
+  const radius = THREE.MathUtils.randFloat(.075, .16) * Math.max(.8, intensity);
+  spot.mesh.scale.set(radius * THREE.MathUtils.randFloat(.75, 1.35), radius, radius);
+}
+
 function spawnHoseSplashBurst(x, z, zone, intensity = 1) {
   const surfaceY = zone
     ? zone.bottomY + getFillHeightAt(x, z)
@@ -3392,6 +3580,7 @@ function spawnHoseSplashBurst(x, z, zone, intensity = 1) {
     p.vel.set(Math.cos(angle) * speed, THREE.MathUtils.randFloat(.45, 1.05) * intensity, Math.sin(angle) * speed);
     p.mesh.scale.setScalar(THREE.MathUtils.randFloat(.72, 1.30) * intensity);
   }
+  spawnWetSplashSpot(x, z, surfaceY, intensity);
 }
 
 function updateHoseSplashes(dt) {
@@ -3405,6 +3594,18 @@ function updateHoseSplashes(dt) {
     if (lifeLeft <= 0 || p.mesh.position.y < groundHeightAt(p.mesh.position.x, p.mesh.position.z) - .03) {
       p.mesh.visible = false;
     }
+  }
+
+  for (const spot of splashSpots) {
+    if (!spot.mesh.visible) continue;
+    spot.age += dt;
+    const lifeLeft = 1 - spot.age / Math.max(.001, spot.life);
+    if (lifeLeft <= 0) {
+      spot.mesh.visible = false;
+      spot.mesh.material.opacity = 0;
+      continue;
+    }
+    spot.mesh.material.opacity = spot.baseOpacity * lifeLeft * lifeLeft;
   }
 }
 
@@ -4478,6 +4679,7 @@ function updatePhysicalHose(dt) {
   updatePouring(dt);
   updatePourEvents(dt);
   relaxConcrete(dt);
+  updateConcreteAppearance(dt);
   concreteVisualTimer += dt;
   if (!TOUCH_DEVICE || concreteVisualTimer >= 1 / 12) {
     concreteVisualTimer = 0;
