@@ -3041,3 +3041,196 @@ body.dialogueActive #hud{filter:brightness(.52) saturate(.82)!important}
   .touchDevice.mobileLandscape #moveStick .stickKnob{z-index:3!important}
   .touchDevice.mobileLandscape #moveStick>span{z-index:4!important}
 }
+
+/* ============================================================
+   v51.83 — final phone dialogue / shop / stick pass
+   ============================================================ */
+
+/* Every character uses the same portrait stage and its authored underlay. */
+.dialogueLayer[data-npc="pavel"] .dialoguePaint{
+  display:block!important;
+  background-image:var(--dialog-paint)!important;
+  background-repeat:no-repeat!important;
+  background-position:center bottom!important;
+  background-size:112% 94%!important;
+}
+.dialogueLayer[data-npc="pavel"] .dialoguePortrait,
+.dialogueLayer[data-npc="mandarin"] .dialoguePortrait,
+.dialogueLayer[data-npc="george"] .dialoguePortrait,
+.dialogueLayer[data-npc="baba"] .dialoguePortrait{
+  transform:scale(.89)!important;
+  transform-origin:center bottom!important;
+  object-position:center bottom!important;
+}
+
+/* Shop exits immediately from a stable top-right close button. */
+.shopCard{position:relative!important}
+#shopClose{
+  position:absolute!important;
+  z-index:12!important;
+  top:12px!important;
+  right:12px!important;
+  bottom:auto!important;
+  left:auto!important;
+  width:38px!important;
+  min-width:38px!important;
+  height:38px!important;
+  margin:0!important;
+  padding:0 0 3px!important;
+  display:grid!important;
+  place-items:center!important;
+  border:1px solid rgba(255,255,255,.16)!important;
+  border-radius:50%!important;
+  background:rgba(10,12,11,.72)!important;
+  color:#f3f0e7!important;
+  box-shadow:0 7px 18px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.06)!important;
+  font:400 27px/1 system-ui,sans-serif!important;
+  letter-spacing:0!important;
+}
+#shopClose:hover,#shopClose:focus-visible{
+  border-color:var(--mobile-ui-gold)!important;
+  background:rgba(36,31,22,.94)!important;
+  outline:none!important;
+}
+.shopHeader{padding-right:44px!important}
+
+/* The QTE keeps the target/ring only; no blocking instruction card. */
+#qteLabel{display:none!important}
+
+/* Dot trail grows and rotates from the stick centre toward the moving knob. */
+.touchDevice.mobileLandscape #moveStick .stickTrail{
+  --stick-trail-length:0px;
+  --stick-trail-angle:0rad;
+  --stick-trail-opacity:0;
+  position:absolute!important;
+  z-index:2!important;
+  left:50%!important;
+  top:50%!important;
+  width:var(--stick-trail-length)!important;
+  height:7px!important;
+  transform:translateY(-50%) rotate(var(--stick-trail-angle))!important;
+  transform-origin:left center!important;
+  opacity:var(--stick-trail-opacity)!important;
+  background:radial-gradient(circle,rgba(234,211,166,.94) 0 2.2px,transparent 2.8px) left center/13px 7px repeat-x!important;
+  filter:drop-shadow(0 0 4px rgba(var(--mobile-ui-gold-rgb),.42))!important;
+  pointer-events:none!important;
+}
+.touchDevice.mobileLandscape #moveStick::before{inset:-27px!important}
+.touchDevice.mobileLandscape #moveStick>span{display:none!important}
+
+@media (pointer:coarse) and (orientation:landscape){
+  .dialogueLayer{
+    padding:0 max(8px,env(safe-area-inset-right)) max(6px,env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left))!important;
+    overflow:hidden!important;
+  }
+  .dialogueCard{
+    width:min(960px,88vw)!important;
+    height:clamp(132px,42vh,220px)!important;
+    height:clamp(132px,42dvh,220px)!important;
+    min-height:0!important;
+    max-height:220px!important;
+    overflow:visible!important;
+  }
+  .dialoguePortraitStage{
+    left:-1%!important;
+    bottom:0!important;
+    width:31%!important;
+    height:110%!important;
+  }
+  .dialoguePaint{
+    left:-14%!important;
+    right:-18%!important;
+    top:1%!important;
+    bottom:-2%!important;
+    opacity:.92!important;
+    background-position:center bottom!important;
+    background-size:contain!important;
+  }
+  .dialogueLayer[data-npc="pavel"] .dialoguePaint{
+    left:-9%!important;
+    right:-11%!important;
+    top:-1%!important;
+    bottom:-3%!important;
+    background-size:112% 94%!important;
+  }
+  .dialoguePanel{
+    left:21%!important;
+    right:0!important;
+    top:8%!important;
+    bottom:0!important;
+    padding:clamp(21px,4.4vh,28px) 10px 7px clamp(48px,7.5vw,78px)!important;
+    padding:clamp(21px,4.4dvh,28px) 10px 7px clamp(48px,7.5vw,78px)!important;
+    overflow:hidden!important;
+    border-radius:14px!important;
+  }
+  .dialogueNameplate{
+    left:7%!important;
+    top:-11px!important;
+    max-width:76%!important;
+  }
+  .dialogueCard h2{
+    padding:4px 9px!important;
+    border-radius:7px!important;
+    font-size:clamp(10px,2.2dvh,13px)!important;
+  }
+  .dialoguePanel #dialogueText{
+    flex:0 0 auto!important;
+    margin:0 32px 5px 0!important;
+    font-size:clamp(10px,2.15dvh,13px)!important;
+    line-height:1.18!important;
+  }
+  #dialogueOptions{
+    flex:0 0 auto!important;
+    gap:3px!important;
+    margin:auto 0 0!important;
+  }
+  .dialogueOption{
+    min-height:clamp(24px,6.2dvh,30px)!important;
+    grid-template-columns:27px 1fr!important;
+    border-radius:7px!important;
+  }
+  .dialogueOptionKey{font-size:9.5px!important}
+  .dialogueOptionLabel{
+    padding:0 7px!important;
+    font-size:clamp(8.8px,1.7vw,10.5px)!important;
+    line-height:1.06!important;
+  }
+  .dialogueClose{
+    position:absolute!important;
+    top:5px!important;
+    right:6px!important;
+    bottom:auto!important;
+    width:26px!important;
+    min-width:26px!important;
+    height:24px!important;
+    margin:0!important;
+    padding:0!important;
+  }
+  .dialogueClose kbd{display:none!important}
+  .dialogueClose span{font-size:0!important}
+  .dialogueClose span::before{
+    content:"✕"!important;
+    font-size:12px!important;
+    color:rgba(255,255,255,.84)!important;
+  }
+  #shopClose{
+    top:8px!important;
+    right:8px!important;
+    width:32px!important;
+    min-width:32px!important;
+    height:32px!important;
+    font-size:23px!important;
+  }
+}
+
+@media (pointer:coarse) and (orientation:landscape) and (max-height:330px){
+  .dialogueCard{height:clamp(124px,44vh,148px)!important}
+  .dialogueCard{height:clamp(124px,44dvh,148px)!important}
+  .dialoguePortraitStage{width:29%!important;height:108%!important}
+  .dialoguePanel{left:20%!important;padding:19px 8px 5px clamp(42px,7vw,62px)!important}
+  .dialogueNameplate{top:-9px!important}
+  .dialogueCard h2{font-size:9.5px!important;padding:3px 8px!important}
+  .dialoguePanel #dialogueText{font-size:9.5px!important;margin-bottom:3px!important}
+  .dialogueOption{min-height:22px!important;grid-template-columns:24px 1fr!important}
+  .dialogueOptionLabel{font-size:8.4px!important}
+}

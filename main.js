@@ -162,9 +162,10 @@ function buildMobileDebugReport() {
     else if (gl) glInfo = `webgl: ${gl.getParameter(gl.VERSION)}`;
   } catch (_) {}
   return [
-    'BETONSHCHIK MOBILE DEBUG v51.81',
+    'BETONSHCHIK MOBILE DEBUG v51.83',
     `safe=${MOBILE_SAFE_MODE} scene=${FINAL_SCENE_URL}`,
     `screen=${innerWidth}x${innerHeight} dpr=${devicePixelRatio}`,
+    `staticGeomCPUReleased=${(mobileStaticGeometryReleasedBytes / (1024 * 1024)).toFixed(1)} MiB`,
     `ua=${navigator.userAgent}`,
     glInfo,
     '',
@@ -209,12 +210,19 @@ const renderer = new THREE.WebGLRenderer({
   powerPreference: 'high-performance',
   preserveDrawingBuffer: false,
 });
-// Adaptive mobile DPR: starts crisp, then moves only when sustained FPS proves the GPU budget.
-// Desktop rendering is unchanged.
-const MOBILE_DPR_MIN = 0.90;
-const MOBILE_DPR_MAX = 1.35;
-let mobileRenderScale = TOUCH_DEVICE ? Math.min(devicePixelRatio, 1.16) : 1.0;
-renderer.setPixelRatio(TOUCH_DEVICE ? Math.min(devicePixelRatio, mobileRenderScale) : Math.min(devicePixelRatio, 1.55));
+// Mobile DPR is intentionally conservative and, once gameplay starts, can only move DOWN.
+// The previous governor raised/lowered DPR every 2.5 s. Each change reallocates Safari's
+// drawing buffers; repeated reallocations eventually evicted the WebGL context on iPhone.
+// 1.08 stays visibly sharper than the old emergency profile without building a GPU-memory sawtooth.
+const MOBILE_DPR_MIN = 0.84;
+const MOBILE_DPR_START = 1.08;
+let mobileRenderScale = TOUCH_DEVICE ? Math.min(devicePixelRatio, MOBILE_DPR_START) : 1.0;
+let appliedMainRendererDpr = TOUCH_DEVICE
+  ? Math.min(devicePixelRatio, mobileRenderScale)
+  : Math.min(devicePixelRatio, 1.55);
+let appliedMainRendererWidth = Math.max(1, Math.round(innerWidth));
+let appliedMainRendererHeight = Math.max(1, Math.round(innerHeight));
+renderer.setPixelRatio(appliedMainRendererDpr);
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = !TOUCH_DEVICE;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -222,6 +230,26 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.08;
 mount.appendChild(renderer.domElement);
+
+function applyMainRendererSize(width = innerWidth, height = innerHeight, force = false) {
+  const nextWidth = Math.max(1, Math.round(width));
+  const nextHeight = Math.max(1, Math.round(height));
+  const nextDpr = TOUCH_DEVICE
+    ? Math.min(devicePixelRatio, mobileRenderScale)
+    : Math.min(devicePixelRatio, 1.55);
+  if (
+    !force &&
+    nextWidth === appliedMainRendererWidth &&
+    nextHeight === appliedMainRendererHeight &&
+    Math.abs(nextDpr - appliedMainRendererDpr) < .001
+  ) return false;
+  appliedMainRendererWidth = nextWidth;
+  appliedMainRendererHeight = nextHeight;
+  appliedMainRendererDpr = nextDpr;
+  renderer.setPixelRatio(nextDpr);
+  renderer.setSize(nextWidth, nextHeight, false);
+  return true;
+}
 
 // v0.45: clean indie-grade post stack. No SSAO: it caused black halos on the huge
 // joined GLB. Desktop gets very restrained high-threshold bloom for sun/bright highlights;
@@ -900,6 +928,75 @@ function freezeMobileStaticMeshes(root) {
   console.log(`[MOBILE PERF] frozen static mesh transforms: ${frozen}`);
 }
 
+// GLTF BufferAttributes keep typed-array views into the eight large FINAL_GEOM buffers.
+// Once a static attribute is uploaded, WebGL owns the render copy and the CPU view is no
+// longer needed during normal play. Releasing it prevents the scene from living in memory
+// twice (CPU + GPU), which is especially important under iOS' per-tab memory limit.
+// A lost context still follows the existing full-page recovery path, so keeping a second
+// 140+ MB copy solely for context restoration would make that context loss more likely.
+let mobileStaticGeometryReleaseRegistered = false;
+let mobileStaticGeometryReleasedBytes = 0;
+function registerMobileStaticGeometryRelease(root) {
+  if (!TOUCH_DEVICE || !root || mobileStaticGeometryReleaseRegistered) return;
+
+  const ownerUsage = new Map();
+  const uploadOwners = new Set();
+  const backingBuffers = new Set();
+  let registeredBytes = 0;
+
+  const trackAttribute = (attribute, visible) => {
+    if (!attribute) return;
+    const owner = attribute.isInterleavedBufferAttribute ? attribute.data : attribute;
+    const array = owner?.array;
+    if (!owner || !array) return;
+    if (owner.usage !== undefined && owner.usage !== THREE.StaticDrawUsage) return;
+    const entry = ownerUsage.get(owner);
+    if (entry) { if (visible) entry.visible = true; }
+    else ownerUsage.set(owner, { visible });
+    if (array.buffer && !backingBuffers.has(array.buffer)) {
+      backingBuffers.add(array.buffer);
+      registeredBytes += array.buffer.byteLength || array.byteLength || 0;
+    }
+  };
+
+  root.traverse(o => {
+    if (!(o.isMesh || o.isLine || o.isPoints) || !o.geometry) return;
+    let effectivelyVisible = o.visible;
+    for (let p = o.parent; effectivelyVisible && p; p = p.parent) effectivelyVisible = p.visible;
+    const geometry = o.geometry;
+    trackAttribute(geometry.index, effectivelyVisible);
+    for (const attribute of Object.values(geometry.attributes || {})) trackAttribute(attribute, effectivelyVisible);
+    for (const morphList of Object.values(geometry.morphAttributes || {})) {
+      for (const attribute of morphList || []) trackAttribute(attribute, effectivelyVisible);
+    }
+  });
+
+  for (const [owner, use] of ownerUsage) {
+    // Hidden authored helpers/alternate LODs never upload. Their cached bounds/transforms
+    // were already consumed above, so release those arrays immediately.
+    if (!use.visible) {
+      mobileStaticGeometryReleasedBytes += owner.array?.byteLength || 0;
+      owner.array = null;
+      continue;
+    }
+
+    uploadOwners.add(owner);
+    const previousUpload = owner.onUploadCallback;
+    owner.onUpload(function releaseStaticCPUArrayAfterUpload() {
+      if (typeof previousUpload === 'function') previousUpload.call(this);
+      const uploadedArray = this.array;
+      if (!uploadedArray) return;
+      mobileStaticGeometryReleasedBytes += uploadedArray.byteLength || 0;
+      this.array = null;
+    });
+  }
+
+  mobileStaticGeometryReleaseRegistered = true;
+  const mib = registeredBytes / (1024 * 1024);
+  console.log(`[MOBILE MEMORY] static geometry CPU release armed: ${uploadOwners.size} visible attrs / ~${mib.toFixed(1)} MiB`);
+  mobileDebugLog(`static geometry release armed: ${uploadOwners.size} visible attrs / ~${mib.toFixed(1)} MiB`);
+}
+
 function addObjectCollider(obj, name = obj?.name || 'model', pad = .06) {
   if (!obj) return;
   obj.updateWorldMatrix(true, true);
@@ -1504,7 +1601,16 @@ const pitBottomMat = new THREE.MeshStandardMaterial({
   polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2
 });
 const wetConcreteMat = new THREE.MeshStandardMaterial({
-  color: 0x626a67, roughness: .34, metalness: 0.0, side: THREE.DoubleSide
+  color: 0x626a67,
+  roughness: .34,
+  metalness: 0.0,
+  side: THREE.DoubleSide,
+  // The wet top ends flush with the structural slab. Bias it slightly toward
+  // the camera so mobile depth precision cannot turn that shared rim into a
+  // dotted black seam.
+  polygonOffset: true,
+  polygonOffsetFactor: -1,
+  polygonOffsetUnits: -2,
 });
 
 function addPitBox(name, x, y, z, w, h, d, mat) {
@@ -1569,6 +1675,58 @@ for (let zi = 0; zi < zCuts.length - 1; zi++) {
     tile.frustumCulled = false;
     pitGroup.add(tile);
   }
+}
+
+function createConcreteEdgeSkirt(zone, edge) {
+  const alongX = edge === 'minZ' || edge === 'maxZ';
+  const segments = alongX ? zone.cols : zone.rows;
+  const positions = new Float32Array((segments + 1) * 2 * 3);
+  const indices = new Uint16Array(segments * 6);
+  const surfaceVertexIndices = new Uint16Array(segments + 1);
+
+  for (let i = 0; i <= segments; i++) {
+    const vc = edge === 'minX' ? 0 : edge === 'maxX' ? zone.cols : i;
+    const vr = edge === 'minZ' ? 0 : edge === 'maxZ' ? zone.rows : i;
+    const x = -zone.w * .5 + (vc / zone.cols) * zone.w;
+    const z = -zone.d * .5 + (vr / zone.rows) * zone.d;
+    const p = i * 6;
+
+    // Bottom/top pair. The tiny downward overlap hides precision cracks where
+    // the dynamic concrete meets the fixed pit bottom and wall meshes.
+    positions[p] = x;
+    positions[p + 1] = -.004;
+    positions[p + 2] = z;
+    positions[p + 3] = x;
+    positions[p + 4] = 0;
+    positions[p + 5] = z;
+    surfaceVertexIndices[i] = vr * (zone.cols + 1) + vc;
+
+    if (i < segments) {
+      const b0 = i * 2;
+      const t0 = b0 + 1;
+      const b1 = b0 + 2;
+      const t1 = b0 + 3;
+      indices.set([b0, b1, t0, t0, b1, t1], i * 6);
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  geometry.computeVertexNormals();
+  geometry.computeBoundingSphere();
+
+  const mesh = new THREE.Mesh(geometry, wetConcreteMat);
+  mesh.name = `FRESH_CONCRETE_ZONE_${zone.id}_SKIRT_${edge}`;
+  mesh.position.copy(zone.surface.position);
+  mesh.castShadow = false;
+  mesh.receiveShadow = true;
+  mesh.frustumCulled = false;
+  mesh.renderOrder = TOUCH_DEVICE ? 3 : 0;
+  mesh.visible = false;
+  mesh.userData.surfaceVertexIndices = surfaceVertexIndices;
+  scene.add(mesh);
+  return mesh;
 }
 
 // Bottom + four vertical walls for every bay.
@@ -1748,6 +1906,12 @@ for (const zone of POUR_ZONES) {
   zone.surface.receiveShadow = true;
   zone.surface.visible = false;
   scene.add(zone.surface);
+
+  // PlaneGeometry has no vertical sides. Without these four lightweight
+  // dynamic skirts the raised edge exposes the clear colour between the wet
+  // surface and the pit wall, which looked like broken/dashed card borders.
+  zone.surfaceSkirts = ['minZ', 'maxZ', 'minX', 'maxX']
+    .map(edge => createConcreteEdgeSkirt(zone, edge));
 }
 
 function markZoneDirty(zone) { if (zone) zone.dirty = true; }
@@ -1786,6 +1950,21 @@ function refreshConcreteSurfaces() {
     zone.surfaceGeom.computeVertexNormals();
     zone.surfaceGeom.computeBoundingSphere();
     zone.surface.visible = any;
+
+    for (const skirt of zone.surfaceSkirts || []) {
+      const skirtPos = skirt.geometry.attributes.position;
+      const edgeIndices = skirt.userData.surfaceVertexIndices;
+      for (let i = 0; i < edgeIndices.length; i++) {
+        // Odd vertices are the live top edge; even vertices stay slightly
+        // below the pit floor to guarantee overlap.
+        skirtPos.setY(i * 2, -.004);
+        skirtPos.setY(i * 2 + 1, pos.getY(edgeIndices[i]) + .001);
+      }
+      skirtPos.needsUpdate = true;
+      skirt.geometry.computeVertexNormals();
+      skirt.geometry.computeBoundingSphere();
+      skirt.visible = any;
+    }
   }
 }
 
@@ -1940,6 +2119,7 @@ let qteHits = 0;
 let qteMisses = 0;
 let wastedVolume = 0;
 let concreteRelaxTimer = 0;
+let concreteVisualTimer = 0;
 
 
 // -----------------------------
@@ -1949,6 +2129,10 @@ let concreteRelaxTimer = 0;
 // Outside the recessed bays it forms persistent wet clumps which can be
 // pushed with the rake back into a bay.
 const spillClumps = [];
+// A moving hose used to create an unlimited number of individual spill meshes.
+// Besides growing scene memory, relaxSurfaceSpills() compares every pair (O(n²)).
+// Pool a fixed visual budget and preserve excess volume by merging the lightest old clump.
+const SPILL_CLUMP_MAX = TOUCH_DEVICE ? 56 : 160;
 const spillGroup = new THREE.Group();
 spillGroup.name = 'PERSISTENT_SURFACE_CONCRETE_SPILLS';
 scene.add(spillGroup);
@@ -2018,7 +2202,57 @@ function refreshSpillClump(p) {
   );
 }
 
+function recycleSpillClump(x, z, volume, impactVX, impactVZ, impactSpeed) {
+  let victim = spillClumps[0];
+  for (const p of spillClumps) {
+    if ((p.volume || 0) < (victim.volume || 0)) victim = p;
+  }
+
+  // Preserve the victim's concrete by folding it into its nearest neighbour,
+  // then reuse the already-uploaded Mesh for the new impact point.
+  let receiver = null;
+  let receiverD2 = Infinity;
+  for (const p of spillClumps) {
+    if (p === victim) continue;
+    const dx = p.x - victim.x;
+    const dz = p.z - victim.z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < receiverD2) { receiver = p; receiverD2 = d2; }
+  }
+  if (receiver && victim.volume > 0) {
+    const a = Math.max(0, receiver.volume);
+    const b = Math.max(0, victim.volume);
+    const total = a + b;
+    if (total > 0) {
+      receiver.x = (receiver.x * a + victim.x * b) / total;
+      receiver.z = (receiver.z * a + victim.z * b) / total;
+      receiver.vx = (receiver.vx * a + victim.vx * b) / total;
+      receiver.vz = (receiver.vz * a + victim.vz * b) / total;
+      receiver.volume = total;
+      receiver.mobility = Math.max(receiver.mobility || .18, victim.mobility || .18);
+      receiver.spread = Math.max(receiver.spread || 1, victim.spread || 1);
+      refreshSpillClump(receiver);
+    }
+  }
+
+  victim.x = x;
+  victim.z = z;
+  victim.volume = Math.max(0, volume);
+  victim.radius = .2;
+  victim.height = .035;
+  victim.vx = THREE.MathUtils.clamp(impactVX * .11, -.75, .75);
+  victim.vz = THREE.MathUtils.clamp(impactVZ * .11, -.75, .75);
+  victim.mobility = THREE.MathUtils.clamp(.78 + impactSpeed * .02, .78, 1);
+  victim.spread = .72;
+  victim.age = 0;
+  refreshSpillClump(victim);
+  return victim;
+}
+
 function createSpillClump(x, z, volume, impactVX = 0, impactVZ = 0, impactSpeed = 0) {
+  if (spillClumps.length >= SPILL_CLUMP_MAX) {
+    return recycleSpillClump(x, z, volume, impactVX, impactVZ, impactSpeed);
+  }
   const mesh = new THREE.Mesh(spillGeom, spillMat);
   mesh.name = `SURFACE_SPILL_${spillSerial++}`;
   mesh.castShadow = false;
@@ -2607,7 +2841,7 @@ function relaxConcrete(dt) {
 }
 
 // Falling blobs are short-lived stream visuals. Persistent volume lives either in a bay heightfield or in surface spill clumps.
-const BLOB_MAX = 120;
+const BLOB_MAX = TOUCH_DEVICE ? 48 : 120;
 const blobGeom = new THREE.SphereGeometry(.15, 14, 10);
 const blobMat = new THREE.MeshStandardMaterial({ color: 0x707774, roughness: .40 });
 const blobs = [];
@@ -3606,7 +3840,11 @@ function updatePhysicalHose(dt) {
 
   updatePouring(dt);
   relaxConcrete(dt);
-  refreshConcreteSurfaces();
+  concreteVisualTimer += dt;
+  if (!TOUCH_DEVICE || concreteVisualTimer >= 1 / 12) {
+    concreteVisualTimer = 0;
+    refreshConcreteSurfaces();
+  }
   updateBlobs(dt);
   updateQTE(dt);
 }
@@ -3828,6 +4066,7 @@ function resetPourJob() {
   blobSpawnAccumulator = 0;
   pourTipPrevSafeValid = false;
   concreteRelaxTimer = 0;
+  concreteVisualTimer = 0;
   resetQTECooldown();
   updatePourHUD();
 }
@@ -4583,6 +4822,18 @@ loader.load(FINAL_SCENE_URL, gltf => {
   addFinalLayoutColliders(layoutRoot);
   carveMonetkaParkingPassage();
   freezeMobileStaticMeshes(layoutRoot);
+  if (TOUCH_DEVICE) {
+    // Cache vehicle bounds while FINAL's CPU vertex arrays are still available.
+    resolveMachineAudioWorldPositions();
+    for (const spec of NPC_SPECS) {
+      const placeholder = layoutRoot.getObjectByName(spec.placeholder);
+      if (placeholder) spec.cachedLayoutPose = placeholderPose(placeholder);
+    }
+    // The shop's cigarette preview is baked from a FINAL mesh. Cache that tiny
+    // detached copy before FINAL's static CPU attributes are released.
+    getShopPreviewSource('samec').catch(e => console.warn('Samec preview pre-cache failed', e));
+    registerMobileStaticGeometryRelease(layoutRoot);
+  }
   // Avoid the largest mobile memory spike: scene geometry/textures finish uploading first,
   // then NPC FBX/base textures are loaded after the browser has had time to release network buffers.
   if (TOUCH_DEVICE) {
@@ -5854,6 +6105,7 @@ const procWorldQ = new THREE.Quaternion();
 const procParentQ = new THREE.Quaternion();
 const procDeltaQ = new THREE.Quaternion();
 const procLocalQ = new THREE.Quaternion();
+const procIdentityQ = new THREE.Quaternion();
 const procDirNow = new THREE.Vector3();
 const procDirTarget = new THREE.Vector3();
 const procEuler = new THREE.Euler();
@@ -6873,7 +7125,7 @@ async function spawnRiggedNPC(spec, idleSource) {
     return;
   }
 
-  const pose = placeholderPose(placeholder);
+  const pose = spec.cachedLayoutPose || placeholderPose(placeholder);
   // Small gameplay collider around the character's feet; do not use the full donor
   // bbox because arms/coat silhouettes would make an unnecessarily huge wall.
   const npcR = .48;
@@ -7316,8 +7568,13 @@ async function loadArmsViewModel() {
     try {
       const cigRoot = await loadFBX('./assets/cigarette/cigarette.fbx');
       prepViewModel(cigRoot);
-      forceOpaqueProp(cigRoot,true);
-      normalizeProp(cigRoot,.085);
+      // Props must participate in the same depth buffer as the fingers. The
+      // old overlay mode always drew the cigarette on top of the hand.
+      forceOpaqueProp(cigRoot, false);
+      normalizeProp(cigRoot,.082);
+      // normalizeProp centres the whole cigarette. Shift the mesh so the grip
+      // lands near the filter instead of balancing it across the fingertips.
+      cigRoot.position.x -= .019;
       cigaretteProp=cigRoot;cigaretteVM.add(cigRoot);
       setHotbar3DModel('smoke',cigRoot);
     } catch (e) { console.warn('Cigarette failed', e); }
@@ -7325,20 +7582,20 @@ async function loadArmsViewModel() {
     try {
       const energyGLTF = await new Promise((resolve, reject) => loader.load('./assets/energy/litenergy_classic.gltf', resolve, undefined, reject));
       const eroot=energyGLTF.scene;
-      prepViewModel(eroot);forceOpaqueProp(eroot,true);normalizeProp(eroot,.155);
+      prepViewModel(eroot);forceOpaqueProp(eroot,false);normalizeProp(eroot,.148);
       energyProp=eroot;energyVM.add(eroot);setHotbar3DModel('energy',eroot);
     } catch (e) { console.warn('Energy failed', e); }
 
     try {
       const broot = await loadFBX('./assets/beer/Baltika.fbx');
-      prepViewModel(broot);forceOpaqueProp(broot,true);normalizeProp(broot,.168);
+      prepViewModel(broot);forceOpaqueProp(broot,false);normalizeProp(broot,.148);
       beerProp=broot;beerVM.add(broot);setHotbar3DModel('beer',broot);
     } catch (e) { console.warn('Beer failed', e); }
 
     try {
       const lighterGLTF = await new Promise((resolve, reject) => loader.load('./assets/lighter.glb', resolve, undefined, reject));
       const lroot = lighterGLTF.scene;
-      prepViewModel(lroot);forceOpaqueProp(lroot,true);normalizeProp(lroot,.105);
+      prepViewModel(lroot);forceOpaqueProp(lroot,false);normalizeProp(lroot,.105);
       lighterProp=lroot;lighterVM.add(lroot);
     } catch (e) { console.warn('Lighter failed', e); }
 
@@ -7467,7 +7724,7 @@ function rotateBoneWorldToward(bone, effector, target, strength = 1) {
   procDeltaQ.setFromUnitVectors(procDirNow, procDirTarget);
 
   if (strength < .999) {
-    procDeltaQ.slerp(new THREE.Quaternion(), 1 - strength);
+    procDeltaQ.slerp(procIdentityQ, 1 - strength);
   }
 
   bone.getWorldQuaternion(procWorldQ);
@@ -7549,7 +7806,9 @@ function applyProceduralDrinkPose(t, beer = false) {
   const lower = procSmooth01(THREE.MathUtils.clamp((t - .79) / .21, 0, 1));
   const hold = raise * (1 - lower);
 
-  cameraLocalToWorld(-.28, -.47, -.41, procTargetA);
+  // Keep the relaxed can and the gripping fingers fully inside the phone
+  // viewport instead of burying the hand below the hotbar.
+  cameraLocalToWorld(-.23, -.36, -.48, procTargetA);
   cameraLocalToWorld(-.12, -.16, -.29, procTargetB);
   procTargetC.copy(procTargetA).lerp(procTargetB, hold);
 
@@ -7711,7 +7970,7 @@ function requestMouseLock() {
 }
 function enterSite() {
   if (!sceneReady || !layoutRoot || !layoutRoot.parent) { showToast('ДОЖДИСЬ ЗАГРУЗКИ СЦЕНЫ'); return; }
-  resolveMachineAudioWorldPositions();
+  if (!pumpAudioWorldValid || !mixerAudioWorldValid) resolveMachineAudioWorldPositions();
   if (loadState) loadState.style.opacity = '0';
   startMainTheme();
   initGameAudio();
@@ -7842,6 +8101,7 @@ const MOBILE_LOOK_SENS_Y = 0.00365;
 
 function setupMobileStick(el, knob, onValue) {
   if (!el || !knob) return;
+  const trail = el.querySelector('.stickTrail');
   let pid=null;
   const deadzone=.055;
   const set=(e) => {
@@ -7849,8 +8109,10 @@ function setupMobileStick(el, knob, onValue) {
     const cx=r.left+r.width*.5, cy=r.top+r.height*.5;
     const size=Math.min(r.width,r.height);
     const walkRadius=size*.34;
-    const sprintRadius=size*.56;
-    const maxTravel=size*.72;
+    // Sprint begins only when the knob centre reaches the enlarged outer
+    // boundary. Pointer capture lets the thumb and knob continue beyond it.
+    const sprintRadius=size*.68;
+    const maxTravel=size*.84;
     const rawDx=e.clientX-cx, rawDy=e.clientY-cy;
     const rawLen=Math.hypot(rawDx,rawDy);
     const dirX=rawLen>.001?rawDx/rawLen:0;
@@ -7861,6 +8123,15 @@ function setupMobileStick(el, knob, onValue) {
     // boundary, matching the readable over-pull used by mobile shooters.
     const travel=Math.min(rawLen,maxTravel);
     knob.style.transform=`translate(${dirX*travel}px,${dirY*travel}px)`;
+    if(trail){
+      const trailLength=Math.max(0,travel-size*.13);
+      trail.style.setProperty('--stick-trail-length',`${trailLength}px`);
+      trail.style.setProperty('--stick-trail-angle',`${Math.atan2(dirY,dirX)}rad`);
+      trail.style.setProperty(
+        '--stick-trail-opacity',
+        String(THREE.MathUtils.clamp((travel-size*.10)/(size*.30),0,.92))
+      );
+    }
     const sprintStrength=rawLen/sprintRadius;
     el.style.setProperty('--stick-pull',String(THREE.MathUtils.clamp(sprintStrength,0,1.35)));
     el.classList.toggle('sprintReady',sprintStrength>=.82 && sprintStrength<1);
@@ -7884,6 +8155,10 @@ function setupMobileStick(el, knob, onValue) {
     if(e.pointerId!==pid)return;
     pid=null;
     knob.style.transform='translate(0,0)';
+    if(trail){
+      trail.style.setProperty('--stick-trail-length','0px');
+      trail.style.setProperty('--stick-trail-opacity','0');
+    }
     el.style.removeProperty('--stick-pull');
     el.classList.remove('sprintReady','isSprinting');
     onValue(0,0,0);
@@ -8042,16 +8317,23 @@ function refreshMobileOrientationUI(){
   document.documentElement.classList.toggle('mobilePortrait', TOUCH_DEVICE && !MOBILE_LANDSCAPE());
 }
 refreshMobileOrientationUI();
-window.addEventListener('resize', () => {
+let viewportResizeTimer = 0;
+function applyViewportResize() {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
-  renderer.setPixelRatio(TOUCH_DEVICE ? Math.min(devicePixelRatio,mobileRenderScale) : Math.min(devicePixelRatio,1.55));
-  renderer.setSize(innerWidth, innerHeight);
+  applyMainRendererSize(innerWidth, innerHeight);
   if (composer) {
     composer.setPixelRatio(Math.min(devicePixelRatio,1.15));
     composer.setSize(innerWidth, innerHeight);
     bloomPass?.setSize(innerWidth,innerHeight);
   }
   refreshMobileOrientationUI();
+}
+window.addEventListener('resize', () => {
+  // Safari emits a burst of resize events while browser chrome/fullscreen settles.
+  // Collapse that burst into one drawing-buffer allocation.
+  if (!TOUCH_DEVICE) { applyViewportResize(); return; }
+  clearTimeout(viewportResizeTimer);
+  viewportResizeTimer = setTimeout(applyViewportResize, 180);
 });
 
 function blocked(x, z) {
@@ -8130,9 +8412,9 @@ const DIALOGUE_SKINS = {
   pavel: {
     portrait: './assets/dialogue_v2/pavel.webp',
     paint: './assets/dialogue_v3/paint_pavel.png',
-    accent: '#5f8fe6',
-    accentDark: '#2b5ca8',
-    accentSoft: 'rgba(95,143,230,.24)',
+    accent: '#d8b847',
+    accentDark: '#806819',
+    accentSoft: 'rgba(216,184,71,.24)',
   },
   mandarin: {
     portrait: './assets/dialogue_v3/serega.webp',
@@ -8721,14 +9003,18 @@ shopBuyEl.addEventListener('click', () => {
 jobResultBtnEl.addEventListener('click', closeJobResultAndReset);
 updateEconomyUI();
 
-function worldPos(obj) { return obj.getWorldPosition(new THREE.Vector3()); }
+function worldPos(obj, out = interactionWorldPos) { return obj.getWorldPosition(out); }
 
 const interactionRaycaster = new THREE.Raycaster();
 const interactionNDC = new THREE.Vector2(0, 0);
+const interactionWorldPos = new THREE.Vector3();
+const interactionPlayerPoint = new THREE.Vector3();
 const interactionCamPos = new THREE.Vector3();
 const interactionCamDir = new THREE.Vector3();
 const interactionAimPoint = new THREE.Vector3();
 const interactionAimVec = new THREE.Vector3();
+const interactionAimBox = new THREE.Box3();
+const interactionHitPoint = new THREE.Vector3();
 const interactionNpcCapsuleBottom = new THREE.Vector3();
 const interactionNpcCapsuleTop = new THREE.Vector3();
 const interactionNpcRayPoint = new THREE.Vector3();
@@ -8787,7 +9073,7 @@ function pickupIsUnderCrosshair(it) {
     camera.getWorldPosition(interactionCamPos);
     camera.getWorldDirection(interactionCamDir).normalize();
     if (it.bounds) it.bounds.getCenter(interactionAimPoint);
-    else interactionAimPoint.copy(worldPos(aimObj));
+    else aimObj.getWorldPosition(interactionAimPoint);
     interactionAimVec.copy(interactionAimPoint).sub(interactionCamPos);
     const dist = interactionAimVec.length();
     if (dist > (it.radius || 2.6) + .45 || dist < .01) return false;
@@ -8805,14 +9091,18 @@ function pickupIsUnderCrosshair(it) {
   // requires looking directly at the object, but is robust from either side.
   if (it.bounds) {
     const pad = it.kind === 'rakePickup' ? 0.22 : 0.07;
-    const aimBox = it.bounds.clone().expandByScalar(pad);
-    const hitPoint = new THREE.Vector3();
-    if (interactionRaycaster.ray.intersectBox(aimBox, hitPoint)) {
-      const camPos = camera.getWorldPosition(new THREE.Vector3());
-      if (camPos.distanceTo(hitPoint) <= interactionRaycaster.far) return true;
+    interactionAimBox.copy(it.bounds).expandByScalar(pad);
+    if (interactionRaycaster.ray.intersectBox(interactionAimBox, interactionHitPoint)) {
+      camera.getWorldPosition(interactionCamPos);
+      if (interactionCamPos.distanceTo(interactionHitPoint) <= interactionRaycaster.far) return true;
     }
     if (it.kind === 'rakePickup' && rakePickupAimOK(it)) return true;
   }
+
+  // Mobile FINAL releases CPU vertex arrays after their first GPU upload. All
+  // physical pickups already have accurate cached world bounds, so a second
+  // triangle-level raycast is both redundant and incompatible with that release.
+  if (TOUCH_DEVICE) return false;
 
   const hits = interactionRaycaster.intersectObject(target, true);
   if (hits.some(hit => hit.distance <= interactionRaycaster.far)) return true;
@@ -8821,7 +9111,11 @@ function pickupIsUnderCrosshair(it) {
 
 function nearestInteractive() {
   let best = null, bd = Infinity;
-  const pp = new THREE.Vector3(playerPos.x, groundHeightAt(playerPos.x, playerPos.z) + 1.0, playerPos.z);
+  const pp = interactionPlayerPoint.set(
+    playerPos.x,
+    groundHeightAt(playerPos.x, playerPos.z) + 1.0,
+    playerPos.z
+  );
   for (const it of interactive) {
     let d;
     if (it.bounds) {
@@ -8832,7 +9126,7 @@ function nearestInteractive() {
       const dz = pp.z - cz;
       d = Math.hypot(dx, dz);
     } else {
-      d = worldPos(it.obj).distanceTo(pp);
+      d = worldPos(it.obj, interactionWorldPos).distanceTo(pp);
     }
     if (d < it.radius && d < bd) {
       // Physical pickups only become available when the crosshair is actually
@@ -9127,24 +9421,45 @@ function drawMap() {
 
 const clock = new THREE.Clock();
 let mobilePerfTimer=0, mobileFrameCounter=0, mobileFpsFrames=0, mobileFpsAccum=0;
+let mobileLowFpsWindows=0, mobileDprDropCount=0;
+let mobileUiAccumulator=0, mobileRenderAccumulator=0;
+const MOBILE_RENDER_INTERVAL = 1 / 45;
 function updateMobileRenderBudget(dt){
   if(!TOUCH_DEVICE)return;
   mobilePerfTimer+=dt; mobileFpsFrames++; mobileFpsAccum+=dt;
-  if(mobilePerfTimer<2.5)return;
+  if(mobilePerfTimer<8)return;
   const fps=mobileFpsFrames/Math.max(.001,mobileFpsAccum);
-  let next=mobileRenderScale;
-  if(fps<42) next=Math.max(MOBILE_DPR_MIN,mobileRenderScale-.06);
-  else if(fps>54) next=Math.min(Math.min(devicePixelRatio,MOBILE_DPR_MAX),mobileRenderScale+.04);
-  if(Math.abs(next-mobileRenderScale)>.001){
-    mobileRenderScale=next;
-    renderer.setPixelRatio(Math.min(devicePixelRatio,mobileRenderScale));
-    renderer.setSize(innerWidth,innerHeight,false);
+  if(fps<35) mobileLowFpsWindows=2;
+  else if(fps<41) mobileLowFpsWindows++;
+  else mobileLowFpsWindows=0;
+
+  // At most three lifetime downshifts, never an upshift. This removes the old
+  // DPR oscillation/reallocation loop while retaining a safety valve for weak GPUs.
+  if(mobileLowFpsWindows>=2 && mobileDprDropCount<3 && mobileRenderScale>MOBILE_DPR_MIN+.001){
+    mobileRenderScale=Math.max(MOBILE_DPR_MIN,mobileRenderScale-.08);
+    mobileDprDropCount++;
+    mobileLowFpsWindows=0;
+    applyMainRendererSize(innerWidth,innerHeight,true);
+    mobileDebugLog(`DPR downshift ${mobileRenderScale.toFixed(2)} at ${fps.toFixed(0)} fps`);
   }
   mobilePerfTimer=0; mobileFpsFrames=0; mobileFpsAccum=0;
 }
 function loop() {
   const dt = Math.min(clock.getDelta(), .05);
   updateMobileRenderBudget(dt);
+  mobileUiAccumulator += dt;
+  const updateUiNow = !TOUCH_DEVICE || mobileUiAccumulator >= .10;
+  if (updateUiNow) mobileUiAccumulator = 0;
+
+  let renderThisFrame = true;
+  if (TOUCH_DEVICE) {
+    mobileRenderAccumulator = Math.min(
+      MOBILE_RENDER_INTERVAL * 2,
+      mobileRenderAccumulator + dt
+    );
+    renderThisFrame = mobileRenderAccumulator >= MOBILE_RENDER_INTERVAL;
+    if (renderThisFrame) mobileRenderAccumulator -= MOBILE_RENDER_INTERVAL;
+  }
   for (const mixer of npcMixers) mixer.update(dt);
   lockBabaToGround();
   updateBabaProceduralIdle(dt);
@@ -9231,43 +9546,47 @@ function loop() {
       hoseOutlineMat.uniforms.uOpacity.value = .72 + pulse * .24;
       hoseOutlineMat.uniforms.uExpand.value = .024 + pulse * .010;
     }
-    promptEl.textContent = it ? it.text : '';
-    updateMobileContextButtons(it);
-    zoneLabel.textContent = currentZone();
+    if (updateUiNow) {
+      promptEl.textContent = it ? it.text : '';
+      updateMobileContextButtons(it);
+      zoneLabel.textContent = currentZone();
+    }
   } else {
     syncCameraToPlayer();
     syncPlayerBodyToWorld();
     updateCigaretteSmoke(dt);
     stopPourAudio();
     hoseOutline.visible = false;
-    updateMobileContextButtons(null);
+    if (updateUiNow) updateMobileContextButtons(null);
   }
 
   if (!TOUCH_DEVICE) renderHotbar3DPreviews(dt);
 
-  staminaBar.style.width = `${Math.min(100, stamina / staminaMax * 100)}%`; staminaText.textContent = Math.round(stamina);
-  energyBar.style.width = `${energyBoost}%`; energyText.textContent = Math.round(energyBoost);
-  smokeCountEl.textContent = `${cigarettes}`;
-  drinkCountEl.textContent = `${energyCans}`;
-  beerCountEl.textContent = `${beerCans}`;
-  smokeStateEl.textContent = specialMode === 'smoke' ? 'КУРИШЬ' : 'ЗАКУРИТЬ';
-  drinkStateEl.textContent = specialMode === 'drink' ? 'ПЬЁШЬ' : 'ПЕРЕМОТКА';
-  beerStateEl.textContent = specialMode === 'beer' ? 'ПЬЁШЬ' : 'БАЛТИКА 9';
-  const staminaPctSafe = Math.min(100, stamina / staminaMax * 100);
-  document.body.classList.toggle('showStamina', staminaPctSafe < 99.4);
-  document.body.classList.toggle('showBoost', energyBoost > .5);
-  hotbarSmokeSlotEl.classList.toggle('active', specialMode === 'smoke');
-  hotbarDrinkSlotEl.classList.toggle('active', specialMode === 'drink');
-  hotbarBeerSlotEl.classList.toggle('active', specialMode === 'beer');
-  syncMobileHud();
-  hotbarRakeSlotEl.classList.toggle('active', rakeEquipped);
-  hotbarSmokeSlotEl.classList.toggle('empty', cigarettes <= 0);
-  hotbarDrinkSlotEl.classList.toggle('empty', energyCans <= 0);
-  hotbarBeerSlotEl.classList.toggle('empty', beerCans <= 0);
-  hotbarRakeSlotEl.classList.toggle('locked', !rakeOwned);
-  rakeHotbarStateEl.textContent = !rakeOwned ? '—' : (rakeEquipped ? '●' : '✓');
-  updateEconomyUI();
-  updatePourHUD();
+  if (updateUiNow) {
+    staminaBar.style.width = `${Math.min(100, stamina / staminaMax * 100)}%`; staminaText.textContent = Math.round(stamina);
+    energyBar.style.width = `${energyBoost}%`; energyText.textContent = Math.round(energyBoost);
+    smokeCountEl.textContent = `${cigarettes}`;
+    drinkCountEl.textContent = `${energyCans}`;
+    beerCountEl.textContent = `${beerCans}`;
+    smokeStateEl.textContent = specialMode === 'smoke' ? 'КУРИШЬ' : 'ЗАКУРИТЬ';
+    drinkStateEl.textContent = specialMode === 'drink' ? 'ПЬЁШЬ' : 'ПЕРЕМОТКА';
+    beerStateEl.textContent = specialMode === 'beer' ? 'ПЬЁШЬ' : 'БАЛТИКА 9';
+    const staminaPctSafe = Math.min(100, stamina / staminaMax * 100);
+    document.body.classList.toggle('showStamina', staminaPctSafe < 99.4);
+    document.body.classList.toggle('showBoost', energyBoost > .5);
+    hotbarSmokeSlotEl.classList.toggle('active', specialMode === 'smoke');
+    hotbarDrinkSlotEl.classList.toggle('active', specialMode === 'drink');
+    hotbarBeerSlotEl.classList.toggle('active', specialMode === 'beer');
+    syncMobileHud();
+    hotbarRakeSlotEl.classList.toggle('active', rakeEquipped);
+    hotbarSmokeSlotEl.classList.toggle('empty', cigarettes <= 0);
+    hotbarDrinkSlotEl.classList.toggle('empty', energyCans <= 0);
+    hotbarBeerSlotEl.classList.toggle('empty', beerCans <= 0);
+    hotbarRakeSlotEl.classList.toggle('locked', !rakeOwned);
+    rakeHotbarStateEl.textContent = !rakeOwned ? '—' : (rakeEquipped ? '●' : '✓');
+    updateEconomyUI();
+    updatePourHUD();
+  }
   if (toastTimer > 0) {
     toastTimer -= dt;
     if (toastTimer <= 0) toastEl.classList.remove('show'); if (mobileToastEl) mobileToastEl.classList.remove('show');
@@ -9282,10 +9601,10 @@ function loop() {
     const shadowStride = playerMovingNow ? 3 : 10;
     renderer.shadowMap.needsUpdate = (mobileFrameCounter % shadowStride) === 0;
   }
-  if (TOUCH_DEVICE) {
+  if (TOUCH_DEVICE && renderThisFrame) {
     camera.layers.set(0);
     renderer.render(scene, camera);
-  } else {
+  } else if (!TOUCH_DEVICE) {
     camera.layers.set(0);
     renderPass.camera = camera;
     composer?.render(dt);
@@ -9295,7 +9614,7 @@ function loop() {
   // World depth is cleared so the tool always stays visible, but the rake has
   // its own depthTest/depthWrite, so its rear faces can no longer overdraw its
   // front faces and fake transparency.
-  if (rakeEquipped && !rakeHiddenBySpecial && rakeVM.visible) {
+  if (renderThisFrame && rakeEquipped && !rakeHiddenBySpecial && rakeVM.visible) {
     // IMPORTANT:
     // The world/composer has already rendered the color buffer.
     // A normal renderer.render() with autoClear=true would wipe that color
@@ -9321,7 +9640,7 @@ function loop() {
     renderer.autoClear = prevAutoClear;
   }
 
-  if (shopOpen) {
+  if (shopOpen && renderThisFrame) {
     shopPreviewSpin += dt * .78;
     shopPreviewRoot.rotation.y = shopPreviewSpin;
     ensureShopPreviewRenderer().render(shopPreviewScene, shopPreviewCamera);

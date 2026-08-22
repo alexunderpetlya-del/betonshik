@@ -14,7 +14,7 @@
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png?v=51.41" />
   <title>БЕТОНЩИК</title>
   <link rel="manifest" href="./manifest.webmanifest?v=51.62" />
-  <link rel="stylesheet" href="./style.css?v=51.81" />
+  <link rel="stylesheet" href="./style.css?v=51.83" />
   <script type="importmap">
   {
     "imports": {
@@ -34,7 +34,11 @@
       <button id="mobileInteract" class="mobileWorldButton isHidden" type="button">ДЕЙСТВИЕ</button>
       <button id="mobileAction" class="mobileWorldButton mobileWorldAction isHidden" type="button">ВКЛ БЕТОН</button>
     </div>
-    <div class="mobileStick" id="moveStick" aria-label="Движение"><div class="stickRing"></div><div class="stickKnob" id="moveKnob"></div><span>ДВИЖЕНИЕ</span></div>
+    <div class="mobileStick" id="moveStick" aria-label="Движение">
+      <div class="stickRing"></div>
+      <div class="stickTrail" id="moveTrail" aria-hidden="true"></div>
+      <div class="stickKnob" id="moveKnob"></div>
+    </div>
   </div>
 
   <div id="mobileHud" aria-label="Мобильный HUD">
@@ -123,7 +127,6 @@
 <div id="qteLayer">
     <div id="qteTarget"><b>КЛИК</b></div>
     <div id="qteCursor"></div>
-    <div id="qteLabel">ШЛАНГ ВОТ-ВОТ ВЫСКОЛЬЗНЕТ ИЗ РУК!<small>ПОПАДИ В КРУГ · СОВПАДЕНИЕ КОЛЕЦ = ИДЕАЛЬНО</small></div>
   </div>
 
   <div id="shop" class="gameModal hidden">
@@ -177,7 +180,7 @@
         </div>
       </div>
 
-      <button id="shopClose" class="modalClose">ВЫХОД</button>
+      <button id="shopClose" class="modalClose" type="button" aria-label="Закрыть магазин" title="Закрыть">×</button>
     </div>
   </div>
 
@@ -210,6 +213,6 @@
     </div>
   </div>
 
-  <script type="module" src="./main.js?v=51.81"></script>
+  <script type="module" src="./main.js?v=51.83"></script>
 </body>
 </html>
