@@ -1056,6 +1056,139 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.84)!important;transiti
   .dialogueClose{margin-top:2px!important}
 }
 
+/* ============================================================
+   v51.81 — exact authored dialogue backdrops + compact phone card
+   ============================================================ */
+.dialoguePaint{
+  display:block!important;
+  background-color:transparent!important;
+  background-image:var(--dialog-paint)!important;
+  background-repeat:no-repeat!important;
+  background-position:center 46%!important;
+  background-size:contain!important;
+  -webkit-mask-image:none!important;
+  mask-image:none!important;
+  opacity:.98!important;
+  filter:drop-shadow(0 12px 21px rgba(0,0,0,.28))!important;
+}
+.dialogueLayer[data-npc="pavel"] .dialoguePaint{display:none!important}
+
+@media (pointer:coarse) and (orientation:landscape){
+  .dialogueLayer{
+    padding:0 max(9px,env(safe-area-inset-right)) max(9px,env(safe-area-inset-bottom)) max(9px,env(safe-area-inset-left))!important;
+    overflow:hidden!important;
+  }
+  .dialogueCard{
+    width:min(1080px,92vw)!important;
+    height:clamp(196px,52dvh,276px)!important;
+    min-height:0!important;
+    max-height:276px!important;
+  }
+  .dialoguePortraitStage{
+    left:-1%!important;
+    bottom:0!important;
+    width:33%!important;
+    height:111%!important;
+  }
+  .dialoguePaint{
+    left:-17%!important;
+    right:-23%!important;
+    top:1%!important;
+    bottom:-2%!important;
+    background-position:center 46%!important;
+    background-size:contain!important;
+  }
+  .dialogueLayer[data-npc="pavel"] .dialoguePortrait{transform:scale(.88)!important}
+  .dialogueLayer[data-npc="mandarin"] .dialoguePortrait{transform:scale(.87)!important}
+  .dialogueLayer[data-npc="george"] .dialoguePortrait{transform:scale(.88)!important}
+  .dialogueLayer[data-npc="baba"] .dialoguePortrait{transform:scale(.86)!important}
+  .dialoguePanel{
+    left:23%!important;
+    right:0!important;
+    top:12%!important;
+    bottom:2%!important;
+    padding:28px 11px 7px clamp(58px,9vw,86px)!important;
+    overflow:hidden!important;
+    border-radius:15px!important;
+  }
+  .dialogueNameplate{left:8.5%!important;top:-13px!important;max-width:74%!important}
+  .dialogueCard h2{padding:5px 10px 5px!important;font-size:clamp(10.5px,2vw,14px)!important}
+  .dialoguePanel #dialogueText{
+    flex:0 0 auto!important;
+    margin:0 34px 6px 0!important;
+    font-size:clamp(10.5px,2.25vh,13.5px)!important;
+    line-height:1.22!important;
+  }
+  #dialogueOptions{flex:0 0 auto!important;gap:3px!important;margin:auto 0 0!important}
+  .dialogueOption{min-height:27px!important;grid-template-columns:29px 1fr!important;border-radius:7px!important}
+  .dialogueOptionKey{font-size:10px!important}
+  .dialogueOptionLabel{padding:0 7px!important;font-size:clamp(8.8px,1.75vw,10.5px)!important;line-height:1.08!important}
+  .dialogueClose{
+    position:absolute!important;
+    top:5px!important;
+    right:7px!important;
+    bottom:auto!important;
+    width:28px!important;
+    min-width:28px!important;
+    height:25px!important;
+    margin:0!important;
+    padding:0!important;
+    display:grid!important;
+    place-items:center!important;
+    border:1px solid rgba(255,255,255,.10)!important;
+    background:rgba(255,255,255,.05)!important;
+  }
+  .dialogueClose kbd{display:none!important}
+  .dialogueClose span{font-size:0!important}
+  .dialogueClose span::before{content:"✕"!important;font-size:13px!important;color:rgba(255,255,255,.82)!important}
+}
+
+/* ============================================================
+   v51.81 — PUBG-style over-pull sprint boundary
+   ============================================================ */
+.touchDevice.mobileLandscape #moveStick{
+  overflow:visible!important;
+  isolation:isolate;
+}
+.touchDevice.mobileLandscape #moveStick::before{
+  content:"";
+  position:absolute;
+  z-index:0;
+  inset:-15px;
+  border:2px solid rgba(var(--mobile-ui-gold-rgb),.48);
+  border-radius:50%;
+  background:radial-gradient(circle,transparent 68%,rgba(var(--mobile-ui-gold-rgb),.055) 69% 100%);
+  box-shadow:0 0 0 1px rgba(0,0,0,.18),inset 0 0 20px rgba(var(--mobile-ui-gold-rgb),.045);
+  opacity:.72;
+  pointer-events:none;
+  transition:border-color .12s ease,box-shadow .12s ease,opacity .12s ease,transform .12s ease;
+}
+.touchDevice.mobileLandscape #moveStick .stickRing{z-index:1!important}
+.touchDevice.mobileLandscape #moveStick .stickKnob{
+  z-index:3!important;
+  transition:box-shadow .10s ease,filter .10s ease;
+}
+.touchDevice.mobileLandscape #moveStick>span{z-index:4!important}
+.touchDevice.mobileLandscape #moveStick.sprintReady::before{
+  border-color:rgba(232,205,151,.82);
+  opacity:.94;
+  box-shadow:0 0 18px rgba(var(--mobile-ui-gold-rgb),.20),inset 0 0 22px rgba(var(--mobile-ui-gold-rgb),.075);
+}
+.touchDevice.mobileLandscape #moveStick.isSprinting::before{
+  border-color:#ecd39f;
+  opacity:1;
+  transform:scale(1.025);
+  box-shadow:0 0 24px rgba(var(--mobile-ui-gold-rgb),.36),inset 0 0 26px rgba(var(--mobile-ui-gold-rgb),.11);
+}
+.touchDevice.mobileLandscape #moveStick.isSprinting .stickKnob{
+  filter:brightness(1.08);
+  box-shadow:0 7px 22px rgba(0,0,0,.34),0 0 18px rgba(var(--mobile-ui-gold-rgb),.52),inset 0 1px 0 rgba(255,247,224,.42)!important;
+}
+.touchDevice.mobileLandscape #moveStick.isSprinting>span{
+  color:#e7cd99!important;
+  text-shadow:0 0 9px rgba(var(--mobile-ui-gold-rgb),.46);
+}
+
 
 /* v51.49 — dialogue UI rebuilt in code: only portraits + paint backdrops, rest is clean CSS UI */
 .dialogueLayer{
@@ -2869,4 +3002,42 @@ body.dialogueActive #hud{filter:brightness(.52) saturate(.82)!important}
   .dialogueOptionKey{font-size:10px!important}
   .dialogueOptionLabel{font-size:9.2px!important;padding:0 7px!important}
   .dialogueClose{margin-top:2px!important}
+}
+
+/* v51.81 FINAL CASCADE — keep these after every historical dialogue rule. */
+.dialoguePaint{
+  display:block!important;
+  background:transparent var(--dialog-paint) center 46%/contain no-repeat!important;
+  -webkit-mask-image:none!important;
+  mask-image:none!important;
+  opacity:.98!important;
+  filter:drop-shadow(0 12px 21px rgba(0,0,0,.28))!important;
+}
+.dialogueLayer[data-npc="pavel"] .dialoguePaint{display:none!important}
+
+@media (pointer:coarse) and (orientation:landscape){
+  .dialogueLayer{padding:0 max(9px,env(safe-area-inset-right)) max(9px,env(safe-area-inset-bottom)) max(9px,env(safe-area-inset-left))!important;overflow:hidden!important}
+  .dialogueCard{width:min(1080px,92vw)!important;height:clamp(196px,52dvh,276px)!important;min-height:0!important;max-height:276px!important}
+  .dialoguePortraitStage{left:-1%!important;bottom:0!important;width:33%!important;height:111%!important}
+  .dialoguePaint{left:-17%!important;right:-23%!important;top:1%!important;bottom:-2%!important;background-position:center 46%!important;background-size:contain!important}
+  .dialogueLayer[data-npc="pavel"] .dialoguePortrait{transform:scale(.88)!important}
+  .dialogueLayer[data-npc="mandarin"] .dialoguePortrait{transform:scale(.87)!important}
+  .dialogueLayer[data-npc="george"] .dialoguePortrait{transform:scale(.88)!important}
+  .dialogueLayer[data-npc="baba"] .dialoguePortrait{transform:scale(.86)!important}
+  .dialoguePanel{left:23%!important;right:0!important;top:12%!important;bottom:2%!important;padding:28px 11px 7px clamp(58px,9vw,86px)!important;overflow:hidden!important;border-radius:15px!important}
+  .dialogueNameplate{left:8.5%!important;top:-13px!important;max-width:74%!important}
+  .dialogueCard h2{padding:5px 10px 5px!important;font-size:clamp(10.5px,2vw,14px)!important}
+  .dialoguePanel #dialogueText{flex:0 0 auto!important;margin:0 34px 6px 0!important;font-size:clamp(10.5px,2.25vh,13.5px)!important;line-height:1.22!important}
+  #dialogueOptions{flex:0 0 auto!important;gap:3px!important;margin:auto 0 0!important}
+  .dialogueOption{min-height:27px!important;grid-template-columns:29px 1fr!important;border-radius:7px!important}
+  .dialogueOptionKey{font-size:10px!important}
+  .dialogueOptionLabel{padding:0 7px!important;font-size:clamp(8.8px,1.75vw,10.5px)!important;line-height:1.08!important}
+  .dialogueClose{position:absolute!important;top:5px!important;right:7px!important;bottom:auto!important;width:28px!important;min-width:28px!important;height:25px!important;margin:0!important;padding:0!important;display:grid!important;place-items:center!important;border:1px solid rgba(255,255,255,.10)!important;background:rgba(255,255,255,.05)!important}
+  .dialogueClose kbd{display:none!important}
+  .dialogueClose span{font-size:0!important}
+  .dialogueClose span::before{content:"✕"!important;font-size:13px!important;color:rgba(255,255,255,.82)!important}
+  .touchDevice.mobileLandscape #moveStick{overflow:visible!important;isolation:isolate}
+  .touchDevice.mobileLandscape #moveStick .stickRing{z-index:1!important}
+  .touchDevice.mobileLandscape #moveStick .stickKnob{z-index:3!important}
+  .touchDevice.mobileLandscape #moveStick>span{z-index:4!important}
 }
