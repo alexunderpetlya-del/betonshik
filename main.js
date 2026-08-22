@@ -68,6 +68,25 @@ const qteScoreEl = document.querySelector('#qteScore');
 const qteLayerEl = document.querySelector('#qteLayer');
 const qteTargetEl = document.querySelector('#qteTarget');
 const qteCursorEl = document.querySelector('#qteCursor');
+const qtePerfectFeedbackEl = document.querySelector('#qtePerfectFeedback');
+const eventAlarmEl = document.querySelector('#eventAlarm');
+const eventAlarmTitleEl = document.querySelector('#eventAlarmTitle');
+const eventAlarmTextEl = document.querySelector('#eventAlarmText');
+const blindnessOverlayEl = document.querySelector('#blindnessOverlay');
+const settlementCutsceneEl = document.querySelector('#settlementCutscene');
+const settlementRankCardEl = document.querySelector('#settlementRankCard');
+const settlementRankTextEl = document.querySelector('#settlementRankText');
+const settlementRankCaptionEl = document.querySelector('#settlementRankCaption');
+const settlementRankRewardEl = document.querySelector('#settlementRankReward');
+const settlementRankOverrideEl = document.querySelector('#settlementRankOverride');
+let settlementRankSheetPreload = null;
+function preloadSettlementRankSheet() {
+  if (settlementRankSheetPreload) return settlementRankSheetPreload;
+  settlementRankSheetPreload = new Image();
+  settlementRankSheetPreload.decoding = 'async';
+  settlementRankSheetPreload.src = './assets/ui/pour_rank_sheet.png';
+  return settlementRankSheetPreload;
+}
 const shopEl = document.querySelector('#shop');
 const shopMoneyEl = document.querySelector('#shopMoney');
 const mobileInteractBtn = document.querySelector('#mobileInteract');
@@ -78,6 +97,7 @@ const mobileFillPercentEl = document.querySelector('#mobileFillPercent');
 const mobileLevelPercentEl = document.querySelector('#mobileLevelPercent');
 const mobileStaminaFillEl = document.querySelector('#mobileStaminaFill');
 const mobileStaminaTextEl = document.querySelector('#mobileStaminaText');
+const mobileMoneyEl = document.querySelector('#mobileMoney');
 const mobileMoneyTextEl = document.querySelector('#mobileMoneyText');
 const mobileSmokeCountEl = document.querySelector('#mobileSmokeCount');
 const mobileDrinkCountEl = document.querySelector('#mobileDrinkCount');
@@ -98,12 +118,29 @@ const jobResultEl = document.querySelector('#jobResult');
 const jobResultTitleEl = document.querySelector('#jobResultTitle');
 const jobResultTextEl = document.querySelector('#jobResultText');
 const jobResultBtnEl = document.querySelector('#jobResultBtn');
+const characterStatsEl = document.querySelector('#characterStats');
+const characterStatsButtonEl = document.querySelector('#characterStatsButton');
+const mobileCharacterStatsButtonEl = document.querySelector('#mobileCharacterStatsButton');
+const characterStatsCloseEl = document.querySelector('#characterStatsClose');
+const statJobsEl = document.querySelector('#statJobs');
+const statConcreteEl = document.querySelector('#statConcrete');
+const statFloorEl = document.querySelector('#statFloor');
+const statRakeEl = document.querySelector('#statRake');
+const statMoneyEl = document.querySelector('#statMoney');
+const statEnergyEl = document.querySelector('#statEnergy');
+const statBeerEl = document.querySelector('#statBeer');
+const statCigarettesEl = document.querySelector('#statCigarettes');
+const statPerfectQteEl = document.querySelector('#statPerfectQte');
+const statBootsEl = document.querySelector('#statBoots');
+const statStaminaLevelEl = document.querySelector('#statStaminaLevel');
+const statConcreteGradeEl = document.querySelector('#statConcreteGrade');
 const dialogueEl = document.querySelector('#dialogue');
 const dialoguePortraitEl = document.querySelector('#dialoguePortrait');
 const dialogueNameEl = document.querySelector('#dialogueName');
 const dialogueTextEl = document.querySelector('#dialogueText');
 const dialogueOptionsEl = document.querySelector('#dialogueOptions');
 const dialogueCloseEl = document.querySelector('#dialogueClose');
+const economyEl = document.querySelector('#economy');
 const mapCtx = minimap.getContext('2d');
 minimap.style.display = 'none';
 
@@ -162,7 +199,7 @@ function buildMobileDebugReport() {
     else if (gl) glInfo = `webgl: ${gl.getParameter(gl.VERSION)}`;
   } catch (_) {}
   return [
-    'BETONSHCHIK MOBILE DEBUG v51.84',
+    'BETONSHCHIK MOBILE DEBUG v51.87',
     `safe=${MOBILE_SAFE_MODE} scene=${FINAL_SCENE_URL}`,
     `screen=${innerWidth}x${innerHeight} dpr=${devicePixelRatio}`,
     `staticGeomCPUReleased=${(mobileStaticGeometryReleasedBytes / (1024 * 1024)).toFixed(1)} MiB`,
@@ -1448,6 +1485,12 @@ for (let rz = 0; rz < COLUMN_Z.length - 1; rz++) {
       successRatio: .985,
       levelRequired: .94,
       levelPrompted: false,
+      readyNotified: false,
+      hosePouredVolume: 0,
+      settledGrade: null,
+      eventType: null,
+      eventThreshold: 0,
+      eventTriggered: false,
       dirty: true,
       piles: [],
     };
@@ -1492,7 +1535,8 @@ function activePourZone() {
 const TOTAL_TARGET_VOLUME = POUR_ZONES.reduce((s, z) => s + z.targetVolume, 0);
 
 function zoneAt(x, z) {
-  for (const zone of POUR_ZONES) {
+  for (let zoneIndex = 0; zoneIndex < POUR_ZONES.length; zoneIndex++) {
+    const zone = POUR_ZONES[zoneIndex];
     if (
       x >= zone.minX && x < zone.maxX &&
       z >= zone.minZ && z < zone.maxZ
@@ -2013,6 +2057,7 @@ function zoneLevelStats(zone) {
     rakeCoverage: 0,
     coverage: 0,
     rmsError: zone?.targetH || TARGET_H,
+    meanHeight: 0,
   };
 
   const n = zone.fill.length;
@@ -2022,11 +2067,19 @@ function zoneLevelStats(zone) {
     rakeCoverage: 0,
     coverage: 0,
     rmsError: zone.targetH,
+    meanHeight: 0,
   };
+
+  let meanHeight = 0;
+  for (let i = 0; i < n; i++) meanHeight += zone.fill[i];
+  meanHeight /= n;
 
   let sq = 0;
   for (let i = 0; i < n; i++) {
-    const err = zone.fill[i] - zone.targetH;
+    // Flatness is measured against the current mean layer, not the target
+    // height. Extra concrete is evaluated separately by Pavel as overpour, so
+    // a deliberately overfilled but properly raked map can still be handed in.
+    const err = zone.fill[i] - meanHeight;
     sq += err * err;
   }
 
@@ -2035,7 +2088,7 @@ function zoneLevelStats(zone) {
   // 0% when the slab is wildly lumpy/empty, 100% when cell heights are close
   // to the desired finished layer. Deliberately generous: this is arcade.
   const uniformity = THREE.MathUtils.clamp(
-    1 - rmsError / (zone.targetH * .68),
+    1 - rmsError / (zone.targetH * .52),
     0, 1
   );
 
@@ -2050,7 +2103,7 @@ function zoneLevelStats(zone) {
     0, 1
   );
 
-  return { score, uniformity, rakeCoverage, coverage, rmsError };
+  return { score, uniformity, rakeCoverage, coverage, rmsError, meanHeight };
 }
 
 function zoneReadyForSequence(zone) {
@@ -2112,6 +2165,59 @@ let pumpLevel = Math.max(0, Math.min(3, Number.parseInt(localStorage.getItem('be
 let jobsCompleted = Math.max(0, Number.parseInt(localStorage.getItem('beton_jobs_completed') || '0', 10) || 0);
 let staminaMax = 100 + staminaLevel * 15;
 
+const CAREER_STATS_KEY = 'beton_career_stats_v1';
+const CAREER_STATS_DEFAULTS = Object.freeze({
+  concreteM3: 0,
+  floorM2: 0,
+  rakeStrokes: 0,
+  moneyEarned: 0,
+  energyDrunk: 0,
+  beerDrunk: 0,
+  cigarettesSmoked: 0,
+  perfectQte: 0,
+});
+
+function loadCareerStats() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CAREER_STATS_KEY) || '{}');
+    const clean = { ...CAREER_STATS_DEFAULTS };
+    for (const key of Object.keys(clean)) {
+      const value = Number(parsed[key]);
+      if (Number.isFinite(value) && value >= 0) clean[key] = value;
+    }
+    return clean;
+  } catch (_) {
+    return { ...CAREER_STATS_DEFAULTS };
+  }
+}
+
+const careerStats = loadCareerStats();
+let careerStatsDirty = false;
+let careerStatsSaveTimer = 0;
+
+function recordCareerStat(key, amount = 1) {
+  if (!(key in careerStats) || !Number.isFinite(amount) || amount <= 0) return;
+  careerStats[key] += amount;
+  careerStatsDirty = true;
+}
+
+function saveCareerStats(force = false) {
+  if (!careerStatsDirty && !force) return;
+  try {
+    localStorage.setItem(CAREER_STATS_KEY, JSON.stringify(careerStats));
+    careerStatsDirty = false;
+    careerStatsSaveTimer = 0;
+  } catch (_) {}
+}
+
+function updateCareerStatsPersistence(dt) {
+  if (!careerStatsDirty) return;
+  careerStatsSaveTimer += dt;
+  if (careerStatsSaveTimer >= 2.5) saveCareerStats();
+}
+
+window.addEventListener('pagehide', () => saveCareerStats(true));
+
 function saveProgression() {
   localStorage.setItem('beton_boot_tier', String(bootTier));
   localStorage.setItem('beton_stamina_level', String(staminaLevel));
@@ -2126,6 +2232,163 @@ let qteMisses = 0;
 let wastedVolume = 0;
 let concreteRelaxTimer = 0;
 let concreteVisualTimer = 0;
+
+const POUR_EVENT_TYPES = ['pressure', 'hose', 'pump', 'eye'];
+const POUR_EVENT_COPY = {
+  pressure: {
+    title: 'СКАЧОК ДАВЛЕНИЯ',
+    text: 'Сейчас из шланга вылетит тяжёлая плюха',
+  },
+  hose: {
+    title: 'ШЛАНГ ВЫСКАЛЬЗЫВАЕТ',
+    text: 'Готовься быстро подобрать его',
+  },
+  pump: {
+    title: 'ПОЛОМКА НАСОСА',
+    text: 'После остановки иди к Джорджу',
+  },
+  eye: {
+    title: 'БРЫЗГИ В ЛИЦО',
+    text: 'Береги глаза',
+  },
+};
+let pendingPourEvent = null;
+let eventAlarmTimer = 0;
+let pumpBroken = false;
+let pressureSpikePending = false;
+let blindnessTimer = 0;
+
+function prepareZoneRandomEvent(zone, index = 0) {
+  if (!zone) return;
+  // Every map gets exactly one event. Rotating the random pick by map index
+  // keeps one playthrough varied without making the order predictable.
+  const randomIndex = Math.floor(Math.random() * POUR_EVENT_TYPES.length);
+  zone.eventType = POUR_EVENT_TYPES[(randomIndex + index) % POUR_EVENT_TYPES.length];
+  zone.eventThreshold = THREE.MathUtils.randFloat(.26, .62);
+  zone.eventTriggered = false;
+}
+
+POUR_ZONES.forEach((zone, index) => prepareZoneRandomEvent(zone, index));
+
+function cancelQTEWithoutPenalty() {
+  if (!qteActive) return;
+  qteActive = false;
+  qteLayerEl.classList.remove('active');
+  qteTargetEl.classList.remove('pulse', 'perfect', 'badclick');
+  resetQTECooldown();
+}
+
+function dropHoseFromEvent(message) {
+  hoseHeld = false;
+  playHoseSlipAudio();
+  if (hoseInteraction) hoseInteraction.text = pouring
+    ? 'E — взять шланг · БЕТОН ЛЬЁТСЯ!'
+    : 'E — взять шланг';
+  showToast(message, 4.2);
+}
+
+function showPourEventAlarm(zone) {
+  if (!zone || zone.eventTriggered || pendingPourEvent) return;
+  zone.eventTriggered = true;
+  pendingPourEvent = { zone, type: zone.eventType };
+  eventAlarmTimer = 1.35;
+  const copy = POUR_EVENT_COPY[zone.eventType] || POUR_EVENT_COPY.pressure;
+  if (eventAlarmEl) {
+    eventAlarmEl.dataset.event = zone.eventType;
+    eventAlarmTitleEl.textContent = copy.title;
+    eventAlarmTextEl.textContent = copy.text;
+    eventAlarmEl.classList.remove('show');
+    void eventAlarmEl.offsetWidth;
+    eventAlarmEl.classList.add('show');
+  }
+  playQTEAppearAudio();
+  mobileHaptic(35);
+}
+
+function executePendingPourEvent() {
+  const event = pendingPourEvent;
+  pendingPourEvent = null;
+  eventAlarmTimer = 0;
+  eventAlarmEl?.classList.remove('show');
+  if (!event) return;
+
+  if (event.type === 'pressure') {
+    pressureSpikePending = true;
+    showToast('СКАЧОК ДАВЛЕНИЯ — ТЯЖЁЛАЯ ПЛЮХА!', 3.4);
+    return;
+  }
+
+  if (event.type === 'hose') {
+    cancelQTEWithoutPenalty();
+    dropHoseFromEvent('ШЛАНГ ВЫСКОЛЬЗНУЛ — ПОДБЕРИ ЕГО! БЕТОН ПРОДОЛЖАЕТ ЛИТЬСЯ');
+    return;
+  }
+
+  if (event.type === 'pump') {
+    cancelQTEWithoutPenalty();
+    pumpBroken = true;
+    pouring = false;
+    if (hoseInteraction) hoseInteraction.text = 'НАСОС СЛОМАН · ИДИ К ДЖОРДЖУ';
+    showToast('НАСОС СЛОМАН · ИДИ К ДЖОРДЖУ', 5.2);
+    return;
+  }
+
+  if (event.type === 'eye') {
+    blindnessTimer = 2.0;
+    blindnessOverlayEl?.classList.add('active');
+    showToast('КАПЛЯ БЕТОНА ПОПАЛА В ГЛАЗ', 2.2);
+  }
+}
+
+function updatePourEvents(dt) {
+  if (eventAlarmTimer > 0) {
+    eventAlarmTimer -= dt;
+    if (eventAlarmTimer <= 0) executePendingPourEvent();
+  }
+
+  if (blindnessTimer > 0) {
+    blindnessTimer = Math.max(0, blindnessTimer - dt);
+    if (blindnessTimer <= 0) blindnessOverlayEl?.classList.remove('active');
+  }
+
+  if (
+    pendingPourEvent || pumpBroken || qteActive || !pouring ||
+    jobState !== 'active'
+  ) return;
+
+  const zone = activePourZone();
+  if (!zone || zone.eventTriggered) return;
+  const ratio = zoneVolume(zone) / Math.max(.000001, zone.targetVolume);
+  if (ratio >= zone.eventThreshold) showPourEventAlarm(zone);
+}
+
+const POUR_GRADE_RULES = [
+  { grade: 'S', maxOverpour: 1.5, multiplier: 1.40, color: '#ffe28a' },
+  { grade: 'A', maxOverpour: 4.0, multiplier: 1.20, color: '#8ff0b1' },
+  { grade: 'B', maxOverpour: 8.0, multiplier: 1.00, color: '#82c8ff' },
+  { grade: 'C', maxOverpour: 15.0, multiplier: .70, color: '#ffbb72' },
+  { grade: 'F', maxOverpour: Infinity, multiplier: .35, color: '#ff6d6d' },
+];
+const BASE_ZONE_REWARD = 500;
+
+function zoneOverpourPercent(zone) {
+  if (!zone) return 0;
+  // Count every cubic metre actually pumped into the bay, even when a local
+  // mound has reached its visual safety cap. Raking recovered spills still
+  // count through the live heightfield volume.
+  const judgedVolume = Math.max(zoneVolume(zone), zone.hosePouredVolume || 0);
+  return Math.max(0, judgedVolume / Math.max(.000001, zone.targetVolume) * 100 - 100);
+}
+
+function gradePourZone(zone) {
+  const overpour = zoneOverpourPercent(zone);
+  const rule = POUR_GRADE_RULES.find(entry => overpour <= entry.maxOverpour) || POUR_GRADE_RULES[POUR_GRADE_RULES.length - 1];
+  return {
+    ...rule,
+    overpour,
+    reward: Math.round(BASE_ZONE_REWARD * rule.multiplier),
+  };
+}
 
 
 // -----------------------------
@@ -2600,7 +2863,10 @@ function depositConcreteImpact(
 
   for (const [idx, w] of cells) {
     const cellVolume = amountM3 * (w / weightSum);
-    zone.fill[idx] += cellVolume / zone.cellArea;
+    zone.fill[idx] = Math.min(
+      zone.maxH,
+      zone.fill[idx] + cellVolume / zone.cellArea
+    );
 
     zone.mobility[idx] = Math.max(
       zone.mobility[idx],
@@ -2619,7 +2885,8 @@ function addConcreteVolumeAt(
   x, z, volumeM3,
   impactVX = 0,
   impactVZ = 0,
-  impactSpeed = 0
+  impactSpeed = 0,
+  fromHose = false
 ) {
   if (jobState !== 'active' || volumeM3 <= 0) return false;
 
@@ -2649,6 +2916,8 @@ function addConcreteVolumeAt(
     wastedVolume += volumeM3;
     return false;
   }
+
+  if (fromHose) zone.hosePouredVolume += volumeM3;
 
   const changed = depositConcreteImpact(
     zone,
@@ -2872,18 +3141,144 @@ for (let i = 0; i < BLOB_MAX; i++) {
 let blobCursor = 0;
 let blobSpawnAccumulator = 0;
 
+// Lightweight pooled hose splashes. They are purely visual and never allocate
+// during gameplay, which keeps repeated pouring safe on iPhone Safari.
+const HOSE_SPLASH_MAX = TOUCH_DEVICE ? 24 : 56;
+const hoseSplashGeom = new THREE.SphereGeometry(.022, 6, 4);
+const hoseSplashMat = new THREE.MeshStandardMaterial({
+  color: 0x8b918d,
+  roughness: .38,
+  metalness: 0,
+});
+const hoseSplashGroup = new THREE.Group();
+hoseSplashGroup.name = 'HOSE_SPLASH_PARTICLES';
+scene.add(hoseSplashGroup);
+const hoseSplashes = [];
+for (let i = 0; i < HOSE_SPLASH_MAX; i++) {
+  const mesh = new THREE.Mesh(hoseSplashGeom, hoseSplashMat);
+  mesh.visible = false;
+  mesh.castShadow = false;
+  hoseSplashGroup.add(mesh);
+  hoseSplashes.push({ mesh, vel: new THREE.Vector3(), age: 0, life: .45 });
+}
+let hoseSplashCursor = 0;
+let hoseSplashAccumulator = 0;
+
+function spawnHoseSplashBurst(x, z, zone, intensity = 1) {
+  const surfaceY = zone
+    ? zone.bottomY + getFillHeightAt(x, z)
+    : groundHeightAt(x, z);
+  const count = TOUCH_DEVICE ? 2 : 3;
+  for (let i = 0; i < count; i++) {
+    const p = hoseSplashes[hoseSplashCursor++ % hoseSplashes.length];
+    p.age = 0;
+    p.life = THREE.MathUtils.randFloat(.28, .50);
+    p.mesh.visible = true;
+    p.mesh.position.set(
+      x + THREE.MathUtils.randFloatSpread(.08),
+      surfaceY + .035,
+      z + THREE.MathUtils.randFloatSpread(.08)
+    );
+    const speed = THREE.MathUtils.randFloat(.34, .78) * intensity;
+    const angle = Math.random() * Math.PI * 2;
+    p.vel.set(Math.cos(angle) * speed, THREE.MathUtils.randFloat(.45, 1.05) * intensity, Math.sin(angle) * speed);
+    p.mesh.scale.setScalar(THREE.MathUtils.randFloat(.72, 1.30) * intensity);
+  }
+}
+
+function updateHoseSplashes(dt) {
+  for (const p of hoseSplashes) {
+    if (!p.mesh.visible) continue;
+    p.age += dt;
+    p.vel.y -= 4.8 * dt;
+    p.mesh.position.addScaledVector(p.vel, dt);
+    const lifeLeft = 1 - p.age / Math.max(.001, p.life);
+    p.mesh.scale.multiplyScalar(Math.max(.86, 1 - dt * 2.6));
+    if (lifeLeft <= 0 || p.mesh.position.y < groundHeightAt(p.mesh.position.x, p.mesh.position.z) - .03) {
+      p.mesh.visible = false;
+    }
+  }
+}
+
+// Pooled rake grooves sit a few millimetres above the wet heightfield and are
+// recycled after several seconds. They make each real sweep visible without
+// adding permanent geometry or textures.
+const RAKE_MARK_MAX = TOUCH_DEVICE ? 54 : 120;
+const rakeMarkGeom = new THREE.PlaneGeometry(.032, .62);
+const rakeMarkMat = new THREE.MeshBasicMaterial({
+  color: 0x303633,
+  transparent: true,
+  opacity: .24,
+  depthWrite: false,
+  side: THREE.DoubleSide,
+  polygonOffset: true,
+  polygonOffsetFactor: -2,
+});
+const rakeMarkGroup = new THREE.Group();
+rakeMarkGroup.name = 'WET_RAKE_MARKS';
+scene.add(rakeMarkGroup);
+const rakeMarks = [];
+for (let i = 0; i < RAKE_MARK_MAX; i++) {
+  const mesh = new THREE.Mesh(rakeMarkGeom, rakeMarkMat);
+  mesh.visible = false;
+  mesh.renderOrder = 5;
+  rakeMarkGroup.add(mesh);
+  rakeMarks.push({ mesh, age: 0, life: 9 });
+}
+let rakeMarkCursor = 0;
+let rakeMarkCooldown = 0;
+const rakeMarkFlatQuat = new THREE.Quaternion().setFromUnitVectors(
+  new THREE.Vector3(0, 0, 1),
+  Y_AXIS
+);
+const rakeMarkYawQuat = new THREE.Quaternion();
+
+function spawnRakeMarks(px, pz, dirX, dirZ) {
+  const zone = zoneAt(px, pz);
+  if (!zone) return;
+  const len = Math.hypot(dirX, dirZ);
+  if (len < .001) return;
+  dirX /= len;
+  dirZ /= len;
+  const sideX = -dirZ;
+  const sideZ = dirX;
+  const angle = Math.atan2(dirX, dirZ);
+  for (const offset of [-.16, 0, .16]) {
+    const x = px + sideX * offset;
+    const z = pz + sideZ * offset;
+    if (zoneAt(x, z) !== zone) continue;
+    const mark = rakeMarks[rakeMarkCursor++ % rakeMarks.length];
+    mark.age = 0;
+    mark.life = THREE.MathUtils.randFloat(7.0, 10.5);
+    mark.mesh.visible = true;
+    mark.mesh.position.set(x, zone.bottomY + getFillHeightAt(x, z) + .004, z);
+    rakeMarkYawQuat.setFromAxisAngle(Y_AXIS, angle);
+    mark.mesh.quaternion.copy(rakeMarkYawQuat).multiply(rakeMarkFlatQuat);
+    mark.mesh.scale.set(THREE.MathUtils.randFloat(.80, 1.12), THREE.MathUtils.randFloat(.72, 1.18), 1);
+  }
+}
+
+function updateRakeMarks(dt) {
+  rakeMarkCooldown = Math.max(0, rakeMarkCooldown - dt);
+  for (const mark of rakeMarks) {
+    if (!mark.mesh.visible) continue;
+    mark.age += dt;
+    if (mark.age >= mark.life) mark.mesh.visible = false;
+  }
+}
+
 const pourTipPrevSafe = new THREE.Vector3();
 const pourTipVelSafe = new THREE.Vector3();
 const pourOutletDirSafe = new THREE.Vector3();
 const pourVisualVelSafe = new THREE.Vector3();
 let pourTipPrevSafeValid = false;
 
-function spawnBlob(pos, burst = false, inheritedVel = null) {
+function spawnBlob(pos, burst = false, inheritedVel = null, radius = .145) {
   const b = blobs[blobCursor++ % BLOB_MAX];
   b.active = true;
   b.age = 0;
   b.settled = false;
-  b.radius = .145;
+  b.radius = radius;
   b.mesh.visible = true;
   b.mesh.position.copy(pos);
   b.mesh.scale.setScalar(b.radius / .15);
@@ -3290,6 +3685,7 @@ function setRakeEquipped(on) {
       hoseHeld = false;
       pouring = false;
       if (hoseInteraction) hoseInteraction.text = 'E — взять шланг';
+      evaluateJob();
     }
     finishSpecial();
     showToast('ГРАБЛИ · ЛКМ — РАЗРАВНИВАТЬ / СДВИГАТЬ БЕТОН');
@@ -3447,7 +3843,7 @@ function levelConcreteAtPoint(px, pz, step, moveDirX, moveDirZ) {
   // preserving total concrete volume exactly enough for gameplay purposes.
   const finishRatio = zoneVolume(zone) / Math.max(.000001, zone.targetVolume);
   const finishCoverage = zoneRakeCoverage(zone);
-  if (finishRatio >= .985 && finishRatio <= 1.025 && finishCoverage >= .34) {
+  if (finishRatio >= .985 && finishRatio <= 1.45 && finishCoverage >= .34) {
     let globalSum = 0;
     for (let i = 0; i < zone.fill.length; i++) globalSum += zone.fill[i];
     const globalMean = globalSum / zone.fill.length;
@@ -3563,6 +3959,11 @@ function rakeContinuousSweepStep(step) {
   rakeSweepPrevPoint.copy(rakeSweepNowPoint);
 
   if (changed) {
+    if (travel > .018 && rakeMarkCooldown <= 0) {
+      spawnRakeMarks(rakeSweepNowPoint.x, rakeSweepNowPoint.z, dirX, dirZ);
+      rakeMarkCooldown = TOUCH_DEVICE ? .14 : .10;
+    }
+
     // The supplied rake sample is ~0.6 s. Re-trigger only while the tool is
     // genuinely travelling through concrete, with enough spacing to avoid a
     // machine-gun repetition.
@@ -3624,8 +4025,15 @@ let qteCursorX = innerWidth * .5, qteCursorY = innerHeight * .5;
 function resetQTECooldown() {
   qteCooldown = THREE.MathUtils.randFloat(10.0, 15.0);
 }
+function showPerfectQTEFeedback() {
+  if (!qtePerfectFeedbackEl) return;
+  qtePerfectFeedbackEl.classList.remove('show');
+  void qtePerfectFeedbackEl.offsetWidth;
+  qtePerfectFeedbackEl.classList.add('show');
+  window.setTimeout(() => qtePerfectFeedbackEl.classList.remove('show'), 1900);
+}
 function startQTE() {
-  if (qteActive || jobState !== 'active' || !hoseHeld || !pouring) return;
+  if (qteActive || pendingPourEvent || eventAlarmTimer > 0 || pumpBroken || jobState !== 'active' || !hoseHeld || !pouring) return;
   qteActive = true;
 
   // Central 50% x 50% only. Never near screen corners.
@@ -3664,10 +4072,12 @@ function endQTE(success, perfect = false) {
     qteHits++;
     if (perfect) {
       qtePerfects++;
+      recordCareerStat('perfectQte');
       qtePerfectBoostUntil = performance.now() + 5000;
       qteTargetEl.classList.add('perfect');
       setTimeout(() => qteTargetEl.classList.remove('perfect'), 180);
       showToast('ИДЕАЛЬНО! ПОДАЧА БЕТОНА +35% · 5 СЕК');
+      showPerfectQTEFeedback();
     } else {
       showToast('ДАВЛЕНИЕ СТАБИЛЬНО · QTE OK');
     }
@@ -3845,6 +4255,7 @@ function updatePhysicalHose(dt) {
   hoseTip.position.copy(hosePoints[HOSE_SEGMENTS]);
 
   updatePouring(dt);
+  updatePourEvents(dt);
   relaxConcrete(dt);
   concreteVisualTimer += dt;
   if (!TOUCH_DEVICE || concreteVisualTimer >= 1 / 12) {
@@ -3852,6 +4263,8 @@ function updatePhysicalHose(dt) {
     refreshConcreteSurfaces();
   }
   updateBlobs(dt);
+  updateHoseSplashes(dt);
+  updateRakeMarks(dt);
   updateQTE(dt);
 }
 
@@ -3868,7 +4281,7 @@ function currentPourRateM3() {
 function updatePouring(dt) {
   // Pump state and hand state are separate. A dropped hose can keep dumping
   // concrete until the player recovers it and turns the pump off.
-  if (!pouring || !hosePoints.length || jobState !== 'active') {
+  if (!pouring || pumpBroken || !hosePoints.length || jobState !== 'active') {
     pourTipPrevSafeValid = false;
     return;
   }
@@ -3923,7 +4336,19 @@ function updatePouring(dt) {
 
   const impactX = end.x + pourVisualVelSafe.x * fallTime * .72;
   const impactZ = end.z + pourVisualVelSafe.z * fallTime * .72;
-  const volume = currentPourRateM3() * dt;
+  let volume = currentPourRateM3() * dt;
+
+  // Pressure-spike event: one oversized, heavy concrete slug carries roughly
+  // two seconds of flow at once. It is mass-bearing, not just a visual effect.
+  const pressureSpike = pressureSpikePending;
+  if (pressureSpike) {
+    pressureSpikePending = false;
+    const spikeVolume = currentPourRateM3() * 1.85;
+    volume += spikeVolume;
+    spawnBlob(end, true, pourVisualVelSafe, .46);
+  }
+
+  recordCareerStat('concreteM3', volume);
 
   addConcreteVolumeAt(
     impactX,
@@ -3931,15 +4356,34 @@ function updatePouring(dt) {
     volume,
     pourVisualVelSafe.x,
     pourVisualVelSafe.z,
-    pourVisualVelSafe.length()
+    pourVisualVelSafe.length(),
+    true
   );
+
+  hoseSplashAccumulator += dt;
+  const splashInterval = TOUCH_DEVICE ? .115 : .075;
+  if (hoseSplashAccumulator >= splashInterval) {
+    hoseSplashAccumulator %= splashInterval;
+    spawnHoseSplashBurst(
+      impactX,
+      impactZ,
+      zoneAt(impactX, impactZ),
+      pressureSpike ? 1.8 : 1
+    );
+  }
 
   // Denser stream at higher pump levels.
   const blobInterval = .065 / Math.pow(rateMult, .30);
-  blobSpawnAccumulator += dt;
-  while (blobSpawnAccumulator >= blobInterval) {
-    blobSpawnAccumulator -= blobInterval;
-    spawnBlob(end, false, pourVisualVelSafe);
+  if (pressureSpike) {
+    // The event frame is represented by the single large slug above instead
+    // of a cluster of normal stream balls.
+    blobSpawnAccumulator = 0;
+  } else {
+    blobSpawnAccumulator += dt;
+    while (blobSpawnAccumulator >= blobInterval) {
+      blobSpawnAccumulator -= blobInterval;
+      spawnBlob(end, false, pourVisualVelSafe);
+    }
   }
 }
 // -----------------------------
@@ -3948,17 +4392,9 @@ function updatePouring(dt) {
 function evaluateJob() {
   if (jobState !== 'active') return;
 
-  // Any individual bay can be overfilled even if the overall site average looks fine.
-  for (const zone of POUR_ZONES) {
-    const ratio = zoneVolume(zone) / zone.targetVolume;
-    if (ratio > zone.failRatio) {
-      finishJob(false, zone);
-      return;
-    }
-  }
-
-  // Arcade phase transition: once enough volume is in the current bay,
-  // stop the pump and clearly ask for leveling instead of auto-completing.
+  // Reaching the target no longer turns the pump off. The player owns the
+  // switch and can deliberately overpour; Pavel converts that excess into a
+  // lower rank and payout at settlement.
   const currentZone = activePourZone();
   if (currentZone) {
     const currentRatio = zoneVolume(currentZone) / currentZone.targetVolume;
@@ -3968,28 +4404,39 @@ function evaluateJob() {
       currentRatio >= .995 &&
       currentLevel.score < currentZone.levelRequired
     ) {
-      if (pouring) pouring = false;
-
       if (!currentZone.levelPrompted) {
         currentZone.levelPrompted = true;
         showToast(
-          `ОБЪЁМ НАБРАН · БЕРИ ГРАБЛИ · РОВНОСТЬ ${Math.round(THREE.MathUtils.clamp(currentLevel.score / Math.max(.001, currentZone.levelRequired), 0, 1) * 100)}%`
+          `100% НАБРАНО · НАСОС НЕ ОСТАНОВЛЕН · ПЕРЕЛИВ УХУДШИТ ОЦЕНКУ · РОВНОСТЬ ${Math.round(THREE.MathUtils.clamp(currentLevel.score / Math.max(.001, currentZone.levelRequired), 0, 1) * 100)}%`,
+          4.4
         );
       }
     }
   }
 
   // Advance the authored sequence only after the current highlighted map is
-  // both deep enough and sufficiently covered. Future maps cannot be prefilled.
+  // both deep enough and sufficiently covered. If it happens while the pump
+  // is still ON, keep that map active until the player switches it off so an
+  // intentional overpour remains possible.
+  let settlementNoticeShown = false;
+  if (currentZone && zoneReadyForSequence(currentZone) && !currentZone.readyNotified) {
+    currentZone.readyNotified = true;
+    settlementNoticeShown = true;
+    preloadSettlementRankSheet();
+    showToast(`КАРТА №${currentZone.id} ЗАЛИТА · ДОСТУПЕН РАСЧЁТ — ПОДОЙДИ К ПАШЕ`, 5.4);
+  }
+
   const beforeAdvance = activePourZoneIndex;
-  while (activePourZoneIndex < POUR_ZONES.length && zoneReadyForSequence(POUR_ZONES[activePourZoneIndex])) {
-    activePourZoneIndex++;
+  if (!pouring) {
+    while (activePourZoneIndex < POUR_ZONES.length && zoneReadyForSequence(POUR_ZONES[activePourZoneIndex])) {
+      activePourZoneIndex++;
+    }
   }
   if (activePourZoneIndex !== beforeAdvance) {
     outlinedPourZoneId = -1;
-    if (activePourZoneIndex < POUR_ZONES.length) {
+    if (!settlementNoticeShown && activePourZoneIndex < POUR_ZONES.length) {
       showToast(`КАРТА №${beforeAdvance + 1} ВЫРОВНЕНА · ТЕПЕРЬ №${activePourZoneIndex + 1}`);
-    } else {
+    } else if (!settlementNoticeShown) {
       showToast('ВСЕ 6 КАРТ ВЫРОВНЕНЫ · УБЕРИ ПРОЛИВЫ И СДАВАЙ');
     }
   }
@@ -4010,7 +4457,7 @@ function evaluateJob() {
       qteActive = false;
       qteLayerEl.classList.remove('active');
     }
-    showToast('ЗАЛИВКА ГОТОВА. ИДИ СДАВАЙ ПАВЛУ ПЕТРОВИЧУ.');
+    showToast('ВСЕ КАРТЫ ГОТОВЫ · ДОСТУПЕН РАСЧЁТ — ПОДОЙДИ К ПАШЕ', 5.4);
   }
 }
 
@@ -4038,7 +4485,8 @@ function finishJob(success, failedZone = null) {
 }
 
 function resetPourJob() {
-  for (const zone of POUR_ZONES) {
+  for (let zoneIndex = 0; zoneIndex < POUR_ZONES.length; zoneIndex++) {
+    const zone = POUR_ZONES[zoneIndex];
     zone.fill.fill(0);
     zone.mobility.fill(0);
     zone.velX.fill(0);
@@ -4047,6 +4495,10 @@ function resetPourJob() {
     zone.flowBudget.fill(0);
     zone.rakeTouched.fill(0);
     zone.levelPrompted = false;
+    zone.readyNotified = false;
+    zone.hosePouredVolume = 0;
+    zone.settledGrade = null;
+    prepareZoneRandomEvent(zone, zoneIndex);
     zone.piles.length = 0;
     zone.dirty = true;
   }
@@ -4067,9 +4519,19 @@ function resetPourJob() {
   qteMisses = 0;
   qtePerfects = 0;
   qtePerfectBoostUntil = 0;
+  pumpBroken = false;
+  pressureSpikePending = false;
+  pendingPourEvent = null;
+  eventAlarmTimer = 0;
+  blindnessTimer = 0;
+  eventAlarmEl?.classList.remove('show');
+  blindnessOverlayEl?.classList.remove('active');
   wastedVolume = 0;
   pouring = false;
   blobSpawnAccumulator = 0;
+  hoseSplashAccumulator = 0;
+  for (const splash of hoseSplashes) splash.mesh.visible = false;
+  for (const mark of rakeMarks) mark.mesh.visible = false;
   pourTipPrevSafeValid = false;
   concreteRelaxTimer = 0;
   concreteVisualTimer = 0;
@@ -4144,8 +4606,9 @@ function updatePourHUD() {
   if (active && jobState === 'active') {
     const activeRatio = zoneVolume(active) / active.targetVolume;
     const activeLevel = zoneLevelStats(active);
+    const gradePreview = gradePourZone(active);
     zoneProgressEl.textContent = activeRatio >= .985
-      ? `РОВНЯЙ №${active.id}: ${Math.round(THREE.MathUtils.clamp(activeLevel.score / Math.max(.001, active.levelRequired), 0, 1) * 100)}% · готово ${completed}/6`
+      ? `№${active.id}: РАНГ ${gradePreview.grade} · РОВНОСТЬ ${Math.round(THREE.MathUtils.clamp(activeLevel.score / Math.max(.001, active.levelRequired), 0, 1) * 100)}% · готово ${completed}/6`
       : `ЛИТЬ №${active.id}: ${zonePct.toFixed(0)}% · готово ${completed}/6`;
   } else {
     zoneProgressEl.textContent = `№${zone.id}: ${zonePct.toFixed(0)}% · готово ${completed}/6`;
@@ -4910,7 +5373,9 @@ function saveEconomy() {
   localStorage.setItem('beton_beer', String(beerCans));
 }
 function addMoney(amount) {
-  money += Math.max(0, Math.round(amount));
+  const earned = Math.max(0, Math.round(amount));
+  money += earned;
+  recordCareerStat('moneyEarned', earned);
   saveEconomy();
 }
 
@@ -8001,7 +8466,7 @@ function enterSite() {
   }
 }
 startBtn.addEventListener('click', enterSite);
-renderer.domElement.addEventListener('click', () => { if (!TOUCH_DEVICE && started && !locked && !shopOpen && !resultOpen && !dialogueOpen) requestMouseLock(); });
+renderer.domElement.addEventListener('click', () => { if (!TOUCH_DEVICE && started && !locked && !shopOpen && !resultOpen && !dialogueOpen && !statsOpen) requestMouseLock(); });
 document.addEventListener('pointerlockchange', () => {
   if (TOUCH_DEVICE) { locked = started; return; }
   locked = document.pointerLockElement === renderer.domElement;
@@ -8025,20 +8490,26 @@ document.addEventListener('mousemove', e => {
 });
 
 function primaryActionDown() {
-  if (!started || !locked || shopOpen || resultOpen || dialogueOpen) return;
+  if (!started || !locked || shopOpen || resultOpen || dialogueOpen || statsOpen) return;
   if (qteActive) { clickQTE(); return; }
   if (rakeEquipped && jobState === 'active') {
+    if (!raking) recordCareerStat('rakeStrokes');
     raking = true;
     rakeSweepPrevValid = false;
     rakeSweepAccumulator = 0;
     return;
   }
   if (hoseHeld && jobState === 'active') {
+    if (pumpBroken) {
+      showToast('НАСОС СЛОМАН · ИДИ К ДЖОРДЖУ', 3.6);
+      return;
+    }
     pouring = !pouring;
     if (hoseInteraction) hoseInteraction.text = pouring
       ? 'E — бросить шланг · ЛКМ — выключить бетон'
       : 'E — бросить шланг · ЛКМ — включить бетон';
     showToast(pouring ? 'ПОДАЧА БЕТОНА ВКЛ' : 'ПОДАЧА БЕТОНА ВЫКЛ');
+    if (!pouring) evaluateJob();
   }
 }
 function primaryActionUp() {
@@ -8055,6 +8526,19 @@ window.addEventListener('mouseup', e => { if (e.button === 0) primaryActionUp();
 
 document.addEventListener('keydown', e => {
   keys[e.code] = true;
+
+  if (settlementCutsceneActive) {
+    e.preventDefault();
+    return;
+  }
+
+  if (statsOpen) {
+    if (e.code === 'Escape' && !e.repeat) {
+      e.preventDefault();
+      closeCharacterStats();
+    }
+    return;
+  }
 
   if (dialogueOpen) {
     if (e.code === 'Escape' && !e.repeat) {
@@ -8172,7 +8656,7 @@ function setupMobileStick(el, knob, onValue) {
   };
   el.addEventListener('pointerup',end); el.addEventListener('pointercancel',end);
 }
-function mobileInputAllowed(){ return TOUCH_DEVICE && started && !shopOpen && !resultOpen && !dialogueOpen; }
+function mobileInputAllowed(){ return TOUCH_DEVICE && started && !shopOpen && !resultOpen && !dialogueOpen && !statsOpen; }
 function mobileHaptic(ms=9){ try{ if(navigator.vibrate) navigator.vibrate(ms); }catch(_){} }
 function setupMobileSwipeLook(){
   const surface=renderer.domElement;
@@ -8234,7 +8718,9 @@ function updateMobileContextButtons(it) {
   let actionVisible = false;
   if (hoseHeld && jobState === 'active') {
     actionVisible = true;
-    if (mobileActionBtn) mobileActionBtn.textContent = pouring ? 'ВЫКЛ БЕТОН' : 'ВКЛ БЕТОН';
+    if (mobileActionBtn) mobileActionBtn.textContent = pumpBroken
+      ? 'НАСОС СЛОМАН'
+      : (pouring ? 'ВЫКЛ БЕТОН' : 'ВКЛ БЕТОН');
   } else if (rakeEquipped && jobState === 'active') {
     actionVisible = true;
     if (mobileActionBtn) mobileActionBtn.textContent = 'РАВНЯТЬ';
@@ -8406,6 +8892,81 @@ let dialogueOpen = false;
 let dialogueNpcKey = null;
 let shopOpen = false;
 let resultOpen = false;
+let statsOpen = false;
+let settlementCutsceneActive = false;
+let dialogueRewardTransitionActive = false;
+let settlementRankRevealTimer = 0;
+
+const settlementCameraState = {
+  active: false,
+  elapsed: 0,
+  distance: 2.72,
+  position: new THREE.Vector3(),
+  target: new THREE.Vector3(),
+  desired: new THREE.Vector3(),
+  viewSide: new THREE.Vector3(0, 0, 1),
+  quaternion: new THREE.Quaternion(),
+  desiredQuaternion: new THREE.Quaternion(),
+  lookMatrix: new THREE.Matrix4(),
+};
+
+const SETTLEMENT_GRADE_CAPTIONS = {
+  S: 'ИДЕАЛЬНАЯ ЗАЛИВКА',
+  A: 'ОТЛИЧНАЯ РАБОТА',
+  B: 'ХОРОШАЯ РАБОТА',
+  C: 'ЕСТЬ ЗАМЕЧАНИЯ',
+  D: 'СЛАБАЯ РАБОТА',
+  E: 'ПЛОХАЯ РАБОТА',
+  F: 'ПРОВАЛ ЗАЛИВКИ',
+};
+
+const BOOT_TIER_NAMES = ['Обычные', 'Сапоги новичка', 'Сапоги бетонщика', 'Мышеходы'];
+const STAMINA_LEVEL_NAMES = ['Базовая', 'Рабочая I', 'Рабочая II', 'Максимальная'];
+const CONCRETE_GRADE_NAMES = ['М200', 'М250', 'М300', 'М350'];
+
+function updateCharacterStatsUI() {
+  if (statJobsEl) statJobsEl.textContent = String(jobsCompleted);
+  if (statConcreteEl) statConcreteEl.textContent = `${careerStats.concreteM3.toFixed(1)} м³`;
+  if (statFloorEl) statFloorEl.textContent = `${careerStats.floorM2.toFixed(1)} м²`;
+  if (statRakeEl) statRakeEl.textContent = Math.round(careerStats.rakeStrokes).toLocaleString('ru-RU');
+  if (statMoneyEl) statMoneyEl.textContent = `${Math.round(careerStats.moneyEarned).toLocaleString('ru-RU')} ₽`;
+  if (statEnergyEl) statEnergyEl.textContent = Math.round(careerStats.energyDrunk).toLocaleString('ru-RU');
+  if (statBeerEl) statBeerEl.textContent = Math.round(careerStats.beerDrunk).toLocaleString('ru-RU');
+  if (statCigarettesEl) statCigarettesEl.textContent = Math.round(careerStats.cigarettesSmoked).toLocaleString('ru-RU');
+  if (statPerfectQteEl) statPerfectQteEl.textContent = Math.round(careerStats.perfectQte).toLocaleString('ru-RU');
+  if (statBootsEl) statBootsEl.textContent = BOOT_TIER_NAMES[bootTier] || BOOT_TIER_NAMES[0];
+  if (statStaminaLevelEl) statStaminaLevelEl.textContent = STAMINA_LEVEL_NAMES[staminaLevel] || STAMINA_LEVEL_NAMES[0];
+  if (statConcreteGradeEl) statConcreteGradeEl.textContent = CONCRETE_GRADE_NAMES[pumpLevel] || CONCRETE_GRADE_NAMES[0];
+}
+
+function openCharacterStats() {
+  if (!started || statsOpen || shopOpen || resultOpen || dialogueOpen) return;
+  statsOpen = true;
+  pouring = false;
+  evaluateJob();
+  updateCharacterStatsUI();
+  characterStatsEl?.classList.remove('hidden');
+  document.body.classList.add('statsActive');
+  for (const key in keys) keys[key] = false;
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+
+function closeCharacterStats() {
+  if (!statsOpen) return;
+  statsOpen = false;
+  characterStatsEl?.classList.add('hidden');
+  document.body.classList.remove('statsActive');
+  saveCareerStats();
+  requestMouseLock();
+}
+
+characterStatsButtonEl?.addEventListener('click', openCharacterStats);
+mobileCharacterStatsButtonEl?.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  e.stopPropagation();
+  openCharacterStats();
+});
+characterStatsCloseEl?.addEventListener('click', closeCharacterStats);
 
 const DIALOGUE_NAMES = {
   pavel: 'Павел Петрович',
@@ -8425,22 +8986,22 @@ const DIALOGUE_SKINS = {
     accentSoft: 'rgba(79,158,232,.24)',
   },
   mandarin: {
-    portrait: './assets/dialogue_v3/serega.webp',
-    paint: './assets/dialogue_backgrounds/serega_construction.png',
+    portrait: './assets/dialogue_v6/serega.webp',
+    paint: './assets/dialogue_backgrounds/serega_construction.webp',
     accent: '#ef8a34',
     accentDark: '#9f4e19',
     accentSoft: 'rgba(239,138,52,.25)',
   },
   george: {
-    portrait: './assets/dialogue_v3/george.webp',
-    paint: './assets/dialogue_backgrounds/george_flag_leaves.png',
+    portrait: './assets/dialogue_v6/george.webp',
+    paint: './assets/dialogue_backgrounds/george_flag_leaves.webp',
     accent: '#4ea9d8',
     accentDark: '#23698e',
     accentSoft: 'rgba(78,169,216,.24)',
   },
   baba: {
-    portrait: './assets/dialogue_v3/baba.webp',
-    paint: './assets/dialogue_backgrounds/baba_yarn_flowers.png',
+    portrait: './assets/dialogue_v6/baba.webp',
+    paint: './assets/dialogue_backgrounds/baba_yarn_flowers.webp',
     accent: '#e4c14a',
     accentDark: '#997c1a',
     accentSoft: 'rgba(228,193,74,.24)',
@@ -8458,6 +9019,56 @@ function applyDialogueSkin(npcKey) {
   if (dialoguePortraitEl) dialoguePortraitEl.src = skin.portrait;
 }
 
+function dialogueWalletTarget() {
+  return TOUCH_DEVICE ? (mobileMoneyEl || economyEl) : (economyEl || mobileMoneyEl);
+}
+
+function pulseDialogueWallet(target = dialogueWalletTarget()) {
+  if (!target) return;
+  target.classList.remove('walletRewardPulse');
+  void target.offsetWidth;
+  target.classList.add('walletRewardPulse');
+  window.setTimeout(() => target.classList.remove('walletRewardPulse'), 520);
+}
+
+function animateDialogueRewardToWallet(sourceEl, amount) {
+  const targetEl = dialogueWalletTarget();
+  if (!sourceEl || !targetEl) return Promise.resolve();
+
+  const sourceRect = sourceEl.getBoundingClientRect();
+  const targetRect = targetEl.getBoundingClientRect();
+  if (!sourceRect.width || !targetRect.width) return Promise.resolve();
+
+  const flyer = sourceEl.cloneNode(true);
+  flyer.classList.add('dialogueRewardFlyer');
+  flyer.textContent = `+${Math.max(0, Math.round(amount)).toLocaleString('ru-RU')} ₽`;
+  Object.assign(flyer.style, {
+    left: `${sourceRect.left}px`,
+    top: `${sourceRect.top}px`,
+    width: `${sourceRect.width}px`,
+    height: `${sourceRect.height}px`,
+  });
+  document.body.appendChild(flyer);
+
+  const dx = targetRect.left + targetRect.width * .5 - (sourceRect.left + sourceRect.width * .5);
+  const dy = targetRect.top + targetRect.height * .5 - (sourceRect.top + sourceRect.height * .5);
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const duration = reducedMotion ? 230 : 720;
+  const animation = flyer.animate([
+    { transform: 'translate3d(0,0,0) scale(1)', opacity: 1, offset: 0 },
+    { transform: `translate3d(${dx * .34}px,${dy * .18 - 24}px,0) scale(1.08)`, opacity: 1, offset: .38 },
+    { transform: `translate3d(${dx}px,${dy}px,0) scale(.28)`, opacity: .16, offset: 1 },
+  ], {
+    duration,
+    easing: 'cubic-bezier(.2,.78,.18,1)',
+    fill: 'forwards',
+  });
+
+  return animation.finished
+    .catch(() => undefined)
+    .finally(() => flyer.remove());
+}
+
 function setDialogue(name, text, options = []) {
   dialogueNameEl.textContent = DIALOGUE_NAMES[dialogueNpcKey] || name;
   dialogueTextEl.textContent = text;
@@ -8465,6 +9076,7 @@ function setDialogue(name, text, options = []) {
   options.forEach((opt, index) => {
     const btn = document.createElement('button');
     btn.className = 'dialogueOption';
+    btn.type = 'button';
     btn.dataset.optionIndex = String(index + 1);
     const key = document.createElement('span');
     key.className = 'dialogueOptionKey';
@@ -8473,18 +9085,68 @@ function setDialogue(name, text, options = []) {
     label.className = 'dialogueOptionLabel';
     label.textContent = opt.label;
     btn.append(key, label);
-    btn.addEventListener('click', opt.action);
+
+    const rewardAmount = Math.max(0, Math.round(Number(opt.reward) || 0));
+    let rewardBadge = null;
+    if (rewardAmount > 0) {
+      btn.classList.add('hasReward');
+      rewardBadge = document.createElement('span');
+      rewardBadge.className = 'dialogueRewardBadge';
+      rewardBadge.textContent = `+${rewardAmount.toLocaleString('ru-RU')} ₽`;
+      rewardBadge.setAttribute('aria-label', `Награда ${rewardAmount.toLocaleString('ru-RU')} рублей`);
+      btn.appendChild(rewardBadge);
+    }
+
+    btn.addEventListener('click', async () => {
+      if (btn.dataset.processing === '1') return;
+      btn.dataset.processing = '1';
+
+      if (rewardAmount > 0) {
+        dialogueRewardTransitionActive = true;
+        btn.classList.add('isRewardSelected');
+        dialogueOptionsEl.querySelectorAll('button').forEach(button => { button.disabled = true; });
+        await animateDialogueRewardToWallet(rewardBadge, rewardAmount);
+      }
+
+      try {
+        await Promise.resolve(opt.action?.());
+        if (rewardAmount > 0) {
+          updateEconomyUI();
+          syncMobileHud();
+          pulseDialogueWallet();
+          // A settlement starts its cutscene after the wallet hit. This fallback
+          // keeps future reward options from ever leaving dialogue input locked.
+          window.setTimeout(() => {
+            if (!settlementCutsceneActive && dialogueRewardTransitionActive) {
+              dialogueRewardTransitionActive = false;
+              if (dialogueOpen && dialogueOptionsEl.contains(btn)) {
+                dialogueOptionsEl.querySelectorAll('button').forEach(button => { button.disabled = false; });
+                btn.dataset.processing = '0';
+              }
+            }
+          }, 560);
+        }
+      } catch (error) {
+        console.warn('Dialogue option failed', error);
+        dialogueRewardTransitionActive = false;
+        if (dialogueOptionsEl.contains(btn)) {
+          dialogueOptionsEl.querySelectorAll('button').forEach(button => { button.disabled = false; });
+          btn.dataset.processing = '0';
+        }
+      }
+    });
     dialogueOptionsEl.appendChild(btn);
   });
 }
 
 function openDialogue(npcKey) {
-  if (dialogueOpen || shopOpen || resultOpen) return;
+  if (dialogueOpen || shopOpen || resultOpen || statsOpen || settlementCutsceneActive) return;
   dialogueOpen = true;
   dialogueNpcKey = npcKey;
   applyDialogueSkin(npcKey);
   document.body.classList.add('dialogueActive');
   pouring = false;
+  evaluateJob();
   if (document.pointerLockElement) document.exitPointerLock();
   dialogueEl.classList.remove('hidden');
 
@@ -8501,7 +9163,7 @@ function openDialogue(npcKey) {
 }
 
 function closeDialogue() {
-  if (!dialogueOpen) return;
+  if (!dialogueOpen || settlementCutsceneActive || dialogueRewardTransitionActive) return;
 
   const closingNpcKey = dialogueNpcKey;
 
@@ -8541,11 +9203,17 @@ function jobReadyForHandover() {
   return unpaidPourZoneCount() > 0;
 }
 
+function unpaidReadyZones() {
+  const completed = completedPourZoneCount();
+  return POUR_ZONES.slice(paidPourZoneCount, completed);
+}
+
+function settlementBreakdown() {
+  return unpaidReadyZones().map(zone => ({ zone, ...gradePourZone(zone) }));
+}
+
 function currentJobReward() {
-  return Math.max(
-    1200,
-    1850 + qteHits * 25 - qteMisses * 70 - Math.round(wastedVolume * 40)
-  );
+  return settlementBreakdown().reduce((sum, entry) => sum + entry.reward, 0);
 }
 
 async function loadDanceSource(url) {
@@ -8553,9 +9221,182 @@ async function loadDanceSource(url) {
   return npcDanceCache.get(url);
 }
 
-async function playPavelDance() {
+function waitForMs(ms) {
+  return new Promise(resolve => window.setTimeout(resolve, ms));
+}
+
+function getPavelCutsceneTarget(out) {
   const rt = npcRuntime.get('pavel');
-  if (!rt?.mixer || !rt.character) return;
+  if (!rt?.wrap) return false;
+  rt.wrap.getWorldPosition(out);
+  out.y += Math.max(.9, (rt.pose?.height || 1.78) * .62);
+  return true;
+}
+
+function beginSettlementCamera() {
+  syncCameraToPlayer();
+  settlementCameraState.position.copy(camera.position);
+  settlementCameraState.quaternion.copy(camera.quaternion);
+  settlementCameraState.elapsed = 0;
+
+  if (!getPavelCutsceneTarget(settlementCameraState.target)) {
+    settlementCameraState.active = false;
+    return;
+  }
+
+  settlementCameraState.viewSide
+    .copy(settlementCameraState.position)
+    .sub(settlementCameraState.target);
+  settlementCameraState.viewSide.y = 0;
+
+  const currentDistance = settlementCameraState.viewSide.length();
+  if (currentDistance < .35) {
+    const rt = npcRuntime.get('pavel');
+    const worldQuaternion = rt?.wrap?.getWorldQuaternion(new THREE.Quaternion()) || new THREE.Quaternion();
+    settlementCameraState.viewSide.set(0, 0, 1).applyQuaternion(worldQuaternion);
+    settlementCameraState.viewSide.y = 0;
+  }
+  settlementCameraState.viewSide.normalize();
+  settlementCameraState.distance = THREE.MathUtils.clamp(currentDistance + .46, 2.48, 3.05);
+  settlementCameraState.active = true;
+}
+
+function updateSettlementCamera(dt) {
+  if (!settlementCutsceneActive || !settlementCameraState.active) return;
+  if (!getPavelCutsceneTarget(settlementCameraState.target)) return;
+
+  settlementCameraState.elapsed += dt;
+  settlementCameraState.desired
+    .copy(settlementCameraState.target)
+    .addScaledVector(settlementCameraState.viewSide, settlementCameraState.distance);
+  settlementCameraState.desired.y = settlementCameraState.target.y + .32;
+
+  // A tiny sideways drift keeps the shot alive without fighting Pavel's dance.
+  const drift = Math.sin(settlementCameraState.elapsed * .62) * .075;
+  settlementCameraState.desired.x += settlementCameraState.viewSide.z * drift;
+  settlementCameraState.desired.z -= settlementCameraState.viewSide.x * drift;
+
+  settlementCameraState.position.x = THREE.MathUtils.damp(
+    settlementCameraState.position.x,
+    settlementCameraState.desired.x,
+    4.8,
+    dt
+  );
+  settlementCameraState.position.y = THREE.MathUtils.damp(
+    settlementCameraState.position.y,
+    settlementCameraState.desired.y,
+    4.8,
+    dt
+  );
+  settlementCameraState.position.z = THREE.MathUtils.damp(
+    settlementCameraState.position.z,
+    settlementCameraState.desired.z,
+    4.8,
+    dt
+  );
+
+  settlementCameraState.lookMatrix.lookAt(
+    settlementCameraState.position,
+    settlementCameraState.target,
+    camera.up
+  );
+  settlementCameraState.desiredQuaternion.setFromRotationMatrix(settlementCameraState.lookMatrix);
+  settlementCameraState.quaternion.slerp(
+    settlementCameraState.desiredQuaternion,
+    1 - Math.exp(-7.5 * dt)
+  );
+
+  camera.position.copy(settlementCameraState.position);
+  camera.quaternion.copy(settlementCameraState.quaternion);
+}
+
+function revealSettlementRank(grade, reward) {
+  const safeGrade = SETTLEMENT_GRADE_CAPTIONS[grade] ? grade : 'F';
+  settlementRankCardEl.dataset.grade = safeGrade;
+  settlementRankTextEl.textContent = safeGrade;
+  settlementRankCaptionEl.textContent = SETTLEMENT_GRADE_CAPTIONS[safeGrade];
+  settlementRankRewardEl.textContent = `+${Math.max(0, Math.round(reward)).toLocaleString('ru-RU')} ₽`;
+  // The supplied sheet contains A–F. Keep the requested S rank by using its
+  // diamond A cell as a base and replacing only the central letter in CSS.
+  settlementRankOverrideEl.textContent = safeGrade === 'S' ? 'S' : '';
+  settlementRankCardEl.classList.remove('isVisible');
+  void settlementRankCardEl.offsetWidth;
+  settlementRankCardEl.classList.add('isVisible');
+}
+
+async function startPavelSettlementCutscene(grade, reward, restoreResultDialogue) {
+  if (settlementCutsceneActive) return false;
+  dialogueRewardTransitionActive = false;
+  settlementCutsceneActive = true;
+  settlementRankRevealTimer = 0;
+  preloadSettlementRankSheet();
+
+  pouring = false;
+  mobileMoveX = 0;
+  mobileMoveY = 0;
+  mobileSprintIntent = false;
+  for (const key in keys) keys[key] = false;
+  if (specialMode) finishSpecial();
+  armsRig.visible = false;
+
+  dialogueOptionsEl.querySelectorAll('button').forEach(button => { button.disabled = true; });
+  dialogueEl.classList.add('hidden');
+  document.body.classList.remove('dialogueActive');
+  document.body.classList.add('settlementCutsceneActive');
+  settlementCutsceneEl.classList.remove('hidden');
+  settlementRankCardEl.classList.remove('isVisible');
+  beginSettlementCamera();
+
+  let danceStarted = false;
+  try {
+    const dancePlayed = await playPavelDance(() => {
+      danceStarted = true;
+      settlementRankRevealTimer = window.setTimeout(() => {
+        if (settlementCutsceneActive) revealSettlementRank(grade, reward);
+      }, 650);
+    });
+
+    // If an animation file ever fails to load, still show the earned rank and
+    // return cleanly to dialogue instead of trapping the player in a cutscene.
+    if (!dancePlayed || !danceStarted) {
+      revealSettlementRank(grade, reward);
+      await waitForMs(3300);
+    } else {
+      await waitForMs(240);
+    }
+  } catch (error) {
+    console.warn('Pavel settlement cutscene failed', error);
+    revealSettlementRank(grade, reward);
+    await waitForMs(2200);
+  } finally {
+    if (settlementRankRevealTimer) window.clearTimeout(settlementRankRevealTimer);
+    settlementRankRevealTimer = 0;
+    settlementRankCardEl.classList.remove('isVisible');
+    settlementCutsceneEl.classList.add('hidden');
+    document.body.classList.remove('settlementCutsceneActive');
+    settlementCameraState.active = false;
+    settlementCutsceneActive = false;
+    armsRig.visible = armsReady;
+    syncCameraToPlayer();
+
+    try {
+      restoreResultDialogue?.();
+    } catch (error) {
+      console.warn('Settlement result dialogue failed', error);
+      setDialogue('ПАВЕЛ ПЕТРОВИЧ', 'Рассчитались. Дальше работай.', [
+        { label: 'Понял.', action: closeDialogue }
+      ]);
+    }
+    dialogueEl.classList.remove('hidden');
+    document.body.classList.add('dialogueActive');
+  }
+  return true;
+}
+
+async function playPavelDance(onStarted = null) {
+  const rt = npcRuntime.get('pavel');
+  if (!rt?.mixer || !rt.character) return false;
+  let action = null;
 
   try {
     let danceIndex = Math.floor(Math.random() * PAVEL_DANCES.length);
@@ -8566,10 +9407,10 @@ async function playPavelDance() {
     pavelLastDanceIndex = danceIndex;
     const url = PAVEL_DANCES[danceIndex];
     const source = await loadDanceSource(url);
-    if (!source.animations?.length) return;
+    if (!source.animations?.length) return false;
 
     const clip = retargetClip(rt.character, source.animations[0], `Pavel_Dance_${Date.now()}`);
-    if (!clip.tracks.length) return;
+    if (!clip.tracks.length) return false;
 
     if (rt.busyAction) {
       rt.busyAction.stop();
@@ -8577,7 +9418,7 @@ async function playPavelDance() {
     }
     rt.idleAction?.fadeOut(.15);
 
-    const action = rt.mixer.clipAction(clip);
+    action = rt.mixer.clipAction(clip);
     rt.busyAction = action;
     action.reset();
     action.setLoop(THREE.LoopRepeat, Infinity);
@@ -8596,16 +9437,26 @@ async function playPavelDance() {
     playPavelSuccessMusic();
     playPavelSuccessDanceVoice();
 
-    window.setTimeout(() => {
-      if (rt.busyAction !== action) return;
+    onStarted?.(action);
+    await waitForMs(PAVEL_SUCCESS_DANCE_SECONDS * 1000);
+
+    if (rt.busyAction === action) {
       action.fadeOut(.18);
       stopPavelSuccessMusic(.10);
       rt.busyAction = null;
       rt.idleAction?.reset().fadeIn(.18).play();
       window.setTimeout(() => action.stop(), 220);
-    }, PAVEL_SUCCESS_DANCE_SECONDS * 1000);
+    }
+    return true;
   } catch (e) {
     console.warn('Pavel dance failed', e);
+    stopPavelSuccessMusic(.08);
+    if (action) {
+      try { action.stop(); } catch (_) {}
+    }
+    rt.busyAction = null;
+    rt.idleAction?.reset().fadeIn(.12).play();
+    return false;
   }
 }
 
@@ -8630,13 +9481,20 @@ function pavelDialogue() {
     return;
   }
 
+  const handoverReady = jobReadyForHandover();
+  const pendingReward = handoverReady ? currentJobReward() : 0;
+
   setDialogue(
     'ПАВЕЛ ПЕТРОВИЧ',
-    jobReadyForHandover() ? `Готовая карта есть. Сдаёшь? (+${unpaidPourZoneCount() * 500} ₽)` : 'Ну? Как там квадрат?',
+    handoverReady
+      ? 'Готовая карта есть. Сдаёшь?'
+      : 'Ну? Как там квадрат?',
     [
       {
         label: 'Я залился.',
+        reward: pendingReward,
         action: () => {
+          if (settlementCutsceneActive) return;
           if (!jobReadyForHandover()) {
             const done = POUR_ZONES.filter(z => zoneReadyForSequence(z)).length;
             const spill = surfaceSpillVolume();
@@ -8674,7 +9532,8 @@ function pavelDialogue() {
           }
 
           const completed = completedPourZoneCount();
-          const unpaid = Math.max(0, completed - paidPourZoneCount);
+          const breakdown = settlementBreakdown();
+          const unpaid = breakdown.length;
 
           if (unpaid <= 0) {
             setDialogue('ПАВЕЛ ПЕТРОВИЧ', 'За готовые карты я уже рассчитался. Доделывай следующую.', [
@@ -8683,53 +9542,79 @@ function pavelDialogue() {
             return;
           }
 
-          const reward = unpaid * 500;
+          const reward = breakdown.reduce((sum, entry) => sum + entry.reward, 0);
+          const worst = breakdown.reduce((current, entry) => {
+            if (!current) return entry;
+            const currentIndex = POUR_GRADE_RULES.findIndex(rule => rule.grade === current.grade);
+            const entryIndex = POUR_GRADE_RULES.findIndex(rule => rule.grade === entry.grade);
+            return entryIndex > currentIndex ? entry : current;
+          }, null);
+          const gradeList = breakdown.length <= 2
+            ? breakdown
+              .map(entry => `№${entry.zone.id}: ${entry.grade}, перелив ${entry.overpour.toFixed(1)}%`)
+              .join(' · ')
+            : breakdown.map(entry => `№${entry.zone.id} — ${entry.grade}`).join(' · ');
+
+          for (const entry of breakdown) {
+            entry.zone.settledGrade = entry.grade;
+            recordCareerStat('floorM2', entry.zone.w * entry.zone.d);
+          }
           addMoney(reward);
           paidPourZoneCount += unpaid;
           saveProgression();
-
-          // v51.32: every successful settlement is a celebration. Previously
-          // Pavel only danced on the final six-map handover, so normal payouts
-          // looked broken even though the dance system itself was present.
-          playPavelDance();
+          saveCareerStats();
 
           // A successful map settlement should not trigger Pavel's ordinary farewell.
           pavelFarewellAllowedThisDialogue = false;
 
           const allSixReady = completed >= POUR_ZONES.length;
           const spillsClean = surfaceSpillVolume() <= .015;
+          const finalGrade = worst?.grade || 'F';
+          let restoreResultDialogue;
 
           if (allSixReady && spillsClean) {
             jobState = 'accepted';
             jobsCompleted++;
             saveProgression();
 
-            setDialogue(
-              'ПАВЕЛ ПЕТРОВИЧ',
-              `Все шесть принял. За ${unpaid} ${unpaid === 1 ? 'карту' : 'карты'} — ${reward.toLocaleString('ru-RU')} ₽. Объект закрыт.`,
-              [
-                { label: 'Спасибо.', action: closeDialogue },
-                {
-                  label: 'Давай следующий объект.',
-                  action: () => {
-                    resetPourJob();
-                    setDialogue('ПАВЕЛ ПЕТРОВИЧ', 'Следующий такой же. Работай.', [
-                      { label: 'Понял.', action: closeDialogue }
-                    ]);
+            restoreResultDialogue = () => {
+              setDialogue(
+                'ПАВЕЛ ПЕТРОВИЧ',
+                `Все шесть принял. Оценка ${finalGrade}. ${gradeList}. Объект закрыт.`,
+                [
+                  { label: 'Спасибо.', action: closeDialogue },
+                  {
+                    label: 'Давай следующий объект.',
+                    action: () => {
+                      resetPourJob();
+                      setDialogue('ПАВЕЛ ПЕТРОВИЧ', 'Следующий такой же. Работай.', [
+                        { label: 'Понял.', action: closeDialogue }
+                      ]);
+                    }
                   }
-                }
-              ]
-            );
+                ]
+              );
+            };
           } else {
             const lastPaid = paidPourZoneCount;
-            setDialogue(
-              'ПАВЕЛ ПЕТРОВИЧ',
-              `Карту принял. +${reward.toLocaleString('ru-RU')} ₽. Рассчитано карт: ${lastPaid}/6.`,
-              [
-                { label: 'Дальше работаю.', action: closeDialogue }
-              ]
-            );
+            restoreResultDialogue = () => {
+              setDialogue(
+                'ПАВЕЛ ПЕТРОВИЧ',
+                `${gradeList}. Оценка Паши: ${finalGrade}. Рассчитано карт: ${lastPaid}/6.`,
+                [
+                  { label: 'Дальше работаю.', action: closeDialogue }
+                ]
+              );
+            };
           }
+
+          // Payment is committed once above; dialogue is then suspended while
+          // the camera focuses Pavel, his dance plays and the rank flies in.
+          // The prepared result dialogue returns only after the cutscene ends.
+          window.setTimeout(() => {
+            dialogueRewardTransitionActive = false;
+            void startPavelSettlementCutscene(finalGrade, reward, restoreResultDialogue);
+          }, 260);
         }
       },
       { label: 'Пойду доделаю.', action: closeDialogue }
@@ -8784,6 +9669,26 @@ function mandarinDialogue() {
 }
 
 function georgeDialogue() {
+  if (pumpBroken) {
+    setDialogue('Джордж', 'Насос встал. Предохранитель выбило — могу вернуть подачу.', [
+      {
+        label: 'Починить насос',
+        action: () => {
+          pumpBroken = false;
+          if (hoseInteraction) hoseInteraction.text = hoseHeld
+            ? 'E — бросить шланг · ЛКМ — включить бетон'
+            : 'E — взять шланг';
+          showToast('НАСОС ПОЧИНЕН · МОЖНО ПРОДОЛЖАТЬ ЗАЛИВКУ', 4.0);
+          setDialogue('Джордж', 'Готово. Включай сам и следи за давлением.', [
+            { label: 'Спасибо.', action: closeDialogue }
+          ]);
+        }
+      },
+      { label: 'Потом.', action: closeDialogue }
+    ]);
+    return;
+  }
+
   const levels = [
     { cost: 900,  mult: PUMP_RATE_MULT[1], text: 'Чуть подкрутил насос. Бетон пойдёт бодрее.' },
     { cost: 2200, mult: PUMP_RATE_MULT[2], text: 'Теперь подача уже серьёзная. Следи за переливом.' },
@@ -8919,11 +9824,12 @@ function selectShopProduct(productKey) {
 }
 
 function openShop(fromBaba = false) {
-  if (shopOpen || resultOpen || dialogueOpen) return;
+  if (shopOpen || resultOpen || dialogueOpen || statsOpen) return;
 
   shopOpenedFromBaba = !!fromBaba;
   shopOpen = true;
   pouring = false;
+  evaluateJob();
   if (document.pointerLockElement) document.exitPointerLock();
   shopEl.classList.remove('hidden');
   updateEconomyUI();
@@ -9153,6 +10059,7 @@ function smokeCigarette() {
   if (cigarettes <= 0) { showToast('Сигареты закончились.'); return; }
   if (!armsReady) { showToast('FPS-руки ещё загружаются…'); return; }
   cigarettes--;
+  recordCareerStat('cigarettesSmoked');
   saveEconomy();
   specialMode = 'smoke';
   specialTimer = startProceduralSpecial('smoke');
@@ -9166,6 +10073,7 @@ function drinkEnergy() {
   if (energyCans <= 0) { showToast('«Перемотка» закончилась.'); return; }
   if (!armsReady) { showToast('FPS-руки ещё загружаются…'); return; }
   energyCans--;
+  recordCareerStat('energyDrunk');
   saveEconomy();
   specialMode = 'drink';
   specialTimer = startProceduralSpecial('drink');
@@ -9179,6 +10087,7 @@ function drinkBeer() {
   if (beerCans <= 0) { showToast('Пиво закончилось.'); return; }
   if (!armsReady) { showToast('FPS-руки ещё загружаются…'); return; }
   beerCans--;
+  recordCareerStat('beerDrunk');
   saveEconomy();
   specialMode = 'beer';
   specialTimer = startProceduralSpecial('beer');
@@ -9205,7 +10114,7 @@ function finishSpecial() {
 function updateFirstPersonProps(dt) {
   if (armsMixer) armsMixer.update(dt);
 
-  if (armsReady && !armsRig.visible) {
+  if (armsReady && !armsRig.visible && !settlementCutsceneActive) {
     armsRig.visible = true;
   }
   if (!specialMode && armsReady) {
@@ -9456,6 +10365,7 @@ function updateMobileRenderBudget(dt){
 function loop() {
   const dt = Math.min(clock.getDelta(), .05);
   updateMobileRenderBudget(dt);
+  updateCareerStatsPersistence(dt);
   mobileUiAccumulator += dt;
   const updateUiNow = !TOUCH_DEVICE || mobileUiAccumulator >= .10;
   if (updateUiNow) mobileUiAccumulator = 0;
@@ -9474,7 +10384,7 @@ function loop() {
   updateBabaProceduralIdle(dt);
 
   if (started) {
-    const inputBlocked = shopOpen || resultOpen || dialogueOpen;
+    const inputBlocked = shopOpen || resultOpen || dialogueOpen || statsOpen;
     const kbForward = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0);
     const kbStrafe = (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
     const forwardInput = inputBlocked ? 0 : THREE.MathUtils.clamp(kbForward - mobileMoveY, -1, 1);
@@ -9569,6 +10479,10 @@ function loop() {
     if (updateUiNow) updateMobileContextButtons(null);
   }
 
+  // Gameplay systems use the normal FPS transform above. Only the final shot
+  // is replaced, so the hose, player collision and world state stay stable.
+  updateSettlementCamera(dt);
+
   if (!TOUCH_DEVICE) renderHotbar3DPreviews(dt);
 
   if (updateUiNow) {
@@ -9623,7 +10537,7 @@ function loop() {
   // World depth is cleared so the tool always stays visible, but the rake has
   // its own depthTest/depthWrite, so its rear faces can no longer overdraw its
   // front faces and fake transparency.
-  if (renderThisFrame && rakeEquipped && !rakeHiddenBySpecial && rakeVM.visible) {
+  if (renderThisFrame && !settlementCutsceneActive && rakeEquipped && !rakeHiddenBySpecial && rakeVM.visible) {
     // IMPORTANT:
     // The world/composer has already rendered the color buffer.
     // A normal renderer.render() with autoClear=true would wipe that color
