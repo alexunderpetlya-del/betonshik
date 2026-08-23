@@ -3584,6 +3584,138 @@ body.dialogueActive #hud{filter:brightness(.48) saturate(.82)!important}
   transform:none!important;
   filter:none!important;
 }
+
+/* ============================================================
+   v51.97 — compact objective tracker + settlement statistics
+   ============================================================ */
+.taskTracker{
+  --task-accent:#d5b773;
+  position:fixed;
+  z-index:27;
+  left:22px;
+  top:148px;
+  width:clamp(220px,17vw,286px);
+  box-sizing:border-box;
+  padding:10px 11px 9px;
+  border:1px solid rgba(226,202,140,.27);
+  border-left:3px solid var(--task-accent);
+  border-radius:5px 14px 14px 5px;
+  background:linear-gradient(135deg,rgba(15,17,17,.88),rgba(25,26,23,.76));
+  box-shadow:0 12px 32px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.06);
+  color:#f5f2e9;
+  opacity:0;
+  transform:translateX(-10px);
+  pointer-events:none;
+  -webkit-backdrop-filter:blur(10px);
+  backdrop-filter:blur(10px);
+  transition:opacity .18s ease,transform .22s ease;
+}
+body.gameStarted .taskTracker{opacity:1;transform:none}
+.taskTracker.isHidden,
+body.dialogueActive .taskTracker,
+body.statsActive .taskTracker,
+body.settlementCutsceneActive .taskTracker{opacity:0!important;transform:translateX(-8px)!important}
+.taskTracker[data-state="warning"]{--task-accent:#e7815f}
+.taskTracker[data-state="done"]{--task-accent:#82d99c}
+.taskTrackerHead{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px}
+.taskTrackerHead span{color:rgba(236,217,167,.72);font:900 8px/1 system-ui,sans-serif;letter-spacing:.13em}
+.taskTrackerHead b{color:rgba(255,255,255,.48);font:850 8px/1 system-ui,sans-serif}
+.taskTrackerBody{display:grid;grid-template-columns:27px minmax(0,1fr);align-items:center;gap:8px}
+.taskTrackerBody>i{
+  width:25px;height:25px;display:grid;place-items:center;border-radius:8px;
+  background:color-mix(in srgb,var(--task-accent) 19%,rgba(20,21,19,.8));
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--task-accent) 48%,transparent);
+  color:var(--task-accent);font:950 12px/1 system-ui,sans-serif;font-style:normal;
+}
+.taskTrackerBody>div{min-width:0;display:flex;flex-direction:column;gap:3px}
+.taskTrackerBody strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:900 11px/1.05 system-ui,sans-serif;letter-spacing:.01em}
+.taskTrackerBody small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:rgba(255,255,255,.58);font:650 8.5px/1.1 system-ui,sans-serif}
+.taskTrackerBar{height:2px;margin-top:9px;overflow:hidden;border-radius:2px;background:rgba(255,255,255,.09)}
+.taskTrackerBar i{display:block;width:0;height:100%;border-radius:inherit;background:var(--task-accent);box-shadow:0 0 9px color-mix(in srgb,var(--task-accent) 55%,transparent);transition:width .22s ease}
+.taskTracker.taskChanged{animation:taskTrackerChanged .58s ease}
+@keyframes taskTrackerChanged{0%{filter:brightness(1);transform:none}35%{filter:brightness(1.25);transform:translateX(3px)}100%{filter:brightness(1);transform:none}}
+
+.settlementStatsCard{
+  --stats-accent:#b87958;
+  position:absolute;
+  z-index:5;
+  left:72%;
+  top:52%;
+  width:clamp(330px,35vw,510px);
+  box-sizing:border-box;
+  padding:clamp(15px,1.7vw,24px);
+  border:1px solid color-mix(in srgb,var(--stats-accent) 56%,rgba(255,255,255,.15));
+  border-top:3px solid var(--stats-accent);
+  border-radius:17px;
+  background:linear-gradient(145deg,rgba(13,17,20,.96),rgba(5,8,10,.92));
+  box-shadow:0 24px 58px rgba(0,0,0,.56),inset 0 1px 0 rgba(255,255,255,.08);
+  color:#fff;
+  opacity:0;
+  transform:translate(-50%,-45%) scale(.94);
+  pointer-events:none;
+  -webkit-backdrop-filter:blur(12px);
+  backdrop-filter:blur(12px);
+}
+.settlementStatsCard[data-grade="S"]{--stats-accent:#bfeaff}
+.settlementStatsCard[data-grade="A"]{--stats-accent:#f1ca63}
+.settlementStatsCard[data-grade="B"]{--stats-accent:#aebbc3}
+.settlementStatsCard[data-grade="F"]{--stats-accent:#b87958}
+.settlementStatsCard.isVisible{animation:settlementStatsReveal 3.2s cubic-bezier(.2,.8,.2,1) both}
+@keyframes settlementStatsReveal{
+  0%{opacity:0;transform:translate(-50%,-43%) scale(.91);filter:blur(6px)}
+  12%,84%{opacity:1;transform:translate(-50%,-50%) scale(1);filter:blur(0)}
+  100%{opacity:0;transform:translate(-50%,-53%) scale(.98);filter:blur(2px)}
+}
+.settlementStatsHead{display:flex;align-items:center;justify-content:space-between;padding-bottom:12px;border-bottom:1px solid rgba(255,255,255,.10)}
+.settlementStatsHead>div{display:flex;flex-direction:column;gap:4px}
+.settlementStatsHead span{color:var(--stats-accent);font:950 8px/1 system-ui,sans-serif;letter-spacing:.15em}
+.settlementStatsHead strong{font:950 clamp(15px,1.45vw,21px)/1 system-ui,sans-serif;letter-spacing:.025em}
+.settlementStatsHead>b{
+  min-width:48px;height:48px;display:grid;place-items:center;border-radius:14px;
+  border:1px solid color-mix(in srgb,var(--stats-accent) 62%,white 8%);
+  background:color-mix(in srgb,var(--stats-accent) 16%,rgba(12,15,17,.9));
+  color:var(--stats-accent);font:1000 28px/1 Impact,"Arial Black",system-ui,sans-serif;
+  text-shadow:0 2px 0 rgba(0,0,0,.35);
+}
+.settlementStatsGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px}
+.settlementStatsGrid>div{min-width:0;padding:10px 11px;border:1px solid rgba(255,255,255,.08);border-radius:10px;background:rgba(255,255,255,.035);display:flex;flex-direction:column;gap:5px}
+.settlementStatsGrid span{color:rgba(255,255,255,.46);font:850 7.5px/1 system-ui,sans-serif;letter-spacing:.11em}
+.settlementStatsGrid b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#f5f2e9;font:950 13px/1 system-ui,sans-serif}
+.settlementStatsGrid .settlementStatsReward{border-color:color-mix(in srgb,var(--stats-accent) 34%,transparent);background:color-mix(in srgb,var(--stats-accent) 10%,transparent)}
+.settlementStatsGrid .settlementStatsReward b{color:#91efad}
+
+@media (pointer:coarse), (max-width:820px){
+  .taskTracker{
+    left:max(12px,env(safe-area-inset-left));
+    top:max(146px,calc(env(safe-area-inset-top) + 132px));
+    width:min(222px,33vw);
+    padding:8px 9px 7px;
+    border-radius:4px 11px 11px 4px;
+  }
+  .taskTrackerHead{margin-bottom:5px}
+  .taskTrackerHead span,.taskTrackerHead b{font-size:6.5px}
+  .taskTrackerBody{grid-template-columns:22px minmax(0,1fr);gap:6px}
+  .taskTrackerBody>i{width:21px;height:21px;border-radius:7px;font-size:10px}
+  .taskTrackerBody strong{font-size:8.5px}
+  .taskTrackerBody small{font-size:6.8px}
+  .taskTrackerBar{margin-top:6px}
+
+  .settlementStatsCard{left:72%;top:51%;width:min(49vw,390px);padding:10px;border-radius:12px}
+  .settlementStatsHead{padding-bottom:7px}
+  .settlementStatsHead span{font-size:6px}
+  .settlementStatsHead strong{font-size:clamp(10px,2.8vh,14px)}
+  .settlementStatsHead>b{min-width:34px;height:34px;border-radius:9px;font-size:20px}
+  .settlementStatsGrid{gap:5px;margin-top:7px}
+  .settlementStatsGrid>div{padding:6px 7px;border-radius:7px;gap:3px}
+  .settlementStatsGrid span{font-size:5.5px}
+  .settlementStatsGrid b{font-size:8.5px}
+}
+
+@media (prefers-reduced-motion:reduce){
+  .taskTracker.taskChanged{animation:none}
+  .settlementStatsCard.isVisible{animation:settlementStatsReduced 3.2s ease both}
+  @keyframes settlementStatsReduced{0%,100%{opacity:0}10%,88%{opacity:1;transform:translate(-50%,-50%)}}
+}
 .dialogueLayer[data-npc="mandarin"] .dialoguePortrait{transform:scale(.92) translateY(4%)!important}
 .dialogueLayer[data-npc="george"] .dialoguePortrait{transform:scale(.91) translateY(4%)!important}
 .dialogueLayer[data-npc="baba"] .dialoguePortrait{transform:scale(.92) translateY(4%)!important}
@@ -3875,9 +4007,9 @@ body.settlementCutsceneActive #mobileDebugToggle{
   background-size:300% 200%;
   background-position:100% 100%;
 }
-.settlementRankCard[data-grade="S"] .settlementRankBadge,
-.settlementRankCard[data-grade="A"] .settlementRankBadge{background-position:0 0}
-.settlementRankCard[data-grade="B"] .settlementRankBadge{background-position:50% 0}
+.settlementRankCard[data-grade="S"] .settlementRankBadge{background-position:0 0}
+.settlementRankCard[data-grade="A"] .settlementRankBadge{background-position:50% 0}
+.settlementRankCard[data-grade="B"] .settlementRankBadge{background-position:100% 0}
 .settlementRankCard[data-grade="C"] .settlementRankBadge{background-position:100% 0}
 .settlementRankCard[data-grade="D"] .settlementRankBadge{background-position:0 100%}
 .settlementRankCard[data-grade="E"] .settlementRankBadge{background-position:50% 100%}

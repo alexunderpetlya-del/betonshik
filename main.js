@@ -79,6 +79,20 @@ const settlementRankTextEl = document.querySelector('#settlementRankText');
 const settlementRankCaptionEl = document.querySelector('#settlementRankCaption');
 const settlementRankRewardEl = document.querySelector('#settlementRankReward');
 const settlementRankOverrideEl = document.querySelector('#settlementRankOverride');
+const settlementStatsCardEl = document.querySelector('#settlementStatsCard');
+const settlementStatsGradeEl = document.querySelector('#settlementStatsGrade');
+const settlementStatsMapsEl = document.querySelector('#settlementStatsMaps');
+const settlementStatsFillEl = document.querySelector('#settlementStatsFill');
+const settlementStatsLevelEl = document.querySelector('#settlementStatsLevel');
+const settlementStatsOverpourEl = document.querySelector('#settlementStatsOverpour');
+const settlementStatsQteEl = document.querySelector('#settlementStatsQte');
+const settlementStatsRewardEl = document.querySelector('#settlementStatsReward');
+const taskTrackerEl = document.querySelector('#taskTracker');
+const taskTrackerStepEl = document.querySelector('#taskTrackerStep');
+const taskTrackerIconEl = document.querySelector('#taskTrackerIcon');
+const taskTrackerTitleEl = document.querySelector('#taskTrackerTitle');
+const taskTrackerDetailEl = document.querySelector('#taskTrackerDetail');
+const taskTrackerFillEl = document.querySelector('#taskTrackerFill');
 let settlementRankSheetPreload = null;
 function preloadSettlementRankSheet() {
   if (settlementRankSheetPreload) return settlementRankSheetPreload;
@@ -199,7 +213,7 @@ function buildMobileDebugReport() {
     else if (gl) glInfo = `webgl: ${gl.getParameter(gl.VERSION)}`;
   } catch (_) {}
   return [
-    'BETONSHCHIK MOBILE DEBUG v51.95',
+    'BETONSHCHIK MOBILE DEBUG v51.97',
     `safe=${MOBILE_SAFE_MODE} scene=${FINAL_SCENE_URL}`,
     `screen=${innerWidth}x${innerHeight} dpr=${devicePixelRatio}`,
     `staticGeomCPUReleased=${(mobileStaticGeometryReleasedBytes / (1024 * 1024)).toFixed(1)} MiB`,
@@ -899,6 +913,292 @@ function repaintConstructionVehicles(root) {
   paintNamedVehicleMeshes(mixerTruck, mixerRoles, palette, 'mixer');
   paintNamedVehicleMeshes(pumpTruck, pumpRoles, palette, 'pump');
   paintNamedVehicleMeshes(boom, boomRoles, palette, 'pump boom');
+}
+
+let constructionMachineLifeGroup = null;
+let mixerDrumSpin = null;
+let pumpPistonRod = null;
+let pumpPistonBaseX = 0;
+let machineLifeClock = 0;
+let machineSmokeAccumulator = 0;
+let machineSmokeCursor = 0;
+const machineBeacons = [];
+const machineSmokeOrigins = [];
+const machineSmokePuffs = [];
+
+function createMachineGlowTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  const gradient = ctx.createRadialGradient(32, 32, 2, 32, 32, 31);
+  gradient.addColorStop(0, 'rgba(255,240,164,1)');
+  gradient.addColorStop(.18, 'rgba(255,176,44,.92)');
+  gradient.addColorStop(.52, 'rgba(255,132,18,.32)');
+  gradient.addColorStop(1, 'rgba(255,110,0,0)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 64, 64);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  return texture;
+}
+
+function addMachineBeacon(parent, position, phase, glowTexture) {
+  const group = new THREE.Group();
+  group.position.copy(position);
+  group.userData.noCollision = true;
+
+  const bulb = new THREE.Mesh(
+    new THREE.SphereGeometry(.075, 8, 6),
+    new THREE.MeshBasicMaterial({ color: 0xffa42a })
+  );
+  bulb.raycast = () => {};
+  group.add(bulb);
+
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glowTexture,
+    color: 0xffa125,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  }));
+  glow.scale.set(.62, .62, 1);
+  glow.raycast = () => {};
+  group.add(glow);
+  parent.add(group);
+  machineBeacons.push({ group, bulb, glow, phase });
+}
+
+function addMixerDrumLife(parent, mixerTruck) {
+  const box = new THREE.Box3().setFromObject(mixerTruck);
+  if (box.isEmpty()) return;
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const halfLength = THREE.MathUtils.clamp(size.x * .18, 1.15, 1.72);
+  const radiusY = THREE.MathUtils.clamp(size.y * .335, .88, 1.22);
+  const radiusZ = THREE.MathUtils.clamp(size.z * .255, .92, 1.28);
+  const segments = TOUCH_DEVICE ? 32 : 52;
+  const points = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const angle = t * Math.PI * 2 * 1.32 - Math.PI * .18;
+    points.push(new THREE.Vector3(
+      THREE.MathUtils.lerp(-halfLength, halfLength, t),
+      Math.cos(angle) * radiusY,
+      Math.sin(angle) * radiusZ
+    ));
+  }
+
+  const stripeMat = new THREE.MeshStandardMaterial({
+    color: 0xf0dfbb,
+    roughness: .42,
+    metalness: .04,
+    emissive: 0x2b1b09,
+    emissiveIntensity: .16,
+  });
+  mixerDrumSpin = new THREE.Group();
+  mixerDrumSpin.name = 'LIVE_MIXER_DRUM_STRIPE';
+  mixerDrumSpin.position.copy(center);
+  mixerDrumSpin.position.x += size.x * .04;
+  mixerDrumSpin.position.y += size.y * .115;
+  mixerDrumSpin.userData.baseY = mixerDrumSpin.position.y;
+  mixerDrumSpin.userData.noCollision = true;
+
+  const helix = new THREE.Mesh(
+    new THREE.TubeGeometry(
+      new THREE.CatmullRomCurve3(points),
+      segments,
+      TOUCH_DEVICE ? .045 : .052,
+      6,
+      false
+    ),
+    stripeMat
+  );
+  helix.castShadow = !TOUCH_DEVICE;
+  helix.receiveShadow = true;
+  helix.raycast = () => {};
+  mixerDrumSpin.add(helix);
+  parent.add(mixerDrumSpin);
+
+  addMachineBeacon(
+    parent,
+    new THREE.Vector3(box.min.x + size.x * .10, box.max.y + .08, center.z),
+    0,
+    createMachineGlowTexture()
+  );
+  machineSmokeOrigins.push(new THREE.Vector3(
+    box.min.x + size.x * .20,
+    box.min.y + size.y * .78,
+    box.max.z - .13
+  ));
+}
+
+function addPumpLife(parent, pumpTruck) {
+  const box = new THREE.Box3().setFromObject(pumpTruck);
+  if (box.isEmpty()) return;
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+
+  const pistonGroup = new THREE.Group();
+  pistonGroup.name = 'LIVE_PUMP_HYDRAULICS';
+  pistonGroup.position.set(
+    center.x - size.x * .08,
+    box.min.y + size.y * .34,
+    box.max.z + .025
+  );
+  pistonGroup.userData.noCollision = true;
+
+  const housing = new THREE.Mesh(
+    new THREE.CylinderGeometry(.078, .078, .62, 8),
+    new THREE.MeshStandardMaterial({ color: 0x353a3c, roughness: .55, metalness: .44 })
+  );
+  housing.rotation.z = Math.PI * .5;
+  housing.raycast = () => {};
+  pistonGroup.add(housing);
+
+  pumpPistonRod = new THREE.Mesh(
+    new THREE.CylinderGeometry(.037, .037, .58, 8),
+    new THREE.MeshStandardMaterial({ color: 0xb3babd, roughness: .28, metalness: .78 })
+  );
+  pumpPistonRod.rotation.z = Math.PI * .5;
+  pumpPistonBaseX = .36;
+  pumpPistonRod.position.x = pumpPistonBaseX;
+  pumpPistonRod.raycast = () => {};
+  pistonGroup.add(pumpPistonRod);
+  parent.add(pistonGroup);
+
+  addMachineBeacon(
+    parent,
+    new THREE.Vector3(box.max.x - size.x * .12, box.max.y + .08, center.z),
+    .48,
+    createMachineGlowTexture()
+  );
+  machineSmokeOrigins.push(new THREE.Vector3(
+    box.max.x - size.x * .20,
+    box.min.y + size.y * .80,
+    box.max.z - .13
+  ));
+}
+
+function setupConstructionMachineLife(root) {
+  if (!root) return;
+  if (constructionMachineLifeGroup) constructionMachineLifeGroup.removeFromParent();
+  constructionMachineLifeGroup = new THREE.Group();
+  constructionMachineLifeGroup.name = 'CONSTRUCTION_MACHINE_LIFE';
+  constructionMachineLifeGroup.userData.noCollision = true;
+  scene.add(constructionMachineLifeGroup);
+  mixerDrumSpin = null;
+  pumpPistonRod = null;
+  machineBeacons.length = 0;
+  machineSmokeOrigins.length = 0;
+  machineSmokePuffs.length = 0;
+  machineSmokeCursor = 0;
+
+  const mixerTruck = root.getObjectByName('Concrete Mixer Truck') || root.getObjectByName('Mixer Truck');
+  const pumpTruck = root.getObjectByName('Hoze Truck');
+  if (mixerTruck) addMixerDrumLife(constructionMachineLifeGroup, mixerTruck);
+  if (pumpTruck) addPumpLife(constructionMachineLifeGroup, pumpTruck);
+
+  const puffGeometry = new THREE.SphereGeometry(1, 6, 4);
+  const puffCount = TOUCH_DEVICE ? 10 : 18;
+  for (let i = 0; i < puffCount; i++) {
+    const material = new THREE.MeshBasicMaterial({
+      color: 0x555b59,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(puffGeometry, material);
+    mesh.visible = false;
+    mesh.raycast = () => {};
+    constructionMachineLifeGroup.add(mesh);
+    machineSmokePuffs.push({
+      mesh,
+      age: 0,
+      life: 2,
+      velocity: new THREE.Vector3(),
+      baseScale: .1,
+    });
+  }
+  console.log('[MACHINES] live visuals ready', {
+    mixer: Boolean(mixerDrumSpin),
+    pump: Boolean(pumpPistonRod),
+    smokeOrigins: machineSmokeOrigins.length,
+  });
+}
+
+function spawnMachineSmoke() {
+  if (!machineSmokeOrigins.length || !machineSmokePuffs.length) return;
+  const origin = machineSmokeOrigins[machineSmokeCursor % machineSmokeOrigins.length];
+  const puff = machineSmokePuffs[machineSmokeCursor++ % machineSmokePuffs.length];
+  puff.age = 0;
+  puff.life = THREE.MathUtils.randFloat(1.6, 2.5);
+  puff.baseScale = THREE.MathUtils.randFloat(.075, .125);
+  puff.mesh.visible = true;
+  puff.mesh.position.copy(origin);
+  puff.mesh.position.x += THREE.MathUtils.randFloatSpread(.045);
+  puff.mesh.position.y += THREE.MathUtils.randFloatSpread(.035);
+  puff.mesh.position.z += THREE.MathUtils.randFloatSpread(.045);
+  puff.mesh.scale.setScalar(puff.baseScale);
+  puff.mesh.material.opacity = .22;
+  puff.velocity.set(
+    THREE.MathUtils.randFloat(-.035, .055),
+    THREE.MathUtils.randFloat(.20, .31),
+    THREE.MathUtils.randFloat(-.025, .045)
+  );
+}
+
+function updateConstructionMachines(dt) {
+  if (!constructionMachineLifeGroup) return;
+  machineLifeClock += dt;
+
+  if (mixerDrumSpin) {
+    const drumSpeed = started ? .72 : .16;
+    mixerDrumSpin.rotation.x = (mixerDrumSpin.rotation.x - dt * drumSpeed) % (Math.PI * 2);
+    mixerDrumSpin.position.y = mixerDrumSpin.userData.baseY + Math.sin(machineLifeClock * 7.2) * .003;
+  }
+
+  if (pumpPistonRod) {
+    const pumpActivity = pumpBroken ? 0 : pouring ? 1 : .16;
+    const pulse = Math.sin(machineLifeClock * THREE.MathUtils.lerp(2.2, 10.5, pumpActivity));
+    pumpPistonRod.position.x = pumpPistonBaseX + pulse * .065 * pumpActivity;
+  }
+
+  for (const beacon of machineBeacons) {
+    const wave = Math.max(0, Math.sin((machineLifeClock * 1.55 + beacon.phase) * Math.PI * 2));
+    const flash = started ? Math.pow(wave, 9) : .08;
+    beacon.glow.material.opacity = .08 + flash * .82;
+    beacon.glow.scale.setScalar(.48 + flash * .38);
+    beacon.bulb.scale.setScalar(1 + flash * .24);
+  }
+
+  if (started) {
+    machineSmokeAccumulator += dt;
+    const interval = pouring && !pumpBroken ? .38 : TOUCH_DEVICE ? .72 : .56;
+    if (machineSmokeAccumulator >= interval) {
+      machineSmokeAccumulator %= interval;
+      spawnMachineSmoke();
+    }
+  }
+
+  for (const puff of machineSmokePuffs) {
+    if (!puff.mesh.visible) continue;
+    puff.age += dt;
+    const t = puff.age / Math.max(.001, puff.life);
+    if (t >= 1) {
+      puff.mesh.visible = false;
+      puff.mesh.material.opacity = 0;
+      continue;
+    }
+    puff.mesh.position.addScaledVector(puff.velocity, dt);
+    puff.velocity.x += Math.sin(machineLifeClock * 1.7 + puff.age * 2.3) * dt * .008;
+    const scale = puff.baseScale * THREE.MathUtils.lerp(1, 2.9, t);
+    puff.mesh.scale.setScalar(scale);
+    puff.mesh.material.opacity = .22 * Math.pow(1 - t, 1.55);
+  }
 }
 
 function isMobileVegetationMesh(o) {
@@ -1775,6 +2075,7 @@ const wetConcreteMat = new THREE.MeshStandardMaterial({
   roughness: .20,
   metalness: 0.0,
   side: THREE.DoubleSide,
+  vertexColors: true,
   // The wet top ends flush with the structural slab. Bias it slightly toward
   // the camera so mobile depth precision cannot turn that shared rim into a
   // dotted black seam.
@@ -2180,9 +2481,36 @@ for (const zone of POUR_ZONES) {
     zone.cols, zone.rows
   );
   zone.surfaceGeom.rotateX(-Math.PI / 2);
+  const surfaceVertexColors = new Float32Array(
+    zone.surfaceGeom.attributes.position.count * 3
+  );
+  surfaceVertexColors.fill(1);
+  zone.surfaceGeom.setAttribute(
+    'color',
+    new THREE.BufferAttribute(surfaceVertexColors, 3)
+  );
 
   zone.wetMaterial = registerWetConcreteMaterial(wetConcreteMat.clone());
+  zone.roughnessData = new Uint8Array(zone.cols * zone.rows * 4);
+  zone.roughnessData.fill(255);
+  zone.roughnessTexture = new THREE.DataTexture(
+    zone.roughnessData,
+    zone.cols,
+    zone.rows,
+    THREE.RGBAFormat,
+    THREE.UnsignedByteType
+  );
+  zone.roughnessTexture.colorSpace = THREE.NoColorSpace;
+  zone.roughnessTexture.flipY = true;
+  zone.roughnessTexture.generateMipmaps = false;
+  zone.roughnessTexture.minFilter = THREE.LinearFilter;
+  zone.roughnessTexture.magFilter = THREE.LinearFilter;
+  zone.roughnessTexture.needsUpdate = true;
+  zone.wetMaterial.roughness = 1;
+  zone.wetMaterial.roughnessMap = zone.roughnessTexture;
+  zone.wetMaterial.needsUpdate = true;
   zone.edgeMaterial = wetConcreteMat.clone();
+  zone.edgeMaterial.vertexColors = false;
   zone.edgeMaterial.map = null;
   zone.edgeMaterial.bumpMap = null;
   zone.edgeMaterial.color.set(0x59615e);
@@ -2215,7 +2543,78 @@ function markConcreteDirty() {
 
 const concreteWetColor = new THREE.Color(0xd9dddb);
 const concreteDryColor = new THREE.Color(0xffffff);
+const concreteLocalWetColor = new THREE.Color(0xdee6e2);
+const concreteLocalDryColor = new THREE.Color(0xffffff);
+const concreteLocalFinishedColor = new THREE.Color(0xf4f5f1);
+const concreteVertexColor = new THREE.Color();
 let concreteAppearanceTimer = 0;
+
+function updateConcreteVertexColors(zone) {
+  const color = zone.surfaceGeom.attributes.color;
+  if (!color) return;
+
+  // MeshStandardMaterial reads roughness from the green channel. A tiny RGBA
+  // DataTexture lets fresh cells stay glossy while old cells go matte without
+  // requiring a custom shader or a full-resolution render target.
+  for (let r = 0; r < zone.rows; r++) {
+    for (let c = 0; c < zone.cols; c++) {
+      const cell = zoneIndex(zone, c, r);
+      const filled = zone.fill[cell] > .001;
+      const wet = filled
+        ? THREE.MathUtils.clamp((zone.mobility[cell] - .14) / .80, 0, 1)
+        : 0;
+      const finish = filled && zone.rakeTouched[cell] ? 1 : 0;
+      const coarseRoughness = THREE.MathUtils.lerp(.82, .18, wet);
+      const finishedRoughness = THREE.MathUtils.lerp(.62, .14, wet);
+      const roughness = filled
+        ? THREE.MathUtils.lerp(coarseRoughness, finishedRoughness, finish)
+        : 1;
+      const value = Math.round(THREE.MathUtils.clamp(roughness, 0, 1) * 255);
+      const p = cell * 4;
+      zone.roughnessData[p] = value;
+      zone.roughnessData[p + 1] = value;
+      zone.roughnessData[p + 2] = value;
+      zone.roughnessData[p + 3] = 255;
+    }
+  }
+  zone.roughnessTexture.needsUpdate = true;
+
+  for (let vr = 0; vr <= zone.rows; vr++) {
+    for (let vc = 0; vc <= zone.cols; vc++) {
+      let mobility = 0;
+      let finished = 0;
+      let count = 0;
+
+      for (const dc of [-1, 0]) {
+        for (const dr of [-1, 0]) {
+          const c = vc + dc;
+          const r = vr + dr;
+          if (c < 0 || c >= zone.cols || r < 0 || r >= zone.rows) continue;
+          const cell = zoneIndex(zone, c, r);
+          if (zone.fill[cell] <= .001) continue;
+          mobility += zone.mobility[cell];
+          finished += zone.rakeTouched[cell] ? 1 : 0;
+          count++;
+        }
+      }
+
+      const wet = count
+        ? THREE.MathUtils.clamp((mobility / count - .14) / .80, 0, 1)
+        : 0;
+      const finish = count ? finished / count : 0;
+      concreteVertexColor
+        .lerpColors(concreteLocalDryColor, concreteLocalWetColor, wet)
+        .lerp(concreteLocalFinishedColor, finish * .72);
+      color.setXYZ(
+        vr * (zone.cols + 1) + vc,
+        concreteVertexColor.r,
+        concreteVertexColor.g,
+        concreteVertexColor.b
+      );
+    }
+  }
+  color.needsUpdate = true;
+}
 
 function updateConcreteAppearance(dt) {
   concreteAppearanceTimer += dt;
@@ -2227,9 +2626,11 @@ function updateConcreteAppearance(dt) {
   for (const zone of POUR_ZONES) {
     let mobilitySum = 0;
     let filledCells = 0;
+    let finishedCells = 0;
     for (let i = 0; i < zone.fill.length; i++) {
       if (zone.fill[i] <= .001) continue;
       mobilitySum += zone.mobility[i];
+      if (zone.rakeTouched[i]) finishedCells++;
       filledCells++;
     }
 
@@ -2247,11 +2648,16 @@ function updateConcreteAppearance(dt) {
     );
 
     const wet = zone.visualWetness;
+    const finish = filledCells ? finishedCells / filledCells : 0;
     zone.wetMaterial.color.lerpColors(concreteDryColor, concreteWetColor, wet);
-    zone.wetMaterial.roughness = THREE.MathUtils.lerp(.84, .20, wet);
-    zone.wetMaterial.bumpScale = THREE.MathUtils.lerp(.022, .014, wet);
-    zone.wetMaterial.normalScale.setScalar(THREE.MathUtils.lerp(.24, .38, wet));
+    zone.wetMaterial.roughness = 1;
+    zone.wetMaterial.bumpScale = THREE.MathUtils.lerp(.022, .014, wet) *
+      THREE.MathUtils.lerp(1, .48, finish);
+    zone.wetMaterial.normalScale.setScalar(
+      THREE.MathUtils.lerp(.24, .38, wet) * THREE.MathUtils.lerp(1, .54, finish)
+    );
     zone.wetMaterial.envMapIntensity = THREE.MathUtils.lerp(.38, 1.15, wet);
+    updateConcreteVertexColors(zone);
 
     // A darker vertical contact band visually seals concrete against the bay
     // wall and hides precision seams without changing collision or fill math.
@@ -3202,6 +3608,9 @@ function depositConcreteImpact(
       zone.mobility[idx],
       THREE.MathUtils.clamp(.86 + impactSpeed * .018, .86, 1)
     );
+    // Fresh material poured over an already finished patch must restore the
+    // coarse wet look until the player works that cell again.
+    zone.rakeTouched[idx] = 0;
 
     zone.velX[idx] += THREE.MathUtils.clamp(impactVX * .045, -.28, .28);
     zone.velZ[idx] += THREE.MathUtils.clamp(impactVZ * .045, -.28, .28);
@@ -3543,6 +3952,47 @@ for (let i = 0; i < SPLASH_SPOT_MAX; i++) {
 }
 let splashSpotCursor = 0;
 
+// Expanding surface ripples make the hose impact read as a heavy viscous
+// liquid. They are flat, pooled and collision-free, so the effect is cheap on
+// mobile and cannot interfere with the fill simulation.
+const IMPACT_RIPPLE_MAX = TOUCH_DEVICE ? 10 : 18;
+const impactRippleGeom = new THREE.RingGeometry(.72, 1, TOUCH_DEVICE ? 16 : 24);
+impactRippleGeom.rotateX(-Math.PI * .5);
+const impactRippleGroup = new THREE.Group();
+impactRippleGroup.name = 'CONCRETE_IMPACT_RIPPLES';
+scene.add(impactRippleGroup);
+const impactRipples = [];
+for (let i = 0; i < IMPACT_RIPPLE_MAX; i++) {
+  const material = new THREE.MeshBasicMaterial({
+    color: 0xb8c2bd,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -4,
+    polygonOffsetUnits: -4,
+  });
+  const mesh = new THREE.Mesh(impactRippleGeom, material);
+  mesh.visible = false;
+  mesh.raycast = () => {};
+  impactRippleGroup.add(mesh);
+  impactRipples.push({ mesh, age: 0, life: .55, intensity: 1 });
+}
+let impactRippleCursor = 0;
+
+function spawnConcreteImpactRipple(x, z, surfaceY, intensity) {
+  const ripple = impactRipples[impactRippleCursor++ % impactRipples.length];
+  ripple.age = 0;
+  ripple.life = THREE.MathUtils.randFloat(.42, .68);
+  ripple.intensity = THREE.MathUtils.clamp(intensity, .65, 1.6);
+  ripple.mesh.visible = true;
+  ripple.mesh.position.set(x, surfaceY + .010, z);
+  ripple.mesh.rotation.y = Math.random() * Math.PI;
+  ripple.mesh.scale.setScalar(.055 * ripple.intensity);
+  ripple.mesh.material.opacity = .26;
+}
+
 function spawnWetSplashSpot(x, z, surfaceY, intensity) {
   const spot = splashSpots[splashSpotCursor++ % splashSpots.length];
   spot.age = 0;
@@ -3581,6 +4031,7 @@ function spawnHoseSplashBurst(x, z, zone, intensity = 1) {
     p.mesh.scale.setScalar(THREE.MathUtils.randFloat(.72, 1.30) * intensity);
   }
   spawnWetSplashSpot(x, z, surfaceY, intensity);
+  spawnConcreteImpactRipple(x, z, surfaceY, intensity);
 }
 
 function updateHoseSplashes(dt) {
@@ -3606,6 +4057,20 @@ function updateHoseSplashes(dt) {
       continue;
     }
     spot.mesh.material.opacity = spot.baseOpacity * lifeLeft * lifeLeft;
+  }
+
+  for (const ripple of impactRipples) {
+    if (!ripple.mesh.visible) continue;
+    ripple.age += dt;
+    const t = ripple.age / Math.max(.001, ripple.life);
+    if (t >= 1) {
+      ripple.mesh.visible = false;
+      ripple.mesh.material.opacity = 0;
+      continue;
+    }
+    const radius = THREE.MathUtils.lerp(.055, .42, 1 - Math.pow(1 - t, 2));
+    ripple.mesh.scale.setScalar(radius * ripple.intensity);
+    ripple.mesh.material.opacity = .26 * Math.pow(1 - t, 1.7);
   }
 }
 
@@ -5057,6 +5522,114 @@ function updatePourHUD() {
   );
 }
 
+let lastTaskTrackerKey = '';
+let taskTrackerPulseTimer = 0;
+
+function updateTaskTracker() {
+  if (!taskTrackerEl) return;
+  const blocked = !started || shopOpen || resultOpen || dialogueOpen || statsOpen || settlementCutsceneActive;
+  taskTrackerEl.classList.toggle('isHidden', blocked);
+  if (blocked) return;
+
+  const active = activePourZone();
+  const step = active
+    ? `${Math.min(active.id, POUR_ZONES.length)}/${POUR_ZONES.length}`
+    : `${Math.min(paidPourZoneCount, POUR_ZONES.length)}/${POUR_ZONES.length}`;
+  let key = 'idle';
+  let icon = '◆';
+  let title = 'Ожидайте задачу';
+  let detail = 'Объект №17';
+  let progress = 0;
+
+  if (jobState === 'accepted') {
+    key = 'complete';
+    icon = '✓';
+    title = 'Объект завершён';
+    detail = 'Все карты приняты Павлом';
+    progress = 100;
+  } else if (pumpBroken) {
+    key = 'repair';
+    icon = '!';
+    title = 'Починить насос';
+    detail = 'Подойдите к Джорджу';
+    progress = 0;
+  } else if (!hoseHeldAtLeastOnce) {
+    key = 'find-hose';
+    icon = '◆';
+    title = 'Найти и взять шланг';
+    detail = 'Он находится возле бетонного насоса';
+    progress = 0;
+  } else if (jobReadyForHandover()) {
+    key = `pavel-${paidPourZoneCount}`;
+    icon = '✓';
+    title = 'Получить расчёт';
+    detail = 'Готовая карта · подойдите к Павлу';
+    progress = 100;
+  } else if (active) {
+    const ratio = zoneVolume(active) / Math.max(.000001, active.targetVolume);
+    const fillPct = THREE.MathUtils.clamp(ratio * 100, 0, 125);
+    const levelStats = zoneLevelStats(active);
+    const levelPct = Math.round(THREE.MathUtils.clamp(
+      levelStats.score / Math.max(.001, active.levelRequired),
+      0,
+      1
+    ) * 100);
+
+    if (ratio < .985) {
+      key = hoseHeld ? `pour-${active.id}` : `take-hose-${active.id}`;
+      icon = hoseHeld ? '●' : '◆';
+      title = hoseHeld ? `Залить карту №${active.id}` : 'Взять шланг';
+      detail = `${fillPct.toFixed(0)}% · осталось ${Math.max(0, active.targetVolume - zoneVolume(active)).toFixed(2)} м³`;
+      progress = THREE.MathUtils.clamp(fillPct, 0, 100);
+    } else if (levelPct < 100) {
+      key = !rakeOwned
+        ? `find-rake-${active.id}`
+        : rakeEquipped
+          ? `level-${active.id}`
+          : `take-rake-${active.id}`;
+      icon = '↔';
+      title = !rakeOwned
+        ? 'Найти и взять грабли'
+        : rakeEquipped
+          ? `Выровнять карту №${active.id}`
+          : 'Взять грабли в руки';
+      detail = `Ровность ${levelPct}% · требуется 100%`;
+      progress = levelPct;
+    } else if (surfaceSpillVolume() > .015) {
+      key = `spill-${active.id}`;
+      icon = '!';
+      title = 'Собрать бетон с плиты';
+      detail = `${surfaceSpillVolume().toFixed(2)} м³ · загоните граблями в карту`;
+      progress = 100;
+    } else {
+      key = `pavel-ready-${active.id}`;
+      icon = '✓';
+      title = 'Получить расчёт';
+      detail = `Карта №${active.id} готова · подойдите к Павлу`;
+      progress = 100;
+    }
+  }
+
+  taskTrackerStepEl.textContent = jobState === 'accepted' ? '6/6' : step;
+  taskTrackerIconEl.textContent = icon;
+  taskTrackerTitleEl.textContent = title;
+  taskTrackerDetailEl.textContent = detail;
+  taskTrackerFillEl.style.width = `${THREE.MathUtils.clamp(progress, 0, 100)}%`;
+  taskTrackerEl.dataset.state = key.startsWith('repair') || key.startsWith('spill') ? 'warning' :
+    key.startsWith('complete') || key.startsWith('pavel') ? 'done' : 'active';
+
+  if (key !== lastTaskTrackerKey) {
+    lastTaskTrackerKey = key;
+    taskTrackerEl.classList.remove('taskChanged');
+    void taskTrackerEl.offsetWidth;
+    taskTrackerEl.classList.add('taskChanged');
+    if (taskTrackerPulseTimer) window.clearTimeout(taskTrackerPulseTimer);
+    taskTrackerPulseTimer = window.setTimeout(() => {
+      taskTrackerEl?.classList.remove('taskChanged');
+    }, 620);
+  }
+}
+
 
 // -----------------------------
 // Final-layout colliders and interactions
@@ -5702,6 +6275,7 @@ loader.load(FINAL_SCENE_URL, gltf => {
   // Scene cleanup / art polish for the new export.
   removeFrontSiteFlower(layoutRoot);
   repaintConstructionVehicles(layoutRoot);
+  setupConstructionMachineLife(layoutRoot);
 
   // The real storefront was omitted because it was hidden during Blender export.
   // Restore that missing mesh from a tiny standalone asset; no Blender re-export required.
@@ -9855,6 +10429,32 @@ function settlementBreakdown() {
   return unpaidReadyZones().map(zone => ({ zone, ...gradePourZone(zone) }));
 }
 
+function createSettlementStats(breakdown, reward) {
+  const entries = Array.isArray(breakdown) ? breakdown : [];
+  const count = Math.max(1, entries.length);
+  const fillPercent = entries.reduce((sum, entry) => (
+    sum + zoneVolume(entry.zone) / Math.max(.000001, entry.zone.targetVolume) * 100
+  ), 0) / count;
+  const levelPercent = entries.reduce((sum, entry) => {
+    const level = zoneLevelStats(entry.zone);
+    return sum + THREE.MathUtils.clamp(
+      level.score / Math.max(.001, entry.zone.levelRequired),
+      0,
+      1
+    ) * 100;
+  }, 0) / count;
+  const overpour = entries.reduce((worst, entry) => Math.max(worst, entry.overpour || 0), 0);
+  return {
+    maps: entries.length,
+    fillPercent,
+    levelPercent,
+    overpour,
+    qtePerfects,
+    qteMisses,
+    reward: Math.max(0, Math.round(reward || 0)),
+  };
+}
+
 function currentJobReward() {
   return settlementBreakdown().reduce((sum, entry) => sum + entry.reward, 0);
 }
@@ -9970,7 +10570,31 @@ function revealSettlementRank(grade, reward) {
   settlementRankCardEl.classList.add('isVisible');
 }
 
-async function startPavelSettlementCutscene(grade, reward, restoreResultDialogue) {
+function revealSettlementStats(stats, grade, reward) {
+  const safeGrade = SETTLEMENT_GRADE_CAPTIONS[grade] ? grade : 'F';
+  const data = stats || {};
+  settlementStatsCardEl.dataset.grade = safeGrade;
+  settlementStatsGradeEl.textContent = safeGrade;
+  settlementStatsMapsEl.textContent = String(Math.max(1, Math.round(data.maps || 1)));
+  settlementStatsFillEl.textContent = `${Number(data.fillPercent || 0).toFixed(1)}%`;
+  settlementStatsLevelEl.textContent = `${Math.round(data.levelPercent || 0)}%`;
+  settlementStatsOverpourEl.textContent = `${Number(data.overpour || 0).toFixed(1)}%`;
+  settlementStatsQteEl.textContent = `${Math.round(data.qtePerfects || 0)} PERFECT · ${Math.round(data.qteMisses || 0)} MISS`;
+  settlementStatsRewardEl.textContent = `+${Math.max(0, Math.round(data.reward ?? reward ?? 0)).toLocaleString('ru-RU')} ₽`;
+  settlementStatsCardEl.classList.remove('isVisible');
+  void settlementStatsCardEl.offsetWidth;
+  settlementStatsCardEl.classList.add('isVisible');
+}
+
+async function showSettlementStatsPhase(stats, grade, reward, duration = 3200) {
+  settlementRankCardEl.classList.remove('isVisible');
+  await waitForMs(140);
+  if (!settlementCutsceneActive) return;
+  revealSettlementStats(stats, grade, reward);
+  await waitForMs(duration);
+}
+
+async function startPavelSettlementCutscene(grade, reward, stats, restoreResultDialogue) {
   if (settlementCutsceneActive) return false;
   dialogueRewardTransitionActive = false;
   settlementCutsceneActive = true;
@@ -9991,6 +10615,7 @@ async function startPavelSettlementCutscene(grade, reward, restoreResultDialogue
   document.body.classList.add('settlementCutsceneActive');
   settlementCutsceneEl.classList.remove('hidden');
   settlementRankCardEl.classList.remove('isVisible');
+  settlementStatsCardEl.classList.remove('isVisible');
   beginSettlementCamera();
 
   let danceStarted = false;
@@ -10007,17 +10632,18 @@ async function startPavelSettlementCutscene(grade, reward, restoreResultDialogue
     if (!dancePlayed || !danceStarted) {
       revealSettlementRank(grade, reward);
       await waitForMs(3300);
-    } else {
-      await waitForMs(240);
     }
+    await showSettlementStatsPhase(stats, grade, reward, 3200);
   } catch (error) {
     console.warn('Pavel settlement cutscene failed', error);
     revealSettlementRank(grade, reward);
     await waitForMs(2200);
+    await showSettlementStatsPhase(stats, grade, reward, 2800);
   } finally {
     if (settlementRankRevealTimer) window.clearTimeout(settlementRankRevealTimer);
     settlementRankRevealTimer = 0;
     settlementRankCardEl.classList.remove('isVisible');
+    settlementStatsCardEl.classList.remove('isVisible');
     settlementCutsceneEl.classList.add('hidden');
     document.body.classList.remove('settlementCutsceneActive');
     settlementCameraState.active = false;
@@ -10189,6 +10815,7 @@ function pavelDialogue() {
           }
 
           const reward = breakdown.reduce((sum, entry) => sum + entry.reward, 0);
+          const settlementStats = createSettlementStats(breakdown, reward);
           const worst = breakdown.reduce((current, entry) => {
             if (!current) return entry;
             const currentIndex = POUR_GRADE_RULES.findIndex(rule => rule.grade === current.grade);
@@ -10262,7 +10889,7 @@ function pavelDialogue() {
           // The prepared result dialogue returns only after the cutscene ends.
           window.setTimeout(() => {
             dialogueRewardTransitionActive = false;
-            void startPavelSettlementCutscene(finalGrade, reward, restoreResultDialogue);
+            void startPavelSettlementCutscene(finalGrade, reward, settlementStats, restoreResultDialogue);
           }, 260);
         }
       },
@@ -11034,6 +11661,7 @@ function loop() {
   for (const mixer of npcMixers) mixer.update(dt);
   lockBabaToGround();
   updateBabaProceduralIdle(dt);
+  updateConstructionMachines(dt);
 
   if (started) {
     const inputBlocked = shopOpen || resultOpen || dialogueOpen || statsOpen;
@@ -11161,6 +11789,7 @@ function loop() {
     rakeHotbarStateEl.textContent = !rakeOwned ? '—' : (rakeEquipped ? '●' : '✓');
     updateEconomyUI();
     updatePourHUD();
+    updateTaskTracker();
   }
   if (toastTimer > 0) {
     toastTimer -= dt;

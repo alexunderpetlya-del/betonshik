@@ -14,7 +14,7 @@
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png?v=51.41" />
   <title>БЕТОНЩИК</title>
   <link rel="manifest" href="./manifest.webmanifest?v=51.62" />
-  <link rel="stylesheet" href="./style.css?v=51.95" />
+  <link rel="stylesheet" href="./style.css?v=51.97" />
   <script type="importmap">
   {
     "imports": {
@@ -66,6 +66,15 @@
   </div>
   <button id="mobileDebugToggle" type="button" aria-label="Mobile debug">DBG</button>
   <pre id="mobileDebugPanel" aria-live="polite"></pre>
+
+  <div id="taskTracker" class="taskTracker" aria-live="polite" aria-label="Текущая задача">
+    <div class="taskTrackerHead"><span>ТЕКУЩАЯ ЗАДАЧА</span><b id="taskTrackerStep">1/6</b></div>
+    <div class="taskTrackerBody">
+      <i id="taskTrackerIcon" aria-hidden="true">◆</i>
+      <div><strong id="taskTrackerTitle">Найти шланг</strong><small id="taskTrackerDetail">На стройплощадке возле насоса</small></div>
+    </div>
+    <div class="taskTrackerBar"><i id="taskTrackerFill"></i></div>
+  </div>
 
   <div id="start" class="overlay menuSplash">
     <div class="menuBackdrop" aria-hidden="true"></div>
@@ -153,6 +162,20 @@
         <strong id="settlementRankText">F</strong>
         <small id="settlementRankCaption">РАБОТА НЕ ПРИНЯТА</small>
         <em id="settlementRankReward">+0 ₽</em>
+      </div>
+    </div>
+    <div id="settlementStatsCard" class="settlementStatsCard" data-grade="F">
+      <div class="settlementStatsHead">
+        <div><span>ИТОГ РАСЧЁТА</span><strong>СТАТИСТИКА ЗАЛИВКИ</strong></div>
+        <b id="settlementStatsGrade">F</b>
+      </div>
+      <div class="settlementStatsGrid">
+        <div><span>КАРТ ПРИНЯТО</span><b id="settlementStatsMaps">1</b></div>
+        <div><span>ЗАЛИВКА</span><b id="settlementStatsFill">100.0%</b></div>
+        <div><span>РОВНОСТЬ</span><b id="settlementStatsLevel">100%</b></div>
+        <div><span>ПЕРЕЛИВ</span><b id="settlementStatsOverpour">0.0%</b></div>
+        <div><span>QTE</span><b id="settlementStatsQte">0 PERFECT · 0 MISS</b></div>
+        <div class="settlementStatsReward"><span>ВЫПЛАТА</span><b id="settlementStatsReward">+0 ₽</b></div>
       </div>
     </div>
   </div>
@@ -266,6 +289,6 @@
     </div>
   </div>
 
-  <script type="module" src="./main.js?v=51.95"></script>
+  <script type="module" src="./main.js?v=51.97"></script>
 </body>
 </html>
