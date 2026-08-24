@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-// v51.105 compatibility/event patch loaded BEFORE the main game module.
+// v51.108 compatibility/event patch loaded BEFORE the main game module.
 // 1) removes the extra mobile pit lip that caused doubled/broken recess borders;
 // 2) keeps pit walls slightly separated in depth to avoid z-fighting;
 // 3) fixes rank badge crop + shine;
@@ -559,7 +559,7 @@ const POUR_EVENT_COPY = {
   pump: { title: 'ПОЛОМКА НАСОСА', text: 'ПОДАЧА ОСТАНОВЛЕНА' },
   eye: { title: 'БЕТОН В ГЛАЗ', text: 'СМАХНИ БЕТОН' },
 };
-const EVENT_ALARM_SECONDS = .50;
+const EVENT_ALARM_SECONDS = 1.00;
 let pendingPourEvent = null;
 let eventAlarmTimer = 0;
 let pumpBroken = false;
@@ -995,6 +995,14 @@ function pumpWireUp(e){
   if(wirePuzzle.paths.size>=wirePuzzle.count)setTimeout(()=>closePumpWirePuzzle(true),320);
   e.preventDefault();
 }
+function prepareZoneRandomEvent(zone, index = 0) {
+  if (!zone) return;
+  const randomIndex = Math.floor(Math.random() * POUR_EVENT_TYPES.length);
+  zone.eventType = POUR_EVENT_TYPES[(randomIndex + index) % POUR_EVENT_TYPES.length];
+  zone.eventThreshold = THREE.MathUtils.randFloat(.26, .62);
+  zone.eventTriggered = false;
+}
+
 POUR_ZONES.forEach((zone,index)=>prepareZoneRandomEvent(zone,index));
 
 function cancelQTEWithoutPenalty(){if(!qteActive)return;qteActive=false;qteLayerEl.classList.remove('active');qteTargetEl.classList.remove('pulse','perfect','badclick');resetQTECooldown();}
@@ -1012,7 +1020,7 @@ function executePendingPourEvent() {
   const event=pendingPourEvent; pendingPourEvent=null; eventAlarmTimer=0; eventAlarmEl?.classList.remove('show'); pressurePulseMesh.visible=false;
   if(!event)return;
   if(event.type==='pressure'){
-    // Turning the pump off during the 0.5 s warning is a full counter.
+    // Turning the pump off during the 1.0 s warning is a full counter.
     if(!pouring){pressureSpikePending=false;pressureSpikeVolumeM3=0;window.__betonEventResult='ИДЕАЛЬНО';showToast('ДАВЛЕНИЕ СБРОШЕНО · ПОДАЧА БЫЛА ВЫКЛЮЧЕНА',2.2);return;}
     const ratio=zoneVolume(event.zone)/Math.max(.000001,event.zone.targetVolume);
     const currentPct=ratio*100;
@@ -1117,7 +1125,7 @@ const eventResetNeedle = "  pumpBroken = false;\n  pressureSpikePending = false;
 const eventResetReplacement = "  pumpBroken = false;\n  pressureSpikePending = false;\n  hoseRecoveryNeeded = false;\n  hoseControlActive = false;\n  hoseControlHeld = false;\n  hoseControlFailures = 0;\n  window.__betonEventResult = '—';\n  document.querySelector('#betonHoseControl')?.classList.remove('show','pressed');\n  pendingPourEvent = null;";
 if (mainSource.includes(eventResetNeedle)) mainSource = mainSource.replace(eventResetNeedle, eventResetReplacement);
 
-const mainBlob = new Blob([mainSource + '\n//# sourceURL=betonshik-main-v51.105.js'], { type:'text/javascript' });
+const mainBlob = new Blob([mainSource + '\n//# sourceURL=betonshik-main-v51.108.js'], { type:'text/javascript' });
 const mainBlobUrl = URL.createObjectURL(mainBlob);
 try { await import(mainBlobUrl); }
 finally { setTimeout(() => URL.revokeObjectURL(mainBlobUrl), 2000); }

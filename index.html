@@ -23,6 +23,15 @@
     }
   }
   </script>
+  <style id="menu-play-size-fix-v51108">
+    /* v51.108: compact PLAY button on phone landscape without relying on JS classes. */
+    @media (orientation: landscape) and (max-height: 700px) {
+      #start .menuPlayButton{
+        width:min(35vw,470px)!important;
+        bottom:5%!important;
+      }
+    }
+  </style>
 </head>
 <body>
   <div id="game"></div>
@@ -96,7 +105,7 @@
         >
       </button>
 
-      <div class="menuLoadState" id="menuVersion">v51.106</div>
+      <div class="menuLoadState" id="menuVersion">v51.108</div>
       <div id="loadState" hidden style="display:none!important">Загрузка...</div>
       <div id="menuLoadingSpinner" class="menuLoadingSpinner" aria-hidden="true"></div>
     </div>
@@ -290,6 +299,16 @@
     </div>
   </div>
 
-  <script type="module" src="./main.js?v=51.105"></script>
+  <script type="module" src="./main.js?v=51.108"></script>
+  <script>
+    window.addEventListener('error', function(e){
+      var v=document.getElementById('menuVersion');
+      if(v){v.textContent='v51.108 · ОШИБКА';v.style.color='#ff7777';}
+    });
+    window.addEventListener('unhandledrejection', function(){
+      var v=document.getElementById('menuVersion');
+      if(v){v.textContent='v51.108 · ОШИБКА';v.style.color='#ff7777';}
+    });
+  </script>
 </body>
 </html>
