@@ -14,7 +14,7 @@
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png?v=51.41" />
   <title>БЕТОНЩИК</title>
   <link rel="manifest" href="./manifest.webmanifest?v=51.62" />
-  <link rel="stylesheet" href="./style.css?v=51.99" />
+  <link rel="stylesheet" href="./style.css?v=51.111" />
   <script type="importmap">
   {
     "imports": {
@@ -23,15 +23,38 @@
     }
   }
   </script>
-  <style id="menu-play-size-fix-v51110">
-    /* v51.110: compact PLAY button on phone landscape without relying on JS classes. */
-    @media (orientation: landscape) and (max-height: 700px) {
-      #start .menuPlayButton{
-        width:min(35vw,470px)!important;
-        bottom:5%!important;
+  <style id="mobile-orientation-boot-v51111">
+    html,body{width:100%;height:100%;margin:0;overflow:hidden}
+    @media (pointer:coarse) and (orientation:portrait){
+      #rotateNotice{
+        display:flex!important;position:fixed!important;inset:0!important;z-index:2147483000!important;
+        align-items:center!important;justify-content:center!important;flex-direction:column!important;gap:8px!important;
+        background:#11140f!important;color:#ece9cd!important;text-align:center!important;pointer-events:auto!important
       }
     }
+    @media (pointer:coarse) and (orientation:landscape){
+      #rotateNotice{display:none!important}
+      #start.menuSplash{width:100vw!important;height:100dvh!important;inset:0!important}
+      #start .menuFrame{width:100vw!important;height:100dvh!important;max-width:none!important;max-height:none!important}
+    }
   </style>
+  <script id="mobile-orientation-boot-script-v51111">
+  (function(){
+    var coarse = false;
+    try { coarse = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches) || navigator.maxTouchPoints > 0 || ('ontouchstart' in window); } catch(_) {}
+    function sync(){
+      var root=document.documentElement;
+      var landscape=innerWidth>innerHeight;
+      root.classList.toggle('touchDevice',coarse);
+      root.classList.toggle('mobileLandscape',coarse && landscape);
+      root.classList.toggle('mobilePortrait',coarse && !landscape);
+      try { window.scrollTo(0,1); } catch(_) {}
+    }
+    sync();
+    addEventListener('resize',sync,{passive:true});
+    addEventListener('orientationchange',function(){sync();setTimeout(sync,60);setTimeout(sync,240);},{passive:true});
+  })();
+  </script>
 </head>
 <body>
   <div id="game"></div>
@@ -49,6 +72,7 @@
       <div class="stickKnob" id="moveKnob"></div>
     </div>
   </div>
+
 
   <div id="mobileHud" aria-label="Мобильный HUD">
     <div id="mobileAim" aria-hidden="true"></div>
@@ -76,6 +100,7 @@
   <button id="mobileDebugToggle" type="button" aria-label="Mobile debug">DBG</button>
   <pre id="mobileDebugPanel" aria-live="polite"></pre>
 
+
   <div id="taskTracker" class="taskTracker" aria-live="polite" aria-label="Текущая задача">
     <div class="taskTrackerHead"><span>ТЕКУЩАЯ ЗАДАЧА</span><b id="taskTrackerStep">1/6</b></div>
     <div class="taskTrackerBody">
@@ -85,8 +110,10 @@
     <div class="taskTrackerBar"><i id="taskTrackerFill"></i></div>
   </div>
 
+
   <div id="start" class="overlay menuSplash">
     <div class="menuBackdrop" aria-hidden="true"></div>
+
 
     <div class="menuFrame" aria-label="Бетонщик">
       <img
@@ -95,6 +122,7 @@
         alt="Бетонщик"
         draggable="false"
       >
+
 
       <button id="startBtn" class="menuPlayButton" aria-label="Играть" type="button">
         <img
@@ -105,11 +133,12 @@
         >
       </button>
 
-      <div class="menuLoadState" id="menuVersion">v51.110</div>
-      <div id="loadState" hidden>Загрузка...</div>
+
+      <div class="menuLoadState" id="loadState">Загрузка...</div>
       <div id="menuLoadingSpinner" class="menuLoadingSpinner" aria-hidden="true"></div>
     </div>
   </div>
+
 
   <div id="hud">
     <div id="topLeft">
@@ -156,11 +185,13 @@
   </div>
   <div id="qtePerfectFeedback" aria-live="polite">ИДЕАЛЬНО! <b>+35% СКОРОСТИ ЗАЛИВКИ</b></div>
 
+
   <div id="eventAlarm" role="status" aria-live="assertive">
     <div class="eventAlarmIcon">!</div>
     <div><b id="eventAlarmTitle">ВНИМАНИЕ</b><span id="eventAlarmText"></span></div>
   </div>
   <div id="blindnessOverlay" aria-hidden="true"><i></i></div>
+
 
   <div id="settlementCutscene" class="settlementCutscene hidden" aria-live="polite" aria-label="Результат заливки">
     <div id="settlementRankCard" class="settlementRankCard" data-grade="F">
@@ -190,6 +221,7 @@
     </div>
   </div>
 
+
   <div id="shop" class="gameModal hidden">
     <div class="modalCard shopCard">
       <div class="shopHeader">
@@ -199,6 +231,7 @@
         </div>
         <div class="shopBalance">НА РУКАХ <b id="shopMoney">0 ₽</b></div>
       </div>
+
 
       <div class="shopLayout">
         <div class="shopProducts">
@@ -216,6 +249,7 @@
             <span><strong>Сигареты «Беломор»</strong><small>+20 сигарет</small></span><b>150 ₽</b>
           </button>
 
+
           <div class="shopSectionLabel">РАБОЧАЯ ОБУВЬ</div>
           <button class="shopProduct" data-product="boots1">
             <span><strong>Сапоги новичка</strong><small>меньше вязнешь</small></span><b>450 ₽</b>
@@ -227,6 +261,7 @@
             <span><strong>Мышеходы</strong><small>легендарные сапоги Паши</small></span><b>2 400 ₽</b>
           </button>
         </div>
+
 
         <div class="shopPreviewPane">
           <canvas id="shopPreview" width="360" height="300"></canvas>
@@ -241,9 +276,12 @@
         </div>
       </div>
 
+
       <button id="shopClose" class="modalClose" type="button" aria-label="Закрыть магазин" title="Закрыть">×</button>
     </div>
   </div>
+
+
 
 
   <div id="dialogue" class="dialogueLayer hidden" data-npc="pavel" role="dialog" aria-modal="true" aria-labelledby="dialogueName" aria-describedby="dialogueText">
@@ -264,6 +302,7 @@
       </div>
     </div>
   </div>
+
 
   <div id="characterStats" class="gameModal hidden" aria-label="Статистика персонажа">
     <div class="modalCard characterStatsCard">
@@ -290,6 +329,7 @@
     </div>
   </div>
 
+
   <div id="jobResult" class="gameModal hidden">
     <div class="modalCard resultCard">
       <div class="modalEyebrow">ОБЪЕКТ №17</div>
@@ -299,16 +339,22 @@
     </div>
   </div>
 
-  <script type="module" src="./main.js?v=51.110"></script>
+
+  <script type="module" src="./main.js?v=51.111"></script>
   <script>
-    window.addEventListener('error', function(e){
-      var v=document.getElementById('menuVersion');
-      if(v){v.textContent='v51.110 · ОШИБКА';v.style.color='#ff7777';}
-    });
-    window.addEventListener('unhandledrejection', function(){
-      var v=document.getElementById('menuVersion');
-      if(v){v.textContent='v51.110 · ОШИБКА';v.style.color='#ff7777';}
-    });
+  (function(){
+    function showBootError(msg){
+      var el=document.getElementById('loadState');
+      if(!el)return;
+      el.textContent='ОШИБКА ЗАПУСКА: '+String(msg||'неизвестная ошибка');
+      el.style.color='#ff7b7b';
+      el.style.display='block';
+      el.hidden=false;
+      document.getElementById('menuLoadingSpinner')?.classList.add('isError');
+    }
+    addEventListener('error',function(e){showBootError(e.message||'runtime error')});
+    addEventListener('unhandledrejection',function(e){showBootError(e.reason?.message||e.reason||'promise rejected')});
+  })();
   </script>
 </body>
 </html>

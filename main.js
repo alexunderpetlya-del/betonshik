@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+﻿import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { OBB } from 'three/addons/math/OBB.js';
@@ -9,570 +9,18 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
 
-// ===== v51.110 INTEGRATED PRE-GAME PATCHES =====
-// v51.110 functionality is statically merged into the monolithic game core. No runtime source download/rewrite/import.
-// v51.110 compatibility/event patch loaded BEFORE the main game module.
-// 1) removes the extra mobile pit lip that caused doubled/broken recess borders;
-// 2) keeps pit walls slightly separated in depth to avoid z-fighting;
-// 3) fixes rank badge crop + shine;
-// 4) after a pour map first reaches 100%, switches its top surface after 30 s
-//    to the earlier smooth/levelled fresh-concrete PBR set (v2).
-// Rebar creation/material/height is intentionally untouched.
-
-const TOUCH_DEVICE_PATCH = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
-const DRY_AFTER_MS = 30_000;
-const DRY_STORAGE_KEY = 'beton_concrete_cure_v5199';
-const DRY_TEXTURE_DIR = TOUCH_DEVICE_PATCH
-  ? './assets/final_mobile_textures'
-  : './assets/final_pc_textures';
-
-const concreteSurfaces = new Map();
-const concreteSkirts = new Map();
-const dryTimers = new Map();
-const dryMaterials = new Map();
-
-// v51.104: finer rebar texture tiling only; mesh/collision/height remain untouched.
-const REBAR_REPEAT_MULT = 1.6;
-const REBAR_NAME_RE = /(rebar|armat|армат)/i;
-const patchedRebarTextures = new WeakSet();
-let rebarPatchFrames = 0;
-const originalRendererRender = THREE.WebGLRenderer.prototype.render;
-function textureSourceLabel(tex) {
-  if (!tex) return '';
-  const img = tex.image || tex.source?.data || null;
-  return String(img?.currentSrc || img?.src || tex.name || '');
-}
-function maybePatchRebarMaterial(material, meshName = '') {
-  if (!material) return;
-  const matName = String(material.name || '');
-  const candidates = [material.map, material.normalMap, material.bumpMap, material.alphaMap, material.roughnessMap];
-  const isRebar = REBAR_NAME_RE.test(meshName) || REBAR_NAME_RE.test(matName) || candidates.some(tex => REBAR_NAME_RE.test(textureSourceLabel(tex)));
-  if (!isRebar) return;
-  for (const tex of candidates) {
-    if (!tex || patchedRebarTextures.has(tex)) continue;
-    const label = textureSourceLabel(tex);
-    if (!(REBAR_NAME_RE.test(label) || REBAR_NAME_RE.test(meshName) || REBAR_NAME_RE.test(matName))) continue;
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.RepeatWrapping;
-    const rx = Number(tex.repeat?.x) || 1;
-    const ry = Number(tex.repeat?.y) || 1;
-    tex.repeat.set(Math.max(1, rx * REBAR_REPEAT_MULT), Math.max(1, ry * REBAR_REPEAT_MULT));
-    tex.anisotropy = Math.max(Number(tex.anisotropy) || 0, TOUCH_DEVICE_PATCH ? 4 : 8);
-    tex.needsUpdate = true;
-    patchedRebarTextures.add(tex);
-  }
-  material.needsUpdate = true;
-}
-function patchRebarScene(scene) {
-  if (!scene?.traverse) return;
-  scene.traverse(obj => {
-    if (!obj?.isMesh || !obj.material) return;
-    const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
-    for (const material of materials) maybePatchRebarMaterial(material, String(obj.name || ''));
-  });
-}
-THREE.WebGLRenderer.prototype.render = function patchedRender(scene, camera) {
-  if (scene && rebarPatchFrames < 240) {
-    patchRebarScene(scene);
-    rebarPatchFrames += 1;
-  }
-  return originalRendererRender.call(this, scene, camera);
-};
-
-
-// v51.100: one PBR family for every runtime piece of still-liquid concrete.
-// This deliberately does NOT touch rebar or the cured v2 floor material.
-const liquidRuntimeMeshes = new Set();
-const liquidPatchedMaterials = new WeakSet();
-const LIQUID_RUNTIME_GROUPS = new Set([
-  'CONCRETE_PHYSICS_BLOBS',
-  'HOSE_SPLASH_PARTICLES',
-  'HOSE_WET_SPOTS',
-]);
-let liquidTextures = null;
-const liquidMapSets = new Map();
-
-function cloneLiquidTexture(texture, repeat = 2) {
-  const clone = texture.clone();
-  clone.wrapS = THREE.RepeatWrapping;
-  clone.wrapT = THREE.RepeatWrapping;
-  clone.repeat.set(repeat, repeat);
-  clone.colorSpace = texture.colorSpace;
-  clone.anisotropy = TOUCH_DEVICE_PATCH ? 4 : 8;
-  clone.needsUpdate = true;
-  return clone;
-}
-
-function getLiquidMapSet(kind, repeat) {
-  if (!liquidTextures) return null;
-  const key = `${kind}:${repeat}`;
-  let set = liquidMapSets.get(key);
-  if (!set) {
-    set = {
-      albedo: cloneLiquidTexture(liquidTextures.albedo, repeat),
-      normal: cloneLiquidTexture(liquidTextures.normal, repeat),
-      height: cloneLiquidTexture(liquidTextures.height, repeat),
-    };
-    liquidMapSets.set(key, set);
-  }
-  return set;
-}
-
-const liquidTexturesPromise = Promise.all([
-  loadTexture(`${DRY_TEXTURE_DIR}/wet_concrete_v3_albedo.webp`, true),
-  loadTexture(`${DRY_TEXTURE_DIR}/wet_concrete_v3_normal.webp`, false),
-  loadTexture(`${DRY_TEXTURE_DIR}/wet_concrete_v3_height.webp`, false),
-]).then(([albedo, normal, height]) => {
-  liquidTextures = { albedo, normal, height };
-  for (const mesh of liquidRuntimeMeshes) applyLiquidConcreteLook(mesh);
-  return liquidTextures;
-}).catch(error => {
-  console.warn('[v51.100] flowing concrete PBR maps unavailable', error);
-  return null;
-});
-
-function liquidKindFor(mesh, parentName = '') {
-  const name = String(mesh?.name || '');
-  if (parentName === 'CONCRETE_PHYSICS_BLOBS') return 'blob';
-  if (parentName === 'HOSE_SPLASH_PARTICLES') return 'drop';
-  if (parentName === 'HOSE_WET_SPOTS') return 'spot';
-  if (/^SURFACE_SPILL_/i.test(name)) return 'spill';
-  if (/^FRESH_CONCRETE_ZONE_\d+(?:_SKIRT_.*)?$/i.test(name)) return 'surface';
-  return '';
-}
-
-function applyLiquidConcreteLook(mesh, parentName = mesh?.parent?.name || '') {
-  if (!mesh?.isMesh || !mesh.material) return;
-  const kind = liquidKindFor(mesh, parentName);
-  if (!kind) return;
-
-  liquidRuntimeMeshes.add(mesh);
-  if (!liquidTextures) return;
-
-  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-  for (const material of materials) {
-    if (!material || material.userData?.curedConcrete || liquidPatchedMaterials.has(material)) continue;
-
-    // Main-game fresh floor surfaces already own a dynamic roughness map and
-    // vertex wetness. Keep those systems and only enforce the same v3 maps.
-    const repeat = kind === 'drop' ? 1 : kind === 'blob' ? 1.35 : kind === 'spot' ? 1.6 : 2.4;
-    const maps = getLiquidMapSet(kind, repeat);
-    material.map = maps?.albedo || material.map;
-
-    if (material.isMeshStandardMaterial || material.isMeshPhysicalMaterial) {
-      material.normalMap = maps?.normal || material.normalMap;
-      material.bumpMap = maps?.height || material.bumpMap;
-      material.metalness = 0;
-      if (kind === 'drop') {
-        material.roughness = .20;
-        material.normalScale = new THREE.Vector2(.10, .10);
-        material.bumpScale = .003;
-      } else if (kind === 'blob') {
-        material.roughness = .22;
-        material.normalScale = new THREE.Vector2(.16, .16);
-        material.bumpScale = .006;
-      } else if (kind === 'spill') {
-        material.roughness = .24;
-        material.normalScale = new THREE.Vector2(.22, .22);
-        material.bumpScale = .010;
-      } else if (kind === 'surface') {
-        // Don't overwrite the per-zone dynamic roughness texture.
-        material.normalScale = new THREE.Vector2(.28, .28);
-        material.bumpScale = .014;
-      } else {
-        material.roughness = .28;
-        material.normalScale = new THREE.Vector2(.12, .12);
-        material.bumpScale = .004;
-      }
-      material.envMapIntensity = Math.max(.55, Number(material.envMapIntensity) || 0);
-    } else if (kind === 'spot' && material.isMeshBasicMaterial) {
-      // Flat splash decals cannot use normal maps. They still receive the exact
-      // liquid albedo and keep their existing transparent/fade behaviour.
-      material.color?.set?.(0xffffff);
-    }
-
-    material.color?.set?.(0xffffff);
-    material.needsUpdate = true;
-    liquidPatchedMaterials.add(material);
-  }
-}
-
-function readDryState() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(DRY_STORAGE_KEY) || '{}');
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch (_) {
-    return {};
-  }
-}
-let dryState = readDryState();
-
-function writeDryState() {
-  try { localStorage.setItem(DRY_STORAGE_KEY, JSON.stringify(dryState)); } catch (_) {}
-}
-
-function configureMap(texture, isColor = false) {
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(4, 4);
-  texture.colorSpace = isColor ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-  texture.anisotropy = TOUCH_DEVICE_PATCH ? 4 : 8;
-  texture.needsUpdate = true;
-  return texture;
-}
-
-function loadTexture(url, isColor = false) {
-  return new Promise((resolve, reject) => {
-    new THREE.TextureLoader().load(
-      url,
-      texture => resolve(configureMap(texture, isColor)),
-      undefined,
-      reject
-    );
-  });
-}
-
-// v2 is the earlier smooth/levelled fresh-floor material; v3 remains the active
-// flowing aggregate material used while the player is pouring/levelling.
-const dryTexturesPromise = Promise.all([
-  loadTexture(`${DRY_TEXTURE_DIR}/wet_concrete_v2_albedo.webp`, true),
-  loadTexture(`${DRY_TEXTURE_DIR}/wet_concrete_v2_normal.webp`, false),
-  loadTexture(`${DRY_TEXTURE_DIR}/wet_concrete_v2_height.webp`, false),
-]).then(([albedo, normal, height]) => ({ albedo, normal, height }))
-  .catch(error => {
-    console.warn('[v51.99] smooth concrete maps unavailable; using material-only cure fallback', error);
-    return null;
-  });
-
-function makeDryMaterial(zoneId, sourceMaterial, textures) {
-  const material = sourceMaterial?.clone?.() || new THREE.MeshStandardMaterial();
-  material.name = `CURED_CONCRETE_ZONE_${zoneId}_MATERIAL`;
-  material.vertexColors = false;
-  material.color = material.color || new THREE.Color();
-  material.color.set(0xd3d6d2);
-  material.metalness = 0;
-  material.roughness = .73;
-  material.roughnessMap = null;
-  material.envMapIntensity = .46;
-  material.transparent = false;
-  material.opacity = 1;
-  material.side = THREE.DoubleSide;
-  material.polygonOffset = true;
-  material.polygonOffsetFactor = -1;
-  material.polygonOffsetUnits = -2;
-
-  if (textures) {
-    material.map = textures.albedo;
-    material.normalMap = textures.normal;
-    material.normalScale = new THREE.Vector2(.16, .16);
-    material.bumpMap = textures.height;
-    material.bumpScale = .006;
-  } else {
-    material.normalMap = null;
-    material.bumpMap = null;
-  }
-
-  material.userData = {
-    ...(material.userData || {}),
-    curedConcrete: true,
-    curedAt: Date.now(),
-  };
-  material.needsUpdate = true;
-  return material;
-}
-
-async function applyCuredLook(zoneId) {
-  const id = Number(zoneId);
-  if (!Number.isFinite(id) || id < 1) return;
-  const surface = concreteSurfaces.get(id);
-  if (!surface) return;
-
-  if (surface.userData?.curedConcrete) return;
-  const textures = await dryTexturesPromise;
-  if (!surface.parent && !surface.isObject3D) return;
-
-  let material = dryMaterials.get(id);
-  if (!material) {
-    material = makeDryMaterial(id, surface.material, textures);
-    dryMaterials.set(id, material);
-  }
-
-  surface.material = material;
-  surface.userData = { ...(surface.userData || {}), curedConcrete: true };
-
-  // Keep only the top material change dramatic. Skirts merely become neutral/matte
-  // so the cured top does not retain a glossy dark vertical rim.
-  for (const skirt of concreteSkirts.get(id) || []) {
-    const sideMat = skirt.material?.clone?.() || new THREE.MeshStandardMaterial();
-    sideMat.map = null;
-    sideMat.normalMap = null;
-    sideMat.bumpMap = null;
-    sideMat.roughnessMap = null;
-    sideMat.color?.set?.(0x767b76);
-    sideMat.roughness = .86;
-    sideMat.metalness = 0;
-    sideMat.needsUpdate = true;
-    skirt.material = sideMat;
-  }
-
-  dryState[id] = { ...(dryState[id] || {}), cured: true, cureAt: Date.now() };
-  writeDryState();
-}
-
-function armCure(zoneId, delay = DRY_AFTER_MS) {
-  const id = Number(zoneId);
-  if (!Number.isFinite(id) || id < 1) return;
-  if (dryState[id]?.cured) {
-    applyCuredLook(id);
-    return;
-  }
-  if (dryTimers.has(id)) return;
-
-  const now = Date.now();
-  const existingAt = Number(dryState[id]?.cureAt || 0);
-  const cureAt = existingAt > 0 ? existingAt : now + Math.max(0, delay);
-  dryState[id] = { ...(dryState[id] || {}), cureAt, cured: false };
-  writeDryState();
-
-  const remaining = Math.max(0, cureAt - now);
-  const timer = setTimeout(() => {
-    dryTimers.delete(id);
-    applyCuredLook(id);
-  }, remaining);
-  dryTimers.set(id, timer);
-}
-
-function registerRuntimeConcreteObject(object) {
-  if (!object?.name) return;
-  let match = /^FRESH_CONCRETE_ZONE_(\d+)$/.exec(object.name);
-  if (match) {
-    const id = Number(match[1]);
-    concreteSurfaces.set(id, object);
-    if (dryState[id]?.cured) applyCuredLook(id);
-    else if (Number(dryState[id]?.cureAt || 0) > 0) armCure(id);
-    return;
-  }
-
-  match = /^FRESH_CONCRETE_ZONE_(\d+)_SKIRT_/.exec(object.name);
-  if (match) {
-    const id = Number(match[1]);
-    const list = concreteSkirts.get(id) || [];
-    if (!list.includes(object)) list.push(object);
-    concreteSkirts.set(id, list);
-  }
-}
-
-// Apply the rim fix BEFORE main.js constructs runtime pit geometry.
-const originalAdd = THREE.Object3D.prototype.add;
-THREE.Object3D.prototype.add = function (...objects) {
-  const kept = [];
-  for (const object of objects) {
-    const name = object?.name || '';
-
-    // v51.98: these decorative mobile bands overlapped the real walls/slab and
-    // produced the doubled black/jagged border. Do not touch rebar layers.
-    if (name.startsWith('PIT_') && name.includes('_LIP_')) {
-      object.geometry?.dispose?.();
-      continue;
-    }
-
-    if (name.startsWith('PIT_') && name.includes('_WALL_') && object.material) {
-      const materials = Array.isArray(object.material) ? object.material : [object.material];
-      for (const material of materials) {
-        if (!material) continue;
-        material.polygonOffset = true;
-        material.polygonOffsetFactor = 1;
-        material.polygonOffsetUnits = 2;
-        material.needsUpdate = true;
-      }
-      object.renderOrder = Math.max(Number(object.renderOrder) || 0, 3);
-    }
-
-    registerRuntimeConcreteObject(object);
-    applyLiquidConcreteLook(object, this?.name || '');
-    kept.push(object);
-  }
-  return originalAdd.apply(this, kept);
-};
-
-// Rank badge: slightly zoom into each sprite cell to eliminate sampling from the
-// neighbouring badge, clip the troublesome bottom few pixels, and replace the old
-// unbounded shine with a narrow, fully clipped diagonal sheen.
-const patchStyle = document.createElement('style');
-patchStyle.id = 'v5199-rank-badge-fix';
-patchStyle.textContent = `
-.settlementRankBadge{
-  overflow:hidden!important;
-  isolation:isolate!important;
-  background-size:306% 206%!important;
-  background-repeat:no-repeat!important;
-  clip-path:polygon(6% 1%,94% 1%,100% 15%,98% 91%,88% 98%,12% 98%,2% 91%,0 15%)!important;
-}
-.settlementRankCard[data-grade="S"] .settlementRankBadge{background-position:0 0!important}
-.settlementRankCard[data-grade="A"] .settlementRankBadge{background-position:50% 0!important}
-.settlementRankCard[data-grade="B"] .settlementRankBadge,
-.settlementRankCard[data-grade="C"] .settlementRankBadge{background-position:100% 0!important}
-.settlementRankCard[data-grade="D"] .settlementRankBadge{background-position:0 100%!important}
-.settlementRankCard[data-grade="E"] .settlementRankBadge{background-position:50% 100%!important}
-.settlementRankCard[data-grade="F"] .settlementRankBadge{background-position:100% 100%!important}
-
-.settlementRankOverride{
-  left:33%!important;
-  top:32%!important;
-  width:34%!important;
-  height:38%!important;
-  display:grid!important;
-  place-items:center!important;
-  clip-path:polygon(12% 5%,88% 5%,100% 22%,92% 92%,8% 92%,0 22%)!important;
-  background:radial-gradient(circle at 50% 30%,rgba(48,57,63,.98),rgba(7,11,14,.98) 72%)!important;
-  color:#f7fbff!important;
-  border:1px solid rgba(255,255,255,.17)!important;
-  box-shadow:inset 0 0 20px rgba(255,255,255,.05),0 3px 10px rgba(0,0,0,.42)!important;
-  font:1000 clamp(66px,9vw,132px)/1 Impact,"Arial Black",system-ui,sans-serif!important;
-  letter-spacing:-.06em!important;
-  -webkit-text-stroke:clamp(3px,.42vw,6px) #05080a!important;
-  text-shadow:0 4px 0 rgba(0,0,0,.18)!important;
-  paint-order:stroke fill!important;
-}
-
-.settlementRankBadge::before{
-  content:""!important;
-  display:block!important;
-  position:absolute!important;
-  z-index:8!important;
-  top:-18%!important;
-  left:-42%!important;
-  width:24%!important;
-  height:136%!important;
-  pointer-events:none!important;
-  background:linear-gradient(90deg,rgba(255,255,255,0),rgba(255,247,205,.14) 22%,rgba(255,255,255,.88) 50%,rgba(255,247,205,.14) 78%,rgba(255,255,255,0))!important;
-  filter:blur(1.2px)!important;
-  mix-blend-mode:screen!important;
-  transform:skewX(-17deg) translateX(0)!important;
-  animation:v5199BadgeSheen 1.9s ease-in-out .35s infinite!important;
-}
-.settlementRankBadge::after{display:none!important;animation:none!important}
-@keyframes v5199BadgeSheen{
-  0%,12%{left:-42%;opacity:0}
-  20%{opacity:.95}
-  52%{left:118%;opacity:.9}
-  60%,100%{left:118%;opacity:0}
-}
-@media(pointer:coarse),(max-width:820px){
-  .settlementRankOverride{font-size:min(14vh,10vw)!important;-webkit-text-stroke:3px!important}
-}
-
-/* v51.104 event minigames */
-.betonEventQte{position:fixed;inset:0;z-index:180;display:none;place-items:center;background:rgba(5,7,7,.54);backdrop-filter:blur(2px);font-family:Inter,system-ui,sans-serif;color:#fff;pointer-events:auto}
-.betonEventQte.show{display:grid}
-.betonEventPanel{width:min(620px,86vw);padding:20px 22px 18px;border-radius:20px;background:linear-gradient(180deg,rgba(27,30,30,.97),rgba(11,13,13,.97));border:1px solid rgba(255,210,91,.48);box-shadow:0 24px 80px rgba(0,0,0,.65)}
-.betonEventPanel h3{margin:0 0 5px;font-size:22px;letter-spacing:.03em}.betonEventPanel p{margin:0 0 15px;color:#bfc5c2;font-size:12px}
-.betonEventClose{position:absolute;right:10px;top:8px;border:0;background:rgba(0,0,0,.35);color:#d5dad7;font-size:26px;width:34px;height:34px;border-radius:10px;z-index:8}
-
-/* Real-art hose recovery UI: frame + actual hose + improvised grip + blue-glove arm. */
-#betonHoseControl{background:rgba(5,7,7,.26);backdrop-filter:blur(1.5px)}
-.betonHoseControlCard{position:relative;width:min(430px,92vw);padding:12px 14px 13px;border-radius:18px;background:linear-gradient(180deg,rgba(25,28,27,.97),rgba(8,10,10,.97));border:1px solid rgba(234,190,76,.42);box-shadow:0 22px 72px rgba(0,0,0,.68);user-select:none;-webkit-user-select:none;touch-action:none;overflow:visible}
-.betonHoseControlTitle{text-align:center;margin:0 0 5px;font-weight:1000;font-size:15px;letter-spacing:.08em;color:#f0d16e}
-.betonHoseRig{position:relative;margin:0 auto;width:min(250px,58vw);aspect-ratio:688/1536;overflow:visible}
-.betonHoseFrame{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none;z-index:1}
-.betonHoseSlot{position:absolute;left:27.2%;top:12.8%;width:28.8%;height:75.2%;overflow:visible;z-index:3}
-.betonHoseBody{position:absolute;left:50%;bottom:0;width:43%;min-height:12%;transform:translateX(-50%);overflow:hidden;will-change:height}
-.betonHoseBody img{position:absolute;left:0;bottom:0;width:100%;height:100%;object-fit:fill;filter:drop-shadow(0 2px 3px rgba(0,0,0,.65))}
-.betonHoseGrip{position:absolute;left:50%;bottom:62%;width:178%;height:auto;transform:translate(-50%,50%);z-index:5;pointer-events:none;filter:drop-shadow(0 1px 2px rgba(0,0,0,.9));will-change:bottom,filter}
-.betonHoseGrip.hit{filter:drop-shadow(0 0 2px #ffe584) drop-shadow(0 0 7px rgba(242,193,64,.95)) drop-shadow(0 0 17px rgba(242,193,64,.55))}
-.betonHoseArm{position:absolute;width:139%;left:-67%;bottom:42%;height:auto;z-index:7;pointer-events:none;transform:translateY(50%);filter:drop-shadow(0 4px 6px rgba(0,0,0,.6));will-change:bottom,filter}
-.betonHoseArm.hit{filter:drop-shadow(0 0 5px rgba(255,222,117,.55)) drop-shadow(0 4px 6px rgba(0,0,0,.6))}
-.betonHoseProgressSlot{position:absolute;left:60.5%;top:13.25%;width:6.65%;height:74.4%;border-radius:999px;overflow:hidden;z-index:4;background:#111413;box-shadow:inset 0 0 8px #000}
-.betonHoseProgressSlot i{position:absolute;left:10%;right:10%;bottom:1%;height:18%;border-radius:999px;background:linear-gradient(0deg,#4d2c03 0%,#8a5208 28%,#c98417 62%,#ffd477 100%);box-shadow:0 -2px 10px rgba(239,198,77,.25);will-change:height}
-.betonHoseControlHint{text-align:center;margin-top:4px;font-size:10px;font-weight:850;letter-spacing:.045em;color:#c8cecb;line-height:1.35}.betonHoseControlHint b{color:#efd06f}
-.betonHoseControlState{text-align:center;margin-top:4px;min-height:15px;font-size:10px;font-weight:950;letter-spacing:.06em;color:#e7c65f}
-#betonHoseControl.pressed .betonHoseControlCard{border-color:rgba(246,203,85,.72)}
-
-/* Eye event uses the actual concrete splat art. */
-#betonEyeWipe{background:transparent;backdrop-filter:none;pointer-events:auto;overflow:hidden}
-.betonEyeBlob{position:absolute;left:7%;top:4%;width:86%;height:86%;object-fit:contain;filter:drop-shadow(0 10px 20px rgba(0,0,0,.62));opacity:.98;transform:rotate(-3deg);transition:opacity .16s,transform .08s;pointer-events:none}
-.betonEyeTrack{position:absolute;left:18%;right:18%;top:53%;height:8px;border-radius:9px;background:rgba(255,255,255,.18);box-shadow:0 0 0 1px rgba(255,255,255,.17),0 3px 12px rgba(0,0,0,.45)}
-.betonEyeTrack i{position:absolute;left:0;top:50%;width:42px;height:42px;border-radius:50%;transform:translate(-50%,-50%);background:#f4c858;box-shadow:0 0 22px rgba(244,200,88,.68)}
-.betonEyeHint{position:absolute;left:50%;top:62%;transform:translateX(-50%);font-size:13px;font-weight:950;letter-spacing:.08em;text-shadow:0 2px 7px #000;white-space:nowrap}
-
-/* Grid-snapped pump repair puzzle. */
-#betonPumpPuzzle{background:rgba(4,5,5,.64);backdrop-filter:blur(3px)}
-.betonPumpPuzzleWrap{position:relative;width:min(720px,92vw);text-align:center}
-.betonPumpPuzzleTitle{margin:0 0 5px;font-size:20px;font-weight:1000;letter-spacing:.07em}.betonPumpPuzzleSub{margin:0 0 8px;color:#c6cbc8;font-size:11px;font-weight:750}
-.betonPumpShell{position:relative;width:min(680px,90vw);aspect-ratio:1;margin:auto;background:url("./assets/ui/events/pump_panel.png") center/contain no-repeat;filter:drop-shadow(0 18px 36px rgba(0,0,0,.6))}
-.betonWireCanvas{position:absolute;left:14.15%;top:13.9%;width:71.0%;height:70.7%;display:block;touch-action:none}
-.betonWireStatus{margin-top:7px;min-height:18px;color:#e9c963;font-size:11px;font-weight:900;letter-spacing:.04em}
-
-#eventAlarm[data-event="pressure"]::before,#eventAlarm[data-event="pump"]::before{content:"";display:block;width:42px;height:42px;flex:0 0 42px;background-position:center;background-repeat:no-repeat;background-size:contain;margin-right:9px}
-#eventAlarm[data-event="pressure"]::before{background-image:url("./assets/ui/events/alarm_pressure.png")}
-#eventAlarm[data-event="pump"]::before{background-image:url("./assets/ui/events/alarm_pump.png")}
-
-.settlementStatsEvent{grid-column:1/-1!important}.settlementStatsEvent b[data-state="ИДЕАЛЬНО"]{color:#8cf0a6!important}.settlementStatsEvent b[data-state="ЧАСТИЧНО"]{color:#f4ce6c!important}.settlementStatsEvent b[data-state="ПРОВАЛ"]{color:#ff8b7f!important}
-
-@media(max-width:820px){
-  .betonHoseControlCard{width:min(360px,92vw);padding:9px 10px}.betonHoseRig{width:min(220px,54vw)}.betonHoseControlHint{font-size:9px}
-  .betonPumpPuzzleWrap{width:94vw}.betonPumpPuzzleTitle{font-size:17px}.betonPumpPuzzleSub{font-size:10px}
-  .betonEyeHint{top:67%;font-size:11px}
-}
-`;
-document.head.appendChild(patchStyle);
-
-function parsePercent(text) {
-  const match = String(text || '').replace(',', '.').match(/(-?\d+(?:\.\d+)?)\s*%/);
-  return match ? Number(match[1]) : NaN;
-}
-
-function scanPourCompletion() {
-  const zoneText = document.querySelector('#zoneProgress')?.textContent || '';
-  const fillText = document.querySelector('#fillPercent')?.textContent || '';
-  const toastText = `${document.querySelector('#toast')?.textContent || ''} ${document.querySelector('#mobileToast')?.textContent || ''}`;
-
-  // Strongest signal: the game itself announces the completed map.
-  for (const match of toastText.matchAll(/КАРТА\s*№\s*(\d+)\s*ЗАЛИТА/gi)) {
-    armCure(Number(match[1]));
-  }
-
-  // Start exactly when the currently displayed map first reaches 100%.
-  const currentMatch = zoneText.match(/№\s*(\d+)/i);
-  const currentId = currentMatch ? Number(currentMatch[1]) : NaN;
-  const fill = parsePercent(fillText);
-  if (Number.isFinite(currentId) && Number.isFinite(fill) && fill >= 100) {
-    armCure(currentId);
-  }
-
-  // Saved sessions: maps already counted as completed are older than the current
-  // map. If they predate v51.99 and have no timestamp, show them cured immediately.
-  const doneMatch = zoneText.match(/готово\s*(\d+)\s*\/\s*6/i);
-  const done = doneMatch ? Number(doneMatch[1]) : 0;
-  if (Number.isFinite(done) && done > 0) {
-    for (let id = 1; id <= done; id++) {
-      if (!dryState[id]) {
-        dryState[id] = { cured: true, cureAt: Date.now() };
-        writeDryState();
-        applyCuredLook(id);
-      }
-    }
-  }
-}
-
-// v51.102 rewrites only the event subsystem inside the current game module at load time.
-// This keeps the repository's main.js untouched while still allowing the event code to use
-// the real hose/zone/pump state instead of trying to control it from outside the module.
-
-// ===== MONOLITHIC GAME CORE + STATICALLY INTEGRATED EVENT CHANGES =====
 const mount = document.querySelector('#game');
 const start = document.querySelector('#start');
 const startBtn = document.querySelector('#startBtn');
 const loadState = document.querySelector('#loadState');
 const menuLoadingSpinner = document.querySelector('#menuLoadingSpinner');
 
+
 // v49.1: if any runtime exception stops scene initialization, show it directly
 // on the loading screen instead of leaving the user with an endless "loading".
 function showFatalRuntimeError(message) {
   console.error('[FATAL RUNTIME]', message);
   if (!loadState) return;
-  loadState.hidden = false;
-  loadState.style.setProperty('display', 'block', 'important');
   loadState.textContent = 'ОШИБКА: ' + String(message);
   menuLoadingSpinner?.classList.add('isError');
   loadState.style.color = '#ff7777';
@@ -712,6 +160,7 @@ const economyEl = document.querySelector('#economy');
 const mapCtx = minimap.getContext('2d');
 minimap.style.display = 'none';
 
+
 // Mobile/browser profile. Desktop loads the exact FINAL export without texture downscaling.
 // Mobile uses a separate memory profile; weak devices automatically retry with SAFE textures.
 const TOUCH_DEVICE = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
@@ -739,6 +188,7 @@ document.documentElement.classList.toggle('touchDevice', TOUCH_DEVICE);
 document.documentElement.classList.toggle('mobileSafeMode', MOBILE_SAFE_MODE);
 // Do not retain huge .bin/image payloads in the Three.js global file cache on phones.
 THREE.Cache.enabled = !TOUCH_DEVICE;
+
 
 const mobileDebugLines = [];
 function mobileDebugLog(message) {
@@ -787,6 +237,7 @@ if (TOUCH_DEVICE) {
   window.addEventListener('unhandledrejection', e => mobileDebugLog(`PROMISE ${e.reason?.message || e.reason || 'rejected'}`));
 }
 
+
 let started = false;
 let locked = false;
 let assetsLoaded = 0;
@@ -798,14 +249,17 @@ let sceneRecoveryPending = false;
 let sceneMissingTimer = 0;
 const SCENE_RETRY_KEY = 'beton_scene_retry_v536';
 
+
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b0d0e); // dark fallback: grey screen must never masquerade as a loaded scene
 scene.fog = null;
+
 
 const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.12, 450);
 camera.layers.set(0);
 camera.rotation.order = 'YXZ';
 camera.position.set(0, 1.72, 15.5);
+
 
 const renderer = new THREE.WebGLRenderer({
   antialias: !TOUCH_DEVICE,
@@ -836,6 +290,7 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.08;
 mount.appendChild(renderer.domElement);
 
+
 function applyMainRendererSize(width = innerWidth, height = innerHeight, force = false) {
   const nextWidth = Math.max(1, Math.round(width));
   const nextHeight = Math.max(1, Math.round(height));
@@ -855,6 +310,7 @@ function applyMainRendererSize(width = innerWidth, height = innerHeight, force =
   renderer.setSize(nextWidth, nextHeight, false);
   return true;
 }
+
 
 // v0.45: clean indie-grade post stack. No SSAO: it caused black halos on the huge
 // joined GLB. Desktop gets very restrained high-threshold bloom for sun/bright highlights;
@@ -910,6 +366,7 @@ if (!TOUCH_DEVICE) {
   composer.addPass(outputPass);
 }
 
+
 // Shop product preview: a separate small Three.js scene rendered only while the shop is open.
 let shopPreviewRenderer = null;
 function ensureShopPreviewRenderer() {
@@ -930,6 +387,7 @@ function ensureShopPreviewRenderer() {
   return shopPreviewRenderer;
 }
 
+
 const shopPreviewScene = new THREE.Scene();
 shopPreviewScene.background = null;
 shopPreviewScene.add(new THREE.HemisphereLight(0xf3f0dc, 0x34372f, 2.0));
@@ -947,6 +405,7 @@ shopPreviewScene.add(shopPreviewRoot);
 let shopPreviewSpin = 0;
 let shopPreviewRequestId = 0;
 
+
 // v0.29 atmosphere: warm directional sun + cool skylight/bounce.
 // Fog is deliberately subtle: it only softens the distant panel houses and gives depth
 // without washing out the playable construction site.
@@ -955,10 +414,12 @@ scene.fog = new THREE.Fog(0xb8c3ca, 58, 205);
 scene.add(new THREE.HemisphereLight(0xe6edf0, 0x6f675e, 1.18));
 scene.add(new THREE.AmbientLight(0xeee7db, 0.22));
 
+
 const SUN_OFFSET = new THREE.Vector3(-28, 42, 15);
 const sun = new THREE.DirectionalLight(0xffdeb7, 2.42);
 sun.position.copy(SUN_OFFSET);
 sun.castShadow = true;
+
 
 // Shadow-acne fix:
 // keep a much tighter high-resolution shadow frustum around the player,
@@ -974,9 +435,11 @@ sun.shadow.bias = -0.00018;
 sun.shadow.normalBias = 0.075;
 sun.shadow.radius = TOUCH_DEVICE ? 1.25 : 2.0;
 
+
 sun.target.position.set(0, 0, 0);
 scene.add(sun.target);
 scene.add(sun);
+
 
 // Cool sky bounce from the opposite side. No shadow map: cheap, soft and atmospheric.
 const skyBounce = new THREE.DirectionalLight(0xc3d5de, 0.52);
@@ -985,6 +448,7 @@ skyBounce.target.position.set(0, 1.5, -6);
 scene.add(skyBounce.target);
 scene.add(skyBounce);
 
+
 // v51.29 — extra overhead work light aimed directly at the construction slab.
 const siteTopLight = new THREE.SpotLight(0xf2efde, 28.0, 62, THREE.MathUtils.degToRad(34), .62, 1.15);
 siteTopLight.position.set(0, 28, 4);
@@ -992,6 +456,7 @@ siteTopLight.target.position.set(0, .18, 4);
 siteTopLight.castShadow = false;
 scene.add(siteTopLight.target);
 scene.add(siteTopLight);
+
 
 const mats = {
   dirt: new THREE.MeshStandardMaterial({ color: 0x777267, roughness: 1 }),
@@ -1017,6 +482,7 @@ const mats = {
   timber: new THREE.MeshStandardMaterial({ color: 0x79644d, roughness: .97 }),
 };
 
+
 const colliders = [];
 const meshColliders = [];
 const collisionSphereLow = new THREE.Sphere(new THREE.Vector3(), .24);
@@ -1029,6 +495,7 @@ let lastBlockedAt = 0;
 const walkSurfaces = [];
 const interactive = [];
 
+
 // Authored spawn must always be a free place to stand. Some combined decorative
 // meshes (notably the old bus-stop mesh) wrap large empty volumes in one OBB.
 const authoredSpawnXZ = new THREE.Vector2();
@@ -1037,14 +504,17 @@ function addColliderXZ(name, minX, maxX, minZ, maxZ, minY = -Infinity, maxY = In
   colliders.push({ minX, maxX, minZ, maxZ, minY, maxY, name });
 }
 
+
 function addMeshOBBCollider(mesh, name) {
   if (!mesh?.geometry) return;
   if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
   if (!mesh.geometry.boundingBox) return;
   mesh.updateWorldMatrix(true, false);
 
+
   const obb = new OBB().fromBox3(mesh.geometry.boundingBox.clone());
   obb.applyMatrix4(mesh.matrixWorld);
+
 
   // Bounding boxes should be a broad approximation of the VISIBLE mesh, not an
   // extra invisible shell. Pull them in a couple of centimetres so the player's
@@ -1053,12 +523,14 @@ function addMeshOBBCollider(mesh, name) {
   obb.halfSize.y = Math.max(.01, obb.halfSize.y - .020);
   obb.halfSize.z = Math.max(.01, obb.halfSize.z - .045);
 
+
   meshColliders.push({ obb, name: name || mesh.name || 'scene mesh' });
 }
 function addWalkSurface(name, minX, maxX, minZ, maxZ, topY) {
   if (![minX,maxX,minZ,maxZ,topY].every(Number.isFinite)) return;
   walkSurfaces.push({ name, minX, maxX, minZ, maxZ, topY });
 }
+
 
 const MONETKA_PARKING_ZONE = Object.freeze({
   minX: -24.0,
@@ -1106,6 +578,7 @@ if (__betonParkingLuma < ${threshold.toFixed(3)}) discard;`
 function forceMonetka5Visible(root) {
   if (!root) return;
 
+
   // IMPORTANT: FINAL was exported while the real `monetka5-material` object was hidden.
   // The export therefore contains only the sibling `monetka5-material.003` floor plane.
   // A visibility toggle cannot bring missing geometry back, so v51.67 restores the omitted
@@ -1133,10 +606,12 @@ function forceMonetka5Visible(root) {
     return;
   }
 
+
   if (root.userData?.monetkaRestoreRequested) return;
   root.userData = root.userData || {};
   root.userData.monetkaRestoreRequested = true;
   mobileDebugLog('MONETKA: restoring omitted storefront mesh');
+
 
   loader.load('./assets/monetka_restore/monetka_restore.gltf', restoredGltf => {
     const restored =
@@ -1147,6 +622,7 @@ function forceMonetka5Visible(root) {
       mobileDebugLog('MONETKA restore failed: empty glTF');
       return;
     }
+
 
     restored.name = 'monetka5-material';
     restored.visible = true;
@@ -1169,6 +645,7 @@ function forceMonetka5Visible(root) {
       }
     });
 
+
     // The extracted Monetka vertices are already authored in FINAL world coordinates.
     // Its original parent chain in Blender is identity, so attaching to MONETKA keeps
     // the exact placement while preserving the semantic hierarchy.
@@ -1183,6 +660,7 @@ function forceMonetka5Visible(root) {
   });
 }
 
+
 function fixMonetkaParking(root) {
   if (!root) return;
   let decalsFixed = 0;
@@ -1196,6 +674,7 @@ function fixMonetkaParking(root) {
     const footprintMin = Math.min(size.x, size.z);
     const low = String(o.name || '').toLowerCase();
 
+
     // White parking-space markings exported as flat planes were rendering with a solid
     // black fill. Make only those decal-like meshes punch out their dark background.
     const looksLikeParkingDecal =
@@ -1205,6 +684,7 @@ function fixMonetkaParking(root) {
       footprintMax >= 3.0 && footprintMax <= 13.5 &&
       footprintMin >= 2.5 && footprintMin <= 5.5;
     if (!looksLikeParkingDecal) return;
+
 
     const mats = Array.isArray(o.material) ? o.material : [o.material];
     for (const mat of mats) {
@@ -1254,12 +734,14 @@ function carveMonetkaParkingPassage() {
   }
 }
 
+
 function removeFrontSiteFlower(root) {
   if (!root) return;
   const target = new THREE.Vector3(0, 0, -5.5);
   const world = new THREE.Vector3();
   let best = null;
   let bestDist = Infinity;
+
 
   root.traverse(o => {
     if (!o.isMesh || !o.visible) return;
@@ -1270,6 +752,7 @@ function removeFrontSiteFlower(root) {
       low.includes('daisy') || low.includes('flower') ||
       materialNames.some(m => m.includes('daisy') || m.includes('flower'));
     if (!looksLikeFlower) return;
+
 
     o.getWorldPosition(world);
     if (Math.abs(world.x) > 12 || world.z < -15 || world.z > 8) return;
@@ -1282,6 +765,7 @@ function removeFrontSiteFlower(root) {
     }
   });
 
+
   if (best) {
     best.visible = false;
     best.userData = best.userData || {};
@@ -1289,6 +773,7 @@ function removeFrontSiteFlower(root) {
     console.log('[SCENE] removed front-site flower:', best.name, 'dist2=', bestDist.toFixed(3));
   }
 }
+
 
 function cloneVehicleMaterialForRole(src, role, palette) {
   const mat = src?.clone?.() || new THREE.MeshStandardMaterial();
@@ -1305,6 +790,7 @@ function cloneVehicleMaterialForRole(src, role, palette) {
     yellow: { color:palette.yellow,roughness:.62, metalness:.02, transparent:false, opacity:1, depthWrite:true },
     blue:   { color:palette.blue,  roughness:.56, metalness:.12, transparent:false, opacity:1, depthWrite:true },
   }[role] || { color:palette.metal2,roughness:.64,metalness:.18,transparent:false,opacity:1,depthWrite:true };
+
 
   // The large painted body panels in FINAL are plain CAD colours. Clear any
   // inherited tint/texture flags on those parts so the cab shells and mixer
@@ -1326,6 +812,7 @@ function cloneVehicleMaterialForRole(src, role, palette) {
   return mat;
 }
 
+
 function paintVehicleMesh(mesh, role, palette) {
   if (!mesh?.isMesh) return false;
   const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
@@ -1333,6 +820,7 @@ function paintVehicleMesh(mesh, role, palette) {
   mesh.material = Array.isArray(mesh.material) ? next : next[0];
   return true;
 }
+
 
 function paintNamedVehicleMeshes(root, roleMap, palette, label) {
   if (!root) return 0;
@@ -1347,8 +835,10 @@ function paintNamedVehicleMeshes(root, roleMap, palette, label) {
   return count;
 }
 
+
 function repaintConstructionVehicles(root) {
   if (!root) return;
+
 
   const palette = {
     // Warm industrial orange + cream bodywork, graphite chassis, neutral metals.
@@ -1364,6 +854,7 @@ function repaintConstructionVehicles(root) {
     yellow: 0xd2aa32,
     blue:   0x587c91,
   };
+
 
   // v51.69: explicit per-mesh paint. The old code recoloured every material by
   // fuzzy material-name rules, which turned whole multi-part assemblies into
@@ -1388,6 +879,7 @@ function repaintConstructionVehicles(root) {
     'Geom3D.015':'red',         // marker/tail lights
     'Geom3D.016':'glass',       // pale glass / lamp cover
   };
+
 
   const pumpRoles = {
     // Pump machinery / chassis
@@ -1437,6 +929,7 @@ function repaintConstructionVehicles(root) {
     'Geom3D.066':'dark',        // bumper / grille
   };
 
+
   const boomRoles = {
     'Geom3D.017':'orange',
     'Geom3D.018':'orange',
@@ -1448,9 +941,11 @@ function repaintConstructionVehicles(root) {
     'GREY_HOSE_SEG_01_00':'dark',
   };
 
+
   const mixerTruck = root.getObjectByName('Concrete Mixer Truck') || root.getObjectByName('Mixer Truck');
   const pumpTruck = root.getObjectByName('Hoze Truck');
   const boom = root.getObjectByName('Boom 1');
+
 
   // FINAL contains a second, single-mesh copy of the whole pump truck. It uses
   // an unrelated concrete texture and sits directly on top of the proper
@@ -1464,10 +959,12 @@ function repaintConstructionVehicles(root) {
     console.log('[SCENE] hidden duplicated textured pump overlay:', pumpTextureOverlay.name);
   }
 
+
   paintNamedVehicleMeshes(mixerTruck, mixerRoles, palette, 'mixer');
   paintNamedVehicleMeshes(pumpTruck, pumpRoles, palette, 'pump');
   paintNamedVehicleMeshes(boom, boomRoles, palette, 'pump boom');
 }
+
 
 let constructionMachineLifeGroup = null;
 let mixerDrumSpin = null;
@@ -1479,6 +976,7 @@ let machineSmokeCursor = 0;
 const machineBeacons = [];
 const machineSmokeOrigins = [];
 const machineSmokePuffs = [];
+
 
 function createMachineGlowTexture() {
   const canvas = document.createElement('canvas');
@@ -1499,10 +997,12 @@ function createMachineGlowTexture() {
   return texture;
 }
 
+
 function addMachineBeacon(parent, position, phase, glowTexture) {
   const group = new THREE.Group();
   group.position.copy(position);
   group.userData.noCollision = true;
+
 
   const bulb = new THREE.Mesh(
     new THREE.SphereGeometry(.075, 8, 6),
@@ -1510,6 +1010,7 @@ function addMachineBeacon(parent, position, phase, glowTexture) {
   );
   bulb.raycast = () => {};
   group.add(bulb);
+
 
   const glow = new THREE.Sprite(new THREE.SpriteMaterial({
     map: glowTexture,
@@ -1525,6 +1026,7 @@ function addMachineBeacon(parent, position, phase, glowTexture) {
   parent.add(group);
   machineBeacons.push({ group, bulb, glow, phase });
 }
+
 
 function addMixerDrumLife(parent, mixerTruck) {
   const box = new THREE.Box3().setFromObject(mixerTruck);
@@ -1546,6 +1048,7 @@ function addMixerDrumLife(parent, mixerTruck) {
     ));
   }
 
+
   const stripeMat = new THREE.MeshStandardMaterial({
     color: 0xf0dfbb,
     roughness: .42,
@@ -1560,6 +1063,7 @@ function addMixerDrumLife(parent, mixerTruck) {
   mixerDrumSpin.position.y += size.y * .115;
   mixerDrumSpin.userData.baseY = mixerDrumSpin.position.y;
   mixerDrumSpin.userData.noCollision = true;
+
 
   const helix = new THREE.Mesh(
     new THREE.TubeGeometry(
@@ -1577,6 +1081,7 @@ function addMixerDrumLife(parent, mixerTruck) {
   mixerDrumSpin.add(helix);
   parent.add(mixerDrumSpin);
 
+
   addMachineBeacon(
     parent,
     new THREE.Vector3(box.min.x + size.x * .10, box.max.y + .08, center.z),
@@ -1590,11 +1095,13 @@ function addMixerDrumLife(parent, mixerTruck) {
   ));
 }
 
+
 function addPumpLife(parent, pumpTruck) {
   const box = new THREE.Box3().setFromObject(pumpTruck);
   if (box.isEmpty()) return;
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
+
 
   const pistonGroup = new THREE.Group();
   pistonGroup.name = 'LIVE_PUMP_HYDRAULICS';
@@ -1605,6 +1112,7 @@ function addPumpLife(parent, pumpTruck) {
   );
   pistonGroup.userData.noCollision = true;
 
+
   const housing = new THREE.Mesh(
     new THREE.CylinderGeometry(.078, .078, .62, 8),
     new THREE.MeshStandardMaterial({ color: 0x353a3c, roughness: .55, metalness: .44 })
@@ -1612,6 +1120,7 @@ function addPumpLife(parent, pumpTruck) {
   housing.rotation.z = Math.PI * .5;
   housing.raycast = () => {};
   pistonGroup.add(housing);
+
 
   pumpPistonRod = new THREE.Mesh(
     new THREE.CylinderGeometry(.037, .037, .58, 8),
@@ -1623,6 +1132,7 @@ function addPumpLife(parent, pumpTruck) {
   pumpPistonRod.raycast = () => {};
   pistonGroup.add(pumpPistonRod);
   parent.add(pistonGroup);
+
 
   addMachineBeacon(
     parent,
@@ -1636,6 +1146,7 @@ function addPumpLife(parent, pumpTruck) {
     box.max.z - .13
   ));
 }
+
 
 function setupConstructionMachineLife(root) {
   if (!root) return;
@@ -1651,10 +1162,12 @@ function setupConstructionMachineLife(root) {
   machineSmokePuffs.length = 0;
   machineSmokeCursor = 0;
 
+
   const mixerTruck = root.getObjectByName('Concrete Mixer Truck') || root.getObjectByName('Mixer Truck');
   const pumpTruck = root.getObjectByName('Hoze Truck');
   if (mixerTruck) addMixerDrumLife(constructionMachineLifeGroup, mixerTruck);
   if (pumpTruck) addPumpLife(constructionMachineLifeGroup, pumpTruck);
+
 
   const puffGeometry = new THREE.SphereGeometry(1, 6, 4);
   const puffCount = TOUCH_DEVICE ? 10 : 18;
@@ -1684,6 +1197,7 @@ function setupConstructionMachineLife(root) {
   });
 }
 
+
 function spawnMachineSmoke() {
   if (!machineSmokeOrigins.length || !machineSmokePuffs.length) return;
   const origin = machineSmokeOrigins[machineSmokeCursor % machineSmokeOrigins.length];
@@ -1705,9 +1219,11 @@ function spawnMachineSmoke() {
   );
 }
 
+
 function updateConstructionMachines(dt) {
   if (!constructionMachineLifeGroup) return;
   machineLifeClock += dt;
+
 
   if (mixerDrumSpin) {
     const drumSpeed = started ? .72 : .16;
@@ -1715,11 +1231,13 @@ function updateConstructionMachines(dt) {
     mixerDrumSpin.position.y = mixerDrumSpin.userData.baseY + Math.sin(machineLifeClock * 7.2) * .003;
   }
 
+
   if (pumpPistonRod) {
     const pumpActivity = pumpBroken ? 0 : pouring ? 1 : .16;
     const pulse = Math.sin(machineLifeClock * THREE.MathUtils.lerp(2.2, 10.5, pumpActivity));
     pumpPistonRod.position.x = pumpPistonBaseX + pulse * .065 * pumpActivity;
   }
+
 
   for (const beacon of machineBeacons) {
     const wave = Math.max(0, Math.sin((machineLifeClock * 1.55 + beacon.phase) * Math.PI * 2));
@@ -1729,6 +1247,7 @@ function updateConstructionMachines(dt) {
     beacon.bulb.scale.setScalar(1 + flash * .24);
   }
 
+
   if (started) {
     machineSmokeAccumulator += dt;
     const interval = pouring && !pumpBroken ? .38 : TOUCH_DEVICE ? .72 : .56;
@@ -1737,6 +1256,7 @@ function updateConstructionMachines(dt) {
       spawnMachineSmoke();
     }
   }
+
 
   for (const puff of machineSmokePuffs) {
     if (!puff.mesh.visible) continue;
@@ -1755,6 +1275,7 @@ function updateConstructionMachines(dt) {
   }
 }
 
+
 function isMobileVegetationMesh(o) {
   if (!o?.isMesh || o.isSkinnedMesh || !o.geometry || !o.material) return false;
   const low = String(o.name || '').toLowerCase();
@@ -1765,6 +1286,7 @@ function isMobileVegetationMesh(o) {
     materialNames.some(m => m.includes('grass') || m.includes('flower') || m.includes('daisy') || m.includes('daffodil'))
   );
 }
+
 
 // Mobile-only batching: identical grass/flower meshes are instanced in 12 m spatial cells.
 // Appearance and transforms are preserved, while draw calls and frustum work drop sharply.
@@ -1777,6 +1299,7 @@ function instanceMobileVegetation(root) {
   const groups = new Map();
   const candidates = [];
   const CELL = 12.0;
+
 
   root.traverse(o => {
     if (!isMobileVegetationMesh(o) || !o.visible) return;
@@ -1794,6 +1317,7 @@ function instanceMobileVegetation(root) {
     g.items.push(o);
     candidates.push(o);
   });
+
 
   const batchRoot = new THREE.Group();
   batchRoot.name = 'MOBILE_VEGETATION_CHUNKS';
@@ -1823,6 +1347,7 @@ function instanceMobileVegetation(root) {
   return batched;
 }
 
+
 function freezeMobileStaticMeshes(root) {
   if (!TOUCH_DEVICE || !root) return;
   root.updateWorldMatrix(true, true);
@@ -1837,6 +1362,7 @@ function freezeMobileStaticMeshes(root) {
   console.log(`[MOBILE PERF] frozen static mesh transforms: ${frozen}`);
 }
 
+
 // GLTF BufferAttributes keep typed-array views into the eight large FINAL_GEOM buffers.
 // Once a static attribute is uploaded, WebGL owns the render copy and the CPU view is no
 // longer needed during normal play. Releasing it prevents the scene from living in memory
@@ -1848,10 +1374,12 @@ let mobileStaticGeometryReleasedBytes = 0;
 function registerMobileStaticGeometryRelease(root) {
   if (!TOUCH_DEVICE || !root || mobileStaticGeometryReleaseRegistered) return;
 
+
   const ownerUsage = new Map();
   const uploadOwners = new Set();
   const backingBuffers = new Set();
   let registeredBytes = 0;
+
 
   const trackAttribute = (attribute, visible) => {
     if (!attribute) return;
@@ -1868,6 +1396,7 @@ function registerMobileStaticGeometryRelease(root) {
     }
   };
 
+
   root.traverse(o => {
     if (!(o.isMesh || o.isLine || o.isPoints) || !o.geometry) return;
     let effectivelyVisible = o.visible;
@@ -1880,6 +1409,7 @@ function registerMobileStaticGeometryRelease(root) {
     }
   });
 
+
   for (const [owner, use] of ownerUsage) {
     // Hidden authored helpers/alternate LODs never upload. Their cached bounds/transforms
     // were already consumed above, so release those arrays immediately.
@@ -1888,6 +1418,7 @@ function registerMobileStaticGeometryRelease(root) {
       owner.array = null;
       continue;
     }
+
 
     uploadOwners.add(owner);
     const previousUpload = owner.onUploadCallback;
@@ -1900,11 +1431,13 @@ function registerMobileStaticGeometryRelease(root) {
     });
   }
 
+
   mobileStaticGeometryReleaseRegistered = true;
   const mib = registeredBytes / (1024 * 1024);
   console.log(`[MOBILE MEMORY] static geometry CPU release armed: ${uploadOwners.size} visible attrs / ~${mib.toFixed(1)} MiB`);
   mobileDebugLog(`static geometry release armed: ${uploadOwners.size} visible attrs / ~${mib.toFixed(1)} MiB`);
 }
+
 
 function addObjectCollider(obj, name = obj?.name || 'model', pad = .06) {
   if (!obj) return;
@@ -1923,6 +1456,7 @@ const zones = [
   { name: 'Бетононасос и миксер', x: -4.6, z: -22, w: 21, d: 35 },
   { name: 'Двор стройплощадки', x: 0, z: -12, w: 62, d: 24 },
 ];
+
 
 function box(name, x, y, z, w, h, d, mat = mats.block, opt = {}) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
@@ -1970,9 +1504,11 @@ function labelSprite(text, pos, color = '#e8e3b4') {
   s.position.copy(pos); s.scale.set(8, 1.5, 1); scene.add(s); return s;
 }
 
+
 // FINAL BLENDER LAYOUT
 // The old procedural courtyard was removed. Everything visible in the world now comes
 // directly from BETONSHCHIK_SCENE.glb at the exact Blender export scale/position.
+
 
 // GLTF ASSETS
 const loader = new GLTFLoader();
@@ -2042,20 +1578,24 @@ function applyVegetationCutout(mat) {
   mat.needsUpdate = true;
 }
 
+
 function prepModel(root) {
   root.traverse(o => {
     if (!o.isMesh) return;
     const n = String(o.name || '').toLowerCase();
+
 
     const panorama = n === 'sphere';
     const distantGround = n === 'sphere.001';
     const siteGround = n === 'site_ground';
     const thinFence = n.startsWith('fence_');
 
+
     // The panorama and huge background ground must never enter the shadow map.
     // Thin fences receive shadows but do not self-shadow; this removes diagonal acne.
     o.castShadow = !(panorama || distantGround || siteGround || thinFence);
     o.receiveShadow = !panorama;
+
 
     const ms = Array.isArray(o.material) ? o.material : [o.material];
     for (const mat of ms) {
@@ -2068,8 +1608,10 @@ function prepModel(root) {
         if (tex) tex.anisotropy = maxSceneAnisotropy;
       }
 
+
       // v0.23: restore double-sided scene materials.
       mat.side = THREE.DoubleSide;
+
 
       // Only actual glass stays blended. Cutout textures use alphaTest,
       // all other construction materials are forced solid.
@@ -2081,6 +1623,7 @@ function prepModel(root) {
         mn.includes('tree_birch') || mn === 'tree-04' || mn.includes('tree-branch') || mn.includes('tree_branc') ||
         mn.includes('grass') || mn.includes('flower') || mn.includes('daisy') || mn.includes('daffodil');
       const isCutout = isCigButt || mn.includes('panelkamat') || isVegetationCard || mat.alphaTest > 0 || mat.transparent;
+
 
       if (isVegetationCard && !isGlass) {
         applyVegetationCutout(mat);
@@ -2097,6 +1640,7 @@ function prepModel(root) {
         mat.alphaTest = 0;
         mat.depthWrite = true;
       }
+
 
       mat.needsUpdate = true;
     }
@@ -2122,6 +1666,7 @@ function placeModel(url, { x = 0, y = 0, z = 0, rotY = 0, targetXZ = 3, onReady 
   });
 }
 
+
 // ---------------------------------------------------------------------------
 // FINAL LAYOUT + PHYSICAL HOSE + POUR JOB v0.19
 // ---------------------------------------------------------------------------
@@ -2142,6 +1687,7 @@ let hoseHeldAtLeastOnce = localStorage.getItem(HOSE_FIRST_PICKUP_KEY) === '1';
 const hoseAnchorFallback = new THREE.Vector3();
 let hoseAnchorFallbackValid = false;
 
+
 // -----------------------------
 // Physical hose
 // -----------------------------
@@ -2161,11 +1707,13 @@ hoseColorTex.repeat.set(1.0, 5.5);
 hoseColorTex.colorSpace = THREE.SRGBColorSpace;
 hoseColorTex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
 
+
 const hoseNormalTex = hoseTextureLoader.load('./assets/hose_rubber_corrugated_normal.jpg');
 hoseNormalTex.wrapS = THREE.RepeatWrapping;
 hoseNormalTex.wrapT = THREE.RepeatWrapping;
 hoseNormalTex.repeat.copy(hoseColorTex.repeat);
 hoseNormalTex.anisotropy = hoseColorTex.anisotropy;
+
 
 const hoseMat = new THREE.MeshStandardMaterial({
   map: hoseColorTex,
@@ -2182,6 +1730,7 @@ const hoseEndMat = new THREE.MeshStandardMaterial({
   metalness: 0.0,
   side: THREE.DoubleSide,
 });
+
 
 function makeDynamicHoseGeometry() {
   const rings = HOSE_SEGMENTS + 1;
@@ -2214,6 +1763,7 @@ function makeDynamicHoseGeometry() {
   return g;
 }
 
+
 const hoseTubeGeom = makeDynamicHoseGeometry();
 const hoseGroup = new THREE.Group();
 hoseGroup.name = 'PHYSICAL_HOSE_RUNTIME';
@@ -2225,6 +1775,7 @@ hoseTube.receiveShadow = true;
 hoseTube.frustumCulled = false;
 hoseTube.renderOrder = 2;
 hoseGroup.add(hoseTube);
+
 
 const hoseOutlineMat = new THREE.ShaderMaterial({
   uniforms: {
@@ -2258,6 +1809,7 @@ hoseOutline.frustumCulled = false;
 hoseOutline.renderOrder = 30;
 hoseGroup.add(hoseOutline);
 
+
 const hoseTip = new THREE.Mesh(new THREE.SphereGeometry(.12, 14, 10), hoseEndMat);
 const hoseCoupler = new THREE.Mesh(new THREE.CylinderGeometry(.125, .125, .32, 16, 1, false), hoseEndMat);
 hoseCoupler.name = 'PHYSICAL_HOSE_COUPLER';
@@ -2268,6 +1820,7 @@ hoseTip.name = 'PHYSICAL_HOSE_TIP';
 hoseTip.castShadow = true;
 hoseTip.frustumCulled = false;
 hoseGroup.add(hoseTip);
+
 
 const hoseTmpDir = new THREE.Vector3();
 const hoseTmpMid = new THREE.Vector3();
@@ -2281,6 +1834,7 @@ const hoseTubeN1 = new THREE.Vector3();
 const hoseTubeN2 = new THREE.Vector3();
 const hoseTubeRef = new THREE.Vector3();
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
+
 
 function updateHoseTubeGeometry() {
   if (hosePoints.length !== HOSE_SEGMENTS + 1) return;
@@ -2314,6 +1868,7 @@ function updateHoseTubeGeometry() {
   hoseTubeGeom.attributes.normal.needsUpdate = true;
 }
 
+
 // -----------------------------
 // SIX RECESSED POUR BAYS BETWEEN STRUCTURAL COLUMNS
 // -----------------------------
@@ -2331,8 +1886,10 @@ const TARGET_H = PIT_DEPTH;
 const PIT_BOTTOM_Y = SLAB.floorY - PIT_DEPTH;
 const SIM_CELL = .25;
 
+
 const POUR_ZONES = [];
 let zoneId = 1;
+
 
 for (let rz = 0; rz < COLUMN_Z.length - 1; rz++) {
   for (let cx = 0; cx < COLUMN_X.length - 1; cx++) {
@@ -2361,6 +1918,7 @@ for (let rz = 0; rz < COLUMN_Z.length - 1; rz++) {
       piles: [],
     };
 
+
     z.w = z.maxX - z.minX;
     z.d = z.maxZ - z.minZ;
     z.cols = Math.max(4, Math.round(z.w / SIM_CELL));
@@ -2372,6 +1930,7 @@ for (let rz = 0; rz < COLUMN_Z.length - 1; rz++) {
     const cellCount = z.cols * z.rows;
     z.fill = new Float32Array(cellCount);
 
+
     // v49.1 SAFE: extra state for a conservative viscous solver.
     // These arrays do not affect scene loading or asset loading.
     z.mobility = new Float32Array(cellCount); // 0..1: fresh/workable
@@ -2380,17 +1939,21 @@ for (let rz = 0; rz < COLUMN_Z.length - 1; rz++) {
     z.flowDelta = new Float32Array(cellCount);
     z.flowBudget = new Float32Array(cellCount);
 
+
     // Arcade leveling: tracks which parts of the bay were actually worked
     // with the rake. The player cannot finish a perfectly auto-settled slab
     // without touching enough of the surface.
     z.rakeTouched = new Uint8Array(cellCount);
 
+
     POUR_ZONES.push(z);
   }
 }
 
+
 let activePourZoneIndex = 0;
 let wrongPourToastAt = 0;
+
 
 function activePourZone() {
   return activePourZoneIndex >= 0 && activePourZoneIndex < POUR_ZONES.length
@@ -2398,7 +1961,9 @@ function activePourZone() {
     : null;
 }
 
+
 const TOTAL_TARGET_VOLUME = POUR_ZONES.reduce((s, z) => s + z.targetVolume, 0);
+
 
 function zoneAt(x, z) {
   for (let zoneIndex = 0; zoneIndex < POUR_ZONES.length; zoneIndex++) {
@@ -2411,6 +1976,7 @@ function zoneAt(x, z) {
   return null;
 }
 
+
 // Rake and hose contact can land a few centimetres onto the inner wall/lip
 // even though the visible tool is clearly inside the recess. Resolve that
 // narrow seam to the nearest bay instead of creating a broken strip or spill.
@@ -2418,6 +1984,7 @@ function zoneNearEdge(x, z, padding = .20, preferredZone = null) {
   let best = null;
   let bestD2 = padding * padding;
   const candidates = preferredZone ? [preferredZone] : POUR_ZONES;
+
 
   for (const zone of candidates) {
     if (!zone) continue;
@@ -2438,9 +2005,11 @@ function insideSlab(x, z) {
   return x >= SLAB.minX && x <= SLAB.maxX && z >= SLAB.minZ && z <= SLAB.maxZ;
 }
 
+
 const pitGroup = new THREE.Group();
 pitGroup.name = 'RUNTIME_MULTI_BAY_POUR_SLAB';
 scene.add(pitGroup);
+
 
 // ---------------------------------------------------------
 // ACTIVE POUR MAP OUTLINE
@@ -2452,6 +2021,7 @@ const activePourOutline = new THREE.Group();
 activePourOutline.name = 'ACTIVE_POUR_MAP_OUTLINE';
 scene.add(activePourOutline);
 
+
 const activePourOutlineCoreMat = new THREE.MeshBasicMaterial({
   color: 0x39ff14, transparent: true, opacity: .96,
   blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, toneMapped: false
@@ -2460,6 +2030,7 @@ const activePourOutlineGlowMat = new THREE.MeshBasicMaterial({
   color: 0x00ff66, transparent: true, opacity: .30,
   blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, toneMapped: false
 });
+
 
 const activePourOutlineCore = [];
 const activePourOutlineGlow = [];
@@ -2475,6 +2046,7 @@ for (let i = 0; i < 4; i++) {
 let outlinedPourZoneId = -1;
 let activePourOutlineTime = 0;
 
+
 function layoutActivePourOutline(zone) {
   if (!zone) return;
   const cx = (zone.minX + zone.maxX) * .5;
@@ -2483,10 +2055,12 @@ function layoutActivePourOutline(zone) {
   const coreW = .052, glowW = .24;
   const coreH = .024, glowH = .014;
 
+
   const setStrip = (mesh, x, z, sx, sy, sz) => {
     mesh.position.set(x, y, z);
     mesh.scale.set(sx, sy, sz);
   };
+
 
   // Front/back, then left/right.  Slightly extend corners so the rectangle
   // reads as one continuous glowing outline.
@@ -2495,13 +2069,16 @@ function layoutActivePourOutline(zone) {
   setStrip(activePourOutlineCore[2], zone.minX, cz, coreW, coreH, zone.d + coreW);
   setStrip(activePourOutlineCore[3], zone.maxX, cz, coreW, coreH, zone.d + coreW);
 
+
   setStrip(activePourOutlineGlow[0], cx, zone.minZ, zone.w + glowW, glowH, glowW);
   setStrip(activePourOutlineGlow[1], cx, zone.maxZ, zone.w + glowW, glowH, glowW);
   setStrip(activePourOutlineGlow[2], zone.minX, cz, glowW, glowH, zone.d + glowW);
   setStrip(activePourOutlineGlow[3], zone.maxX, cz, glowW, glowH, zone.d + glowW);
 
+
   outlinedPourZoneId = zone.id;
 }
+
 
 function updateActivePourOutline(dt) {
   const zone = activePourZone();
@@ -2516,12 +2093,14 @@ function updateActivePourOutline(dt) {
   activePourOutline.visible = visible;
   if (!visible) return;
 
+
   if (outlinedPourZoneId !== zone.id) layoutActivePourOutline(zone);
   activePourOutlineTime += dt;
   const pulse = .5 + .5 * Math.sin(activePourOutlineTime * 4.0);
   activePourOutlineCoreMat.opacity = .82 + pulse * .16;
   activePourOutlineGlowMat.opacity = .22 + pulse * .22;
 }
+
 
 const slabMat = new THREE.MeshStandardMaterial({
   // Mobile top slab is intentionally a little lighter than the authored asphalt.
@@ -2540,6 +2119,7 @@ const pitBottomMat = new THREE.MeshStandardMaterial({
   roughness: 1.0, side: THREE.DoubleSide,
   polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2
 });
+
 
 // Transparent tied-rebar layer at the physical bottom of every pour bay.
 // It is deliberately a visual-only plane: player grounding continues to use
@@ -2574,6 +2154,7 @@ function createFallbackRebarTexture() {
   return texture;
 }
 
+
 const rebarLayerMat = new THREE.MeshBasicMaterial({
   color: 0xffffff,
   map: createFallbackRebarTexture(),
@@ -2589,6 +2170,7 @@ const rebarLayerMat = new THREE.MeshBasicMaterial({
   polygonOffsetUnits: -7,
 });
 
+
 const rebarTexturePaths = TOUCH_DEVICE
   ? [
       './assets/final_mobile_textures/rebar_grid_transparent.webp',
@@ -2600,11 +2182,13 @@ const rebarTexturePaths = TOUCH_DEVICE
       './assets/textures/rebar_grid_transparent.webp',
     ];
 
+
 function loadRebarTexture(pathIndex = 0) {
   if (pathIndex >= rebarTexturePaths.length) {
     mobileDebugLog('rebar texture missing; procedural fallback active');
     return;
   }
+
 
   const path = rebarTexturePaths[pathIndex];
   new THREE.TextureLoader().load(path, texture => {
@@ -2622,7 +2206,9 @@ function loadRebarTexture(pathIndex = 0) {
   }, undefined, () => loadRebarTexture(pathIndex + 1));
 }
 
+
 loadRebarTexture();
+
 
 const wetConcreteMat = new THREE.MeshStandardMaterial({
   color: 0xd9dddb,
@@ -2638,6 +2224,7 @@ const wetConcreteMat = new THREE.MeshStandardMaterial({
   polygonOffsetUnits: -2,
 });
 
+
 // Generated seamless actively-flowing concrete PBR set. It deliberately shows
 // wet cement slurry and exposed crushed aggregate instead of a finished floor.
 // Mobile receives 512 px maps; desktop receives 1024 px maps.
@@ -2645,6 +2232,7 @@ const wetConcreteMaterials = new Set();
 let wetConcreteAlbedo = null;
 let wetConcreteNormal = null;
 let wetConcreteHeight = null;
+
 
 function applyWetConcreteTexture(material) {
   if (!material) return;
@@ -2662,6 +2250,7 @@ function applyWetConcreteTexture(material) {
   material.needsUpdate = true;
 }
 
+
 function registerWetConcreteMaterial(material, bumpScale = .018, normalScale = .34) {
   material.userData.concreteBumpScale = bumpScale;
   material.userData.concreteNormalScale = normalScale;
@@ -2670,12 +2259,15 @@ function registerWetConcreteMaterial(material, bumpScale = .018, normalScale = .
   return material;
 }
 
+
 registerWetConcreteMaterial(wetConcreteMat);
+
 
 const wetConcreteTextureDir = TOUCH_DEVICE
   ? './assets/final_mobile_textures'
   : './assets/final_pc_textures';
 const wetConcreteLoader = new THREE.TextureLoader();
+
 
 function configureConcreteMap(texture, colorSpace) {
   texture.colorSpace = colorSpace;
@@ -2689,9 +2281,11 @@ function configureConcreteMap(texture, colorSpace) {
   return texture;
 }
 
+
 function refreshWetConcreteMaterials() {
   for (const material of wetConcreteMaterials) applyWetConcreteTexture(material);
 }
+
 
 wetConcreteLoader.load(
   `${wetConcreteTextureDir}/wet_concrete_v3_albedo.webp`,
@@ -2704,6 +2298,7 @@ wetConcreteLoader.load(
   () => mobileDebugLog('wet concrete albedo missing; color fallback active')
 );
 
+
 wetConcreteLoader.load(
   `${wetConcreteTextureDir}/wet_concrete_v3_normal.webp`,
   texture => {
@@ -2715,6 +2310,7 @@ wetConcreteLoader.load(
   () => mobileDebugLog('wet concrete normal map missing')
 );
 
+
 wetConcreteLoader.load(
   `${wetConcreteTextureDir}/wet_concrete_v3_height.webp`,
   texture => {
@@ -2725,6 +2321,7 @@ wetConcreteLoader.load(
   undefined,
   () => mobileDebugLog('wet concrete height map missing')
 );
+
 
 function addPitBox(name, x, y, z, w, h, d, mat) {
   if (w <= .001 || h <= .001 || d <= .001) return null;
@@ -2740,6 +2337,7 @@ function addPitBox(name, x, y, z, w, h, d, mat) {
   return m;
 }
 
+
 function addPitRebarLayer(zone, visualBottomY) {
   const inset = .10;
   const geometry = new THREE.PlaneGeometry(
@@ -2747,6 +2345,7 @@ function addPitRebarLayer(zone, visualBottomY) {
     Math.max(.10, zone.d - inset * 2)
   );
   geometry.rotateX(-Math.PI * .5);
+
 
   const mesh = new THREE.Mesh(geometry, rebarLayerMat);
   mesh.name = `PIT_${zone.id}_REBAR_LAYER`;
@@ -2767,11 +2366,13 @@ function addPitRebarLayer(zone, visualBottomY) {
   return mesh;
 }
 
+
 // Build the structural top slab as a tiled grid.
 // Any tile whose centre lies inside a pour bay is omitted, leaving a real recess.
 // This keeps the strips under/around the column rows intact.
 const slabThickness = .18;
 const slabCenterY = SLAB.floorY - slabThickness * .5;
+
 
 const xCuts = [
   SLAB.minX,
@@ -2779,11 +2380,13 @@ const xCuts = [
   SLAB.maxX
 ].sort((a,b) => a-b);
 
+
 const zCuts = [
   SLAB.minZ,
   ...COLUMN_Z.flatMap(z => [z - BAY_MARGIN, z + BAY_MARGIN]),
   SLAB.maxZ
 ].sort((a,b) => a-b);
+
 
 for (let zi = 0; zi < zCuts.length - 1; zi++) {
   for (let xi = 0; xi < xCuts.length - 1; xi++) {
@@ -2792,7 +2395,9 @@ for (let zi = 0; zi < zCuts.length - 1; zi++) {
     const mx = (x0 + x1) * .5;
     const mz = (z0 + z1) * .5;
 
+
     if (zoneAt(mx, mz)) continue;
+
 
     // Desktop can use a single top plane. On mobile use a real thin slab box instead.
     // Some mobile GPUs + shadowless lighting made the old plane and the imported SITE_GROUND
@@ -2817,6 +2422,7 @@ for (let zi = 0; zi < zCuts.length - 1; zi++) {
   }
 }
 
+
 function createConcreteEdgeSkirt(zone, edge) {
   const alongX = edge === 'minZ' || edge === 'maxZ';
   const segments = alongX ? zone.cols : zone.rows;
@@ -2824,12 +2430,14 @@ function createConcreteEdgeSkirt(zone, edge) {
   const indices = new Uint16Array(segments * 6);
   const surfaceVertexIndices = new Uint16Array(segments + 1);
 
+
   for (let i = 0; i <= segments; i++) {
     const vc = edge === 'minX' ? 0 : edge === 'maxX' ? zone.cols : i;
     const vr = edge === 'minZ' ? 0 : edge === 'maxZ' ? zone.rows : i;
     const x = -zone.w * .5 + (vc / zone.cols) * zone.w;
     const z = -zone.d * .5 + (vr / zone.rows) * zone.d;
     const p = i * 6;
+
 
     // Bottom/top pair. The tiny downward overlap hides precision cracks where
     // the dynamic concrete meets the fixed pit bottom and wall meshes.
@@ -2841,6 +2449,7 @@ function createConcreteEdgeSkirt(zone, edge) {
     positions[p + 5] = z;
     surfaceVertexIndices[i] = vr * (zone.cols + 1) + vc;
 
+
     if (i < segments) {
       const b0 = i * 2;
       const t0 = b0 + 1;
@@ -2850,11 +2459,13 @@ function createConcreteEdgeSkirt(zone, edge) {
     }
   }
 
+
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
+
 
   const mesh = new THREE.Mesh(geometry, zone.edgeMaterial || wetConcreteMat);
   mesh.name = `FRESH_CONCRETE_ZONE_${zone.id}_SKIRT_${edge}`;
@@ -2868,6 +2479,7 @@ function createConcreteEdgeSkirt(zone, edge) {
   scene.add(mesh);
   return mesh;
 }
+
 
 // Bottom + four vertical walls for every bay.
 for (const zone of POUR_ZONES) {
@@ -2886,10 +2498,12 @@ for (const zone of POUR_ZONES) {
   );
   addPitRebarLayer(zone, visualPitTopY);
 
+
   // Leave a tiny top gap so the pit wall and slab edge never become coplanar.
   const wallTopGap = .008;
   const wallH = Math.max(.02, zone.floorY - zone.bottomY - wallTopGap);
   const wallY = zone.bottomY + wallH * .5;
+
 
   addPitBox(`PIT_${zone.id}_WALL_L`,
     zone.minX - .05, wallY, (zone.minZ + zone.maxZ) * .5,
@@ -2903,6 +2517,7 @@ for (const zone of POUR_ZONES) {
   addPitBox(`PIT_${zone.id}_WALL_B`,
     (zone.minX + zone.maxX) * .5, wallY, zone.maxZ + .05,
     zone.w, wallH, .10, pitWallMat);
+
 
   // A short dark band directly below the rim gives the recess a stable contact-shadow cue
   // even when mobile shadow quality is reduced.
@@ -2925,6 +2540,7 @@ for (const zone of POUR_ZONES) {
   }
 }
 
+
 // v51.72 MOBILE GROUND CUTOUT ------------------------------------------------
 // FINAL_MOBILE's SITE_GROUND is one large asphalt box whose top is y=0.
 // The bay bottom is ~y=-0.004, so that box visually caps every recess even though
@@ -2935,11 +2551,13 @@ let mobileSiteGroundFrame = null;
 function cutMobileSiteGroundUnderPourSlab(root) {
   if (!TOUCH_DEVICE || !root || mobileSiteGroundFrame) return false;
 
+
   const ground = root.getObjectByName('SITE_GROUND');
   if (!ground || !ground.isMesh || !ground.geometry || !ground.material) {
     mobileDebugLog('pit cutout: SITE_GROUND not found');
     return false;
   }
+
 
   ground.updateWorldMatrix(true, false);
   const bb = new THREE.Box3().setFromObject(ground);
@@ -2948,20 +2566,24 @@ function cutMobileSiteGroundUnderPourSlab(root) {
     return false;
   }
 
+
   const minX = bb.min.x, maxX = bb.max.x;
   const minZ = bb.min.z, maxZ = bb.max.z;
   const bottomY = bb.min.y, topY = bb.max.y;
   const h = Math.max(.04, topY - bottomY);
   const cy = (bottomY + topY) * .5;
 
+
   const parent = ground.parent || root;
   const frame = new THREE.Group();
   frame.name = 'MOBILE_SITE_GROUND_FRAME';
+
 
   const addFrameBox = (name, x0, x1, z0, z1) => {
     const w = x1 - x0;
     const d = z1 - z0;
     if (w <= .01 || d <= .01) return;
+
 
     const mat = Array.isArray(ground.material)
       ? ground.material.map(m => m?.clone?.() || m)
@@ -2976,16 +2598,19 @@ function cutMobileSiteGroundUnderPourSlab(root) {
     frame.add(mesh);
   };
 
+
   // Full authored ground minus the exact runtime slab rectangle.
   addFrameBox('MOBILE_SITE_GROUND_W', minX, SLAB.minX, minZ, maxZ);
   addFrameBox('MOBILE_SITE_GROUND_E', SLAB.maxX, maxX, minZ, maxZ);
   addFrameBox('MOBILE_SITE_GROUND_S', SLAB.minX, SLAB.maxX, minZ, SLAB.minZ);
   addFrameBox('MOBILE_SITE_GROUND_N', SLAB.minX, SLAB.maxX, SLAB.maxZ, maxZ);
 
+
   ground.visible = false;
   parent.add(frame);
   mobileSiteGroundFrame = frame;
   frame.updateWorldMatrix(true, true);
+
 
   mobileDebugLog(
     `pit cutout active: SITE_GROUND ${Math.round(maxX-minX)}x${Math.round(maxZ-minZ)}m -> frame; slab opening ${SLAB.minX}..${SLAB.maxX}/${SLAB.minZ}..${SLAB.maxZ}`
@@ -2993,10 +2618,12 @@ function cutMobileSiteGroundUnderPourSlab(root) {
   return true;
 }
 
+
 // -----------------------------
 // ONE CONTINUOUS WET SURFACE PER BAY
 // -----------------------------
 function zoneIndex(zone, c, r) { return r * zone.cols + c; }
+
 
 function zoneCellAt(zone, x, z) {
   const c = THREE.MathUtils.clamp(
@@ -3010,11 +2637,13 @@ function zoneCellAt(zone, x, z) {
   return { c, r, index: zoneIndex(zone, c, r) };
 }
 
+
 function getFillHeightAt(x, z) {
   const zone = zoneAt(x, z);
   if (!zone) return 0;
   return zone.fill[zoneCellAt(zone, x, z).index];
 }
+
 
 function zoneVertexHeight(zone, vc, vr) {
   let sum = 0, count = 0;
@@ -3028,6 +2657,7 @@ function zoneVertexHeight(zone, vc, vr) {
   }
   return count ? sum / count : 0;
 }
+
 
 for (const zone of POUR_ZONES) {
   zone.surfaceGeom = new THREE.PlaneGeometry(
@@ -3043,6 +2673,7 @@ for (const zone of POUR_ZONES) {
     'color',
     new THREE.BufferAttribute(surfaceVertexColors, 3)
   );
+
 
   zone.wetMaterial = registerWetConcreteMaterial(wetConcreteMat.clone());
   zone.roughnessData = new Uint8Array(zone.cols * zone.rows * 4);
@@ -3071,6 +2702,7 @@ for (const zone of POUR_ZONES) {
   zone.edgeMaterial.roughness = .52;
   zone.visualWetness = 1;
 
+
   zone.surface = new THREE.Mesh(zone.surfaceGeom, zone.wetMaterial);
   zone.surface.name = `FRESH_CONCRETE_ZONE_${zone.id}`;
   zone.surface.position.set(
@@ -3083,6 +2715,7 @@ for (const zone of POUR_ZONES) {
   zone.surface.visible = false;
   scene.add(zone.surface);
 
+
   // PlaneGeometry has no vertical sides. Without these four lightweight
   // dynamic skirts the raised edge exposes the clear colour between the wet
   // surface and the pit wall, which looked like broken/dashed card borders.
@@ -3090,10 +2723,12 @@ for (const zone of POUR_ZONES) {
     .map(edge => createConcreteEdgeSkirt(zone, edge));
 }
 
+
 function markZoneDirty(zone) { if (zone) zone.dirty = true; }
 function markConcreteDirty() {
   for (const zone of POUR_ZONES) zone.dirty = true;
 }
+
 
 const concreteWetColor = new THREE.Color(0xd9dddb);
 const concreteDryColor = new THREE.Color(0xffffff);
@@ -3103,9 +2738,11 @@ const concreteLocalFinishedColor = new THREE.Color(0xf4f5f1);
 const concreteVertexColor = new THREE.Color();
 let concreteAppearanceTimer = 0;
 
+
 function updateConcreteVertexColors(zone) {
   const color = zone.surfaceGeom.attributes.color;
   if (!color) return;
+
 
   // MeshStandardMaterial reads roughness from the green channel. A tiny RGBA
   // DataTexture lets fresh cells stay glossy while old cells go matte without
@@ -3133,11 +2770,13 @@ function updateConcreteVertexColors(zone) {
   }
   zone.roughnessTexture.needsUpdate = true;
 
+
   for (let vr = 0; vr <= zone.rows; vr++) {
     for (let vc = 0; vc <= zone.cols; vc++) {
       let mobility = 0;
       let finished = 0;
       let count = 0;
+
 
       for (const dc of [-1, 0]) {
         for (const dr of [-1, 0]) {
@@ -3151,6 +2790,7 @@ function updateConcreteVertexColors(zone) {
           count++;
         }
       }
+
 
       const wet = count
         ? THREE.MathUtils.clamp((mobility / count - .14) / .80, 0, 1)
@@ -3170,12 +2810,14 @@ function updateConcreteVertexColors(zone) {
   color.needsUpdate = true;
 }
 
+
 function updateConcreteAppearance(dt) {
   concreteAppearanceTimer += dt;
   const interval = TOUCH_DEVICE ? .20 : .12;
   if (concreteAppearanceTimer < interval) return;
   const step = concreteAppearanceTimer;
   concreteAppearanceTimer = 0;
+
 
   for (const zone of POUR_ZONES) {
     let mobilitySum = 0;
@@ -3187,6 +2829,7 @@ function updateConcreteAppearance(dt) {
       if (zone.rakeTouched[i]) finishedCells++;
       filledCells++;
     }
+
 
     const averageMobility = filledCells ? mobilitySum / filledCells : 1;
     const targetWetness = THREE.MathUtils.clamp(
@@ -3201,6 +2844,7 @@ function updateConcreteAppearance(dt) {
       step
     );
 
+
     const wet = zone.visualWetness;
     const finish = filledCells ? finishedCells / filledCells : 0;
     zone.wetMaterial.color.lerpColors(concreteDryColor, concreteWetColor, wet);
@@ -3213,6 +2857,7 @@ function updateConcreteAppearance(dt) {
     zone.wetMaterial.envMapIntensity = THREE.MathUtils.lerp(.38, 1.15, wet);
     updateConcreteVertexColors(zone);
 
+
     // A darker vertical contact band visually seals concrete against the bay
     // wall and hides precision seams without changing collision or fill math.
     zone.edgeMaterial.color.copy(zone.wetMaterial.color).multiplyScalar(.58);
@@ -3220,23 +2865,28 @@ function updateConcreteAppearance(dt) {
   }
 }
 
+
 function refreshConcreteSurfaces() {
   for (const zone of POUR_ZONES) {
     if (!zone.dirty) continue;
     zone.dirty = false;
 
+
     const pos = zone.surfaceGeom.attributes.position;
     let any = false;
+
 
     // Slight visual exaggeration of highs/lows makes the leveling task readable
     // from first person. Physics still uses the untouched zone.fill values.
     const physicalAvgH = zoneAverageHeight(zone);
     const visualExaggeration = physicalAvgH > .025 ? 1.42 : 1.18;
 
+
     for (let vr = 0; vr <= zone.rows; vr++) {
       for (let vc = 0; vc <= zone.cols; vc++) {
         const idx = vr * (zone.cols + 1) + vc;
         let rawH = zoneVertexHeight(zone, vc, vr);
+
 
         // The final vertex row used to copy a single cell verbatim. Along the
         // wall this exposed every cell transition as a jagged saw-tooth. Blend
@@ -3263,10 +2913,12 @@ function refreshConcreteSurfaces() {
       }
     }
 
+
     pos.needsUpdate = true;
     zone.surfaceGeom.computeVertexNormals();
     zone.surfaceGeom.computeBoundingSphere();
     zone.surface.visible = any;
+
 
     for (const skirt of zone.surfaceSkirts || []) {
       const skirtPos = skirt.geometry.attributes.position;
@@ -3285,10 +2937,12 @@ function refreshConcreteSurfaces() {
   }
 }
 
+
 function refreshAllConcreteCells() {
   markConcreteDirty();
   refreshConcreteSurfaces();
 }
+
 
 function zoneVolume(zone) {
   let sumH = 0;
@@ -3317,6 +2971,7 @@ function zoneRakeCoverage(zone) {
   return touched / zone.rakeTouched.length;
 }
 
+
 function zoneLevelStats(zone) {
   if (!zone) return {
     score: 0,
@@ -3326,6 +2981,7 @@ function zoneLevelStats(zone) {
     rmsError: zone?.targetH || TARGET_H,
     meanHeight: 0,
   };
+
 
   const n = zone.fill.length;
   if (!n) return {
@@ -3337,9 +2993,11 @@ function zoneLevelStats(zone) {
     meanHeight: 0,
   };
 
+
   let meanHeight = 0;
   for (let i = 0; i < n; i++) meanHeight += zone.fill[i];
   meanHeight /= n;
+
 
   let sq = 0;
   for (let i = 0; i < n; i++) {
@@ -3350,7 +3008,9 @@ function zoneLevelStats(zone) {
     sq += err * err;
   }
 
+
   const rmsError = Math.sqrt(sq / n);
+
 
   // 0% when the slab is wildly lumpy/empty, 100% when cell heights are close
   // to the desired finished layer. Deliberately generous: this is arcade.
@@ -3359,9 +3019,11 @@ function zoneLevelStats(zone) {
     0, 1
   );
 
+
   const rakeCoverage = zoneRakeCoverage(zone);
   const rakeWork = THREE.MathUtils.clamp(rakeCoverage / .55, 0, 1);
   const coverage = zoneCoverage(zone);
+
 
   // Real surface quality matters most, but the player must actually work a
   // meaningful part of the area with the rake.
@@ -3370,8 +3032,10 @@ function zoneLevelStats(zone) {
     0, 1
   );
 
+
   return { score, uniformity, rakeCoverage, coverage, rmsError, meanHeight };
 }
+
 
 function zoneReadyForSequence(zone) {
   if (!zone) return false;
@@ -3383,6 +3047,7 @@ function zoneReadyForSequence(zone) {
     level.score >= zone.levelRequired
   );
 }
+
 
 function concreteCoverage() {
   let cells = 0, filled = 0;
@@ -3399,18 +3064,22 @@ function zoneAverageHeight(zone) {
   return zoneVolume(zone) / (zone.w * zone.d);
 }
 
+
 // Concrete physically slows the player.
 // Empty recess = normal walking. Wet concrete progressively grabs the boots.
 function concreteMovementFactor(x, z) {
   const zone = zoneAt(x, z);
   const bootFloor = [0.0, 0.50, 0.61, 0.73][bootTier] || 0.0;
 
+
   if (zone) {
     const h = getFillHeightAt(x, z);
     if (h < .006) return 1.0;
 
+
     const depth01 = THREE.MathUtils.clamp(h / zone.targetH, 0, 1.45);
     let factor = THREE.MathUtils.lerp(.78, .40, Math.min(1, Math.sqrt(depth01)));
+
 
     if (depth01 > 1.0) {
       factor = THREE.MathUtils.lerp(.40, .28, Math.min(1, depth01 - 1.0));
@@ -3418,19 +3087,23 @@ function concreteMovementFactor(x, z) {
     return Math.max(factor, bootFloor);
   }
 
+
   const spillH = spillHeightAt(x, z);
   if (spillH < .006) return 1.0;
+
 
   const wet01 = THREE.MathUtils.clamp(spillH / .14, 0, 1.35);
   const factor = THREE.MathUtils.lerp(.76, .43, Math.min(1, Math.sqrt(wet01)));
   return Math.max(factor, bootFloor);
 }
 
+
 let bootTier = Math.max(0, Math.min(3, Number.parseInt(localStorage.getItem('beton_boot_tier') || '0', 10) || 0));
 let staminaLevel = Math.max(0, Math.min(3, Number.parseInt(localStorage.getItem('beton_stamina_level') || '0', 10) || 0));
 let pumpLevel = Math.max(0, Math.min(3, Number.parseInt(localStorage.getItem('beton_pump_level') || '0', 10) || 0));
 let jobsCompleted = Math.max(0, Number.parseInt(localStorage.getItem('beton_jobs_completed') || '0', 10) || 0);
 let staminaMax = 100 + staminaLevel * 15;
+
 
 const CAREER_STATS_KEY = 'beton_career_stats_v1';
 const CAREER_STATS_DEFAULTS = Object.freeze({
@@ -3443,6 +3116,7 @@ const CAREER_STATS_DEFAULTS = Object.freeze({
   cigarettesSmoked: 0,
   perfectQte: 0,
 });
+
 
 function loadCareerStats() {
   try {
@@ -3458,15 +3132,18 @@ function loadCareerStats() {
   }
 }
 
+
 const careerStats = loadCareerStats();
 let careerStatsDirty = false;
 let careerStatsSaveTimer = 0;
+
 
 function recordCareerStat(key, amount = 1) {
   if (!(key in careerStats) || !Number.isFinite(amount) || amount <= 0) return;
   careerStats[key] += amount;
   careerStatsDirty = true;
 }
+
 
 function saveCareerStats(force = false) {
   if (!careerStatsDirty && !force) return;
@@ -3477,13 +3154,16 @@ function saveCareerStats(force = false) {
   } catch (_) {}
 }
 
+
 function updateCareerStatsPersistence(dt) {
   if (!careerStatsDirty) return;
   careerStatsSaveTimer += dt;
   if (careerStatsSaveTimer >= 2.5) saveCareerStats();
 }
 
+
 window.addEventListener('pagehide', () => saveCareerStats(true));
+
 
 function saveProgression() {
   localStorage.setItem('beton_boot_tier', String(bootTier));
@@ -3491,6 +3171,7 @@ function saveProgression() {
   localStorage.setItem('beton_pump_level', String(pumpLevel));
   localStorage.setItem('beton_jobs_completed', String(jobsCompleted));
 }
+
 
 let jobState = 'active';
 let paidPourZoneCount = 0;
@@ -3504,539 +3185,152 @@ let pourProgressDirty = false;
 let pourProgressSaveTimer = 0;
 let pourProgressLoading = false;
 
+
 const POUR_EVENT_TYPES = ['pressure', 'hose', 'pump', 'eye'];
 const POUR_EVENT_COPY = {
-  pressure: { title: 'СКАЧОК ДАВЛЕНИЯ', text: '0,5 СЕК · ОТВЕДИ ШЛАНГ ИЛИ ВЫКЛЮЧИ ПОДАЧУ' },
-  hose: { title: 'ШЛАНГ ВЫСКОЛЬЗНУЛ', text: 'ПЕРЕХВАТИ ЕГО' },
-  pump: { title: 'ПОЛОМКА НАСОСА', text: 'ПОДАЧА ОСТАНОВЛЕНА' },
-  eye: { title: 'БЕТОН В ГЛАЗ', text: 'СМАХНИ БЕТОН' },
+  pressure: {
+    title: 'СКАЧОК ДАВЛЕНИЯ',
+    text: 'Сейчас из шланга вылетит тяжёлая плюха',
+  },
+  hose: {
+    title: 'ШЛАНГ ВЫСКАЛЬЗЫВАЕТ',
+    text: 'Готовься быстро подобрать его',
+  },
+  pump: {
+    title: 'ПОЛОМКА НАСОСА',
+    text: 'После остановки иди к Джорджу',
+  },
+  eye: {
+    title: 'БРЫЗГИ В ЛИЦО',
+    text: 'Береги глаза',
+  },
 };
-const EVENT_ALARM_SECONDS = 1.00;
 let pendingPourEvent = null;
 let eventAlarmTimer = 0;
 let pumpBroken = false;
 let pressureSpikePending = false;
-let pressureSpikeVolumeM3 = 0;
 let blindnessTimer = 0;
-let hoseRecoveryNeeded = false;
-let hoseControlActive = false;
-let hoseWhipClock = 0;
-let hoseControlHeld = false;
-let hoseControlPointer = null;
-let hoseControlZoneY = .18;
-let hoseControlZoneVel = 0;
-let hoseControlTargetY = .64;
-let hoseControlTargetVel = 0;
-let hoseControlProgress = .18;
-let hoseControlMissTime = 0;
-let hoseControlChaosClock = 0;
-let hoseControlKickTimer = .28;
-let hoseControlHapticStep = 0;
-let hoseControlFailures = 0;
-let eyeWipeStartedAt = 0;
-window.__betonEventResult = '—';
-const HOSE_CONTROL_PROGRESS_GAIN = .72;
-const HOSE_CONTROL_PROGRESS_LOSS = .31;
-const HOSE_CONTROL_FAIL_AFTER = 2.35;
-let pumpPuzzleOpen = false;
-let eyeWipeActive = false;
-let eyeWipePointer = null;
-let eyeWipeStartX = 0;
 
-// Pressure slug visibly travels through the hose during the common 0.5 s alarm.
-// It uses the exact hose material, so it reads like a physical bulge inside the rubber line.
-const pressurePulseGeom = new THREE.SphereGeometry(.17, TOUCH_DEVICE ? 10 : 16, TOUCH_DEVICE ? 7 : 10);
-const pressurePulseMat = hoseMat.clone();
-pressurePulseMat.roughness = Math.max(.78, pressurePulseMat.roughness || .9);
-const pressurePulseMesh = new THREE.Mesh(pressurePulseGeom, pressurePulseMat);
-pressurePulseMesh.name = 'PRESSURE_SLUG_INSIDE_HOSE';
-pressurePulseMesh.visible = false;
-pressurePulseMesh.castShadow = !TOUCH_DEVICE;
-pressurePulseMesh.raycast = () => {};
-scene.add(pressurePulseMesh);
-const pressurePulsePos = new THREE.Vector3();
-const pressurePulseTangent = new THREE.Vector3();
 
-function updatePressureHosePulse() {
-  const active = pendingPourEvent?.type === 'pressure' && eventAlarmTimer > 0 && hosePoints.length > 1;
-  pressurePulseMesh.visible = active;
-  if (!active) return;
-  const t = THREE.MathUtils.clamp(1 - eventAlarmTimer / EVENT_ALARM_SECONDS, 0, 1);
-  const f = t * (hosePoints.length - 1);
-  const i0 = Math.min(hosePoints.length - 2, Math.floor(f));
-  const i1 = i0 + 1;
-  const lt = f - i0;
-  pressurePulsePos.copy(hosePoints[i0]).lerp(hosePoints[i1], lt);
-  pressurePulseMesh.position.copy(pressurePulsePos);
-  pressurePulseTangent.copy(hosePoints[i1]).sub(hosePoints[i0]).normalize();
-  pressurePulseMesh.quaternion.setFromUnitVectors(Y_AXIS, pressurePulseTangent);
-  const swell = 1 + Math.sin(t * Math.PI) * .18;
-  pressurePulseMesh.scale.set(.92 * swell, 1.45 * swell, .92 * swell);
-}
-
-function ensureHoseControlUi() {
-  let root = document.querySelector('#betonHoseControl');
-  if (root) return root;
-  root = document.createElement('div');
-  root.id = 'betonHoseControl';
-  root.className = 'betonEventQte';
-  root.innerHTML = '<div class="betonHoseControlCard"><div class="betonHoseControlTitle">ПЕРЕХВАТИ ШЛАНГ</div><div class="betonHoseRig"><img class="betonHoseFrame" src="./assets/ui/events/hose_frame.png" alt=""><div class="betonHoseSlot"><div class="betonHoseBody"><img src="./assets/ui/events/hose.png" alt=""></div><img class="betonHoseGrip" src="./assets/ui/events/grip.png" alt=""></div><img class="betonHoseArm" src="./assets/ui/events/arm.png" alt=""><div class="betonHoseProgressSlot"><i></i></div></div><div class="betonHoseControlHint"><b>ЗАЖМИ</b> — РУКА ВВЕРХ · <b>ОТПУСТИ</b> — ВНИЗ</div><div class="betonHoseControlState">ДЕРЖИ ЛАДОНЬ НА РУКОЯТКЕ</div></div>';
-  document.body.appendChild(root);
-
-  const press = e => {
-    if (!hoseControlActive) return;
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    hoseControlHeld = true;
-    hoseControlPointer = e.pointerId;
-    root.classList.add('pressed');
-    try { root.setPointerCapture(e.pointerId); } catch (_) {}
-    e.preventDefault();
-  };
-  const release = e => {
-    if (!hoseControlActive) return;
-    if (hoseControlPointer !== null && e.pointerId !== hoseControlPointer) return;
-    hoseControlHeld = false;
-    hoseControlPointer = null;
-    root.classList.remove('pressed');
-    e.preventDefault?.();
-  };
-  root.addEventListener('pointerdown', press, { passive:false });
-  root.addEventListener('pointerup', release, { passive:false });
-  root.addEventListener('pointercancel', release, { passive:false });
-  root.addEventListener('contextmenu', e => e.preventDefault());
-  return root;
-}
-
-function updateHoseControlUi(hit = false) {
-  const root = ensureHoseControlUi();
-  const body = root.querySelector('.betonHoseBody');
-  const grip = root.querySelector('.betonHoseGrip');
-  const arm = root.querySelector('.betonHoseArm');
-  const progress = root.querySelector('.betonHoseProgressSlot i');
-  const state = root.querySelector('.betonHoseControlState');
-
-  const slotBottom = 11.95;
-  const slotRange = 75.0;
-  const targetY = THREE.MathUtils.clamp(hoseControlTargetY, .24, .97);
-  const handY = THREE.MathUtils.clamp(hoseControlZoneY, .03, .97);
-  if (body) body.style.height = Math.max(12, targetY * 100) + '%';
-  if (grip) {
-    grip.style.bottom = (targetY * 100) + '%';
-    grip.classList.toggle('hit', hit);
-  }
-  if (arm) {
-    arm.style.bottom = (slotBottom + handY * slotRange) + '%';
-    arm.classList.toggle('hit', hit);
-  }
-  if (progress) progress.style.height = Math.max(1, THREE.MathUtils.clamp(hoseControlProgress, 0, 1) * 98) + '%';
-  if (state) state.textContent = hit ? 'ЗАХВАТ ЕСТЬ · УДЕРЖИВАЙ' : 'ПОЙМАЙ РУКОЯТКУ ЛАДОНЬЮ';
-}
-
-function startHoseControlQTE() {
-  if (!hoseRecoveryNeeded || hoseHeld || hoseControlActive) return;
-  hoseControlActive = true;
-  hoseControlHeld = false;
-  hoseControlPointer = null;
-  hoseControlZoneY = .20;
-  hoseControlZoneVel = 0;
-  hoseControlTargetY = THREE.MathUtils.randFloat(.46, .76);
-  hoseControlTargetVel = THREE.MathUtils.randFloat(-.18, .18);
-  hoseControlProgress = .18;
-  hoseControlMissTime = 0;
-  hoseControlChaosClock = 0;
-  hoseControlKickTimer = THREE.MathUtils.randFloat(.18, .34);
-  hoseControlHapticStep = 0;
-  hoseControlFailures = 0;
-  const root = ensureHoseControlUi();
-  root.classList.add('show');
-  root.classList.remove('pressed');
-  updateHoseControlUi(false);
-  if (document.pointerLockElement) document.exitPointerLock();
-}
-
-function failHoseControlQTE() {
-  if (!hoseControlActive) return;
-  hoseControlFailures += 1;
-  window.__betonEventResult = 'ПРОВАЛ';
-  hoseControlActive = false;
-  hoseControlHeld = false;
-  hoseControlPointer = null;
-  ensureHoseControlUi().classList.remove('show','pressed');
-  if (hoseInteraction) hoseInteraction.text = 'E — удержать шланг · БЕТОН ЛЬЁТСЯ!';
-  showToast('ШЛАНГ ВЫРВАЛСЯ — ПОДОЙДИ И ПОПРОБУЙ ЕЩЁ', 2.1);
-  requestMouseLock();
-}
-
-function completeHoseControlQTE() {
-  if (!hoseControlActive) return;
-  hoseControlActive = false;
-  hoseControlHeld = false;
-  hoseControlPointer = null;
-  hoseRecoveryNeeded = false;
-  hoseControlProgress = 1;
-  window.__betonEventResult = hoseControlFailures > 0 ? 'ЧАСТИЧНО' : 'ИДЕАЛЬНО';
-  ensureHoseControlUi().classList.remove('show','pressed');
-  hoseHeld = true;
-  if (hoseInteraction) hoseInteraction.text = pouring ? 'E — бросить шланг · БЕТОН ЛЬЁТСЯ' : 'E — бросить шланг';
-  showToast('ШЛАНГ СНОВА ПОД КОНТРОЛЕМ', 1.8);
-  mobileHaptic(24);
-  resetQTECooldown();
-  requestMouseLock();
-}
-
-function updateHoseControlQTE(dt) {
-  if (!hoseControlActive) return;
-  dt = Math.min(dt, .05);
-  hoseControlChaosClock += dt;
-
-  // Stardew-like hand control: hold lifts the arm, release lets it fall.
-  const playerAccel = hoseControlHeld ? 2.72 : -2.48;
-  hoseControlZoneVel += playerAccel * dt;
-  hoseControlZoneVel *= Math.exp(-2.62 * dt);
-  hoseControlZoneVel = THREE.MathUtils.clamp(hoseControlZoneVel, -.96, .96);
-  hoseControlZoneY += hoseControlZoneVel * dt;
-  if (hoseControlZoneY < .035) { hoseControlZoneY = .035; hoseControlZoneVel *= -.16; }
-  if (hoseControlZoneY > .965) { hoseControlZoneY = .965; hoseControlZoneVel *= -.16; }
-
-  // The hose end/grip jumps up and down while its body remains anchored to the bottom of the gauge.
-  const difficulty = THREE.MathUtils.clamp((activePourZoneIndex || 0) / Math.max(1, POUR_ZONES.length - 1), 0, 1);
-  hoseControlKickTimer -= dt;
-  if (hoseControlKickTimer <= 0) {
-    hoseControlKickTimer = THREE.MathUtils.randFloat(.22, .46);
-    hoseControlTargetVel += THREE.MathUtils.randFloatSpread(THREE.MathUtils.lerp(.40, .66, difficulty));
-  }
-  hoseControlTargetVel += Math.sin(hoseControlChaosClock * 5.55) * .20 * dt;
-  hoseControlTargetVel *= Math.exp(-1.42 * dt);
-  const maxTargetSpeed = THREE.MathUtils.lerp(.54, .76, difficulty);
-  hoseControlTargetVel = THREE.MathUtils.clamp(hoseControlTargetVel, -maxTargetSpeed, maxTargetSpeed);
-  hoseControlTargetY += hoseControlTargetVel * dt;
-  if (hoseControlTargetY < .25) { hoseControlTargetY = .25; hoseControlTargetVel = Math.abs(hoseControlTargetVel) * .74; }
-  if (hoseControlTargetY > .955) { hoseControlTargetY = .955; hoseControlTargetVel = -Math.abs(hoseControlTargetVel) * .74; }
-
-  const catchTolerance = THREE.MathUtils.lerp(.090, .064, difficulty);
-  const hit = Math.abs(hoseControlTargetY - hoseControlZoneY) <= catchTolerance;
-
-  if (hit) {
-    hoseControlProgress = Math.min(1, hoseControlProgress + dt * HOSE_CONTROL_PROGRESS_GAIN);
-    hoseControlMissTime = Math.max(0, hoseControlMissTime - dt * 1.8);
-  } else {
-    hoseControlProgress = Math.max(0, hoseControlProgress - dt * HOSE_CONTROL_PROGRESS_LOSS);
-    hoseControlMissTime += dt;
-  }
-
-  const hapticStep = Math.floor(hoseControlProgress * 4);
-  if (hit && hapticStep > hoseControlHapticStep) { hoseControlHapticStep = hapticStep; mobileHaptic(7); }
-  updateHoseControlUi(hit);
-
-  if (hoseControlProgress >= .999) completeHoseControlQTE();
-  else if (hoseControlProgress <= .001 && hoseControlMissTime >= HOSE_CONTROL_FAIL_AFTER) failHoseControlQTE();
-}
-
-window.addEventListener('keydown' , e => {
-  if (!hoseControlActive || e.repeat) return;
-  if (e.code === 'Space' || e.code === 'KeyE' || e.code === 'Enter') {
-    hoseControlHeld = true;
-    ensureHoseControlUi().classList.add('pressed');
-    e.preventDefault();
-  }
-}, true);
-window.addEventListener('keyup', e => {
-  if (!hoseControlActive) return;
-  if (e.code === 'Space' || e.code === 'KeyE' || e.code === 'Enter') {
-    hoseControlHeld = false;
-    ensureHoseControlUi().classList.remove('pressed');
-    e.preventDefault();
-  }
-}, true);
-
-function ensureEyeWipeUi() {
-  let root = document.querySelector('#betonEyeWipe');
-  if (root) return root;
-  root = document.createElement('div');
-  root.id = 'betonEyeWipe';
-  root.className = 'betonEventQte';
-  root.innerHTML = '<img class="betonEyeBlob" src="./assets/ui/events/eye_splat.png" alt=""><div class="betonEyeTrack"><i></i></div><div class="betonEyeHint">СМАХНИ БЕТОН СЛЕВА НАПРАВО</div>';
-  document.body.appendChild(root);
-  const track = root.querySelector('.betonEyeTrack i');
-  root.addEventListener('pointerdown', e => {
-    if (!eyeWipeActive) return;
-    eyeWipePointer = e.pointerId; eyeWipeStartX = e.clientX;
-    try { root.setPointerCapture(e.pointerId); } catch (_) {}
-    if (track) track.style.left = THREE.MathUtils.clamp(e.clientX / innerWidth * 100, 0, 100)+'%';
-    e.preventDefault();
-  }, { passive:false });
-  root.addEventListener('pointermove', e => {
-    if (!eyeWipeActive || e.pointerId !== eyeWipePointer) return;
-    const progress = THREE.MathUtils.clamp((e.clientX - eyeWipeStartX) / Math.max(180, innerWidth * .38), 0, 1);
-    if (track) track.style.left = (progress * 100)+'%';
-    const blob = root.querySelector('.betonEyeBlob');
-    if (blob) blob.style.transform = 'translateX('+(progress*30)+'vw) rotate('+(progress*8-3)+'deg)';
-    if (progress >= .92) finishEyeWipe(false);
-    e.preventDefault();
-  }, { passive:false });
-  const end = e => { if (e.pointerId === eyeWipePointer) eyeWipePointer = null; };
-  root.addEventListener('pointerup', end); root.addEventListener('pointercancel', end);
-  return root;
-}
-function startEyeWipe() {
-  eyeWipeActive = true;
-  eyeWipeStartedAt = performance.now();
-  blindnessTimer = 2.4;
-  blindnessOverlayEl?.classList.remove('active');
-  const root = ensureEyeWipeUi();
-  root.classList.add('show');
-  const blob = root.querySelector('.betonEyeBlob'); if (blob) { blob.style.opacity='.98'; blob.style.transform='rotate(-3deg)'; }
-  const dot = root.querySelector('.betonEyeTrack i'); if (dot) dot.style.left='0%';
-  if (document.pointerLockElement) document.exitPointerLock();
-}
-function finishEyeWipe(autoClear = false) {
-  if (!eyeWipeActive) return;
-  const elapsed = Math.max(0, (performance.now() - eyeWipeStartedAt) / 1000);
-  window.__betonEventResult = autoClear ? 'ПРОВАЛ' : (elapsed <= 1.15 ? 'ИДЕАЛЬНО' : 'ЧАСТИЧНО');
-  eyeWipeActive = false; blindnessTimer = 0; eyeWipePointer = null;
-  const root = ensureEyeWipeUi();
-  const blob = root.querySelector('.betonEyeBlob'); if (blob) blob.style.opacity='0';
-  setTimeout(() => root.classList.remove('show'), 170);
-  requestMouseLock();
-}
-
-const WIRE_COLORS = ['#ff554d','#47a7ff','#f7cb4b','#52d17f'];
-const WIRE_GRID_COLS = 9;
-const WIRE_GRID_ROWS = 9;
-const WIRE_ENDPOINT_ROWS = [1,3,5,7];
-const WIRE_BLOCK_TEMPLATES = [
-  [[4,1],[3,3],[5,3],[4,5],[6,5],[4,7]],
-  [[2,1],[6,1],[4,3],[3,5],[5,5],[4,7]],
-  [[5,1],[3,3],[6,3],[4,5],[2,7],[6,7]],
-];
-let wirePuzzle = null;
-
-function ensurePumpPuzzleUi() {
-  let root = document.querySelector('#betonPumpPuzzle');
-  if (root) return root;
-  root = document.createElement('div');
-  root.id='betonPumpPuzzle';
-  root.className='betonEventQte';
-  root.innerHTML='<div class="betonPumpPuzzleWrap"><button class="betonEventClose" type="button">×</button><div class="betonPumpPuzzleTitle">ЩИТОК НАСОСА</div><div class="betonPumpPuzzleSub">ПРОЛОЖИ ПРОВОДА ПО СЕТКЕ · НЕ ПЕРЕСЕКАЙ ЛИНИИ</div><div class="betonPumpShell"><canvas class="betonWireCanvas" width="720" height="720"></canvas></div><div class="betonWireStatus">ПРОВОДОВ: 0 / 4</div></div>';
-  document.body.appendChild(root);
-  root.querySelector('.betonEventClose')?.addEventListener('click',()=>closePumpWirePuzzle(false));
-  const canvas=root.querySelector('canvas');
-  canvas.addEventListener('pointerdown',pumpWireDown,{passive:false});
-  canvas.addEventListener('pointermove',pumpWireMove,{passive:false});
-  canvas.addEventListener('pointerup',pumpWireUp,{passive:false});
-  canvas.addEventListener('pointercancel',pumpWireUp,{passive:false});
-  return root;
-}
-function wireCanvasPoint(e, canvas) {
-  const r=canvas.getBoundingClientRect();
-  return {x:(e.clientX-r.left)*canvas.width/r.width,y:(e.clientY-r.top)*canvas.height/r.height};
-}
-function wireCellFromPoint(p, canvas) {
-  const pad=34, cellW=(canvas.width-pad*2)/(WIRE_GRID_COLS-1), cellH=(canvas.height-pad*2)/(WIRE_GRID_ROWS-1);
-  const c=Math.round((p.x-pad)/cellW), r=Math.round((p.y-pad)/cellH);
-  if(c<0||c>=WIRE_GRID_COLS||r<0||r>=WIRE_GRID_ROWS)return null;
-  return {c,r};
-}
-function wirePointForCell(cell, canvas) {
-  const pad=34, cellW=(canvas.width-pad*2)/(WIRE_GRID_COLS-1), cellH=(canvas.height-pad*2)/(WIRE_GRID_ROWS-1);
-  return {x:pad+cell.c*cellW,y:pad+cell.r*cellH};
-}
-function wireKey(cell){return cell.c+','+cell.r;}
-function isWireEndpoint(cell){
-  if(!wirePuzzle)return null;
-  for(let color=0;color<wirePuzzle.count;color++){
-    const s=wirePuzzle.starts[color],t=wirePuzzle.targets[color];
-    if(cell.c===s.c&&cell.r===s.r)return {color,side:'start'};
-    if(cell.c===t.c&&cell.r===t.r)return {color,side:'target'};
-  }
-  return null;
-}
-function isWireCellBlocked(cell,color,path){
-  if(!wirePuzzle)return true;
-  if(wirePuzzle.blocked.has(wireKey(cell)))return true;
-  const endpoint=isWireEndpoint(cell);
-  if(endpoint&&endpoint.color!==color)return true;
-  for(const [otherColor,otherPath] of wirePuzzle.paths){
-    if(otherColor===color)continue;
-    if(otherPath.some(p=>p.c===cell.c&&p.r===cell.r))return true;
-  }
-  return false;
-}
-function openPumpWirePuzzle() {
-  if (!pumpBroken || pumpPuzzleOpen) return;
-  pumpPuzzleOpen=true; pouring=false;
-  const root=ensurePumpPuzzleUi(); root.classList.add('show');
-  const starts=WIRE_ENDPOINT_ROWS.map((r,i)=>({c:0,r,color:i}));
-  const targets=WIRE_ENDPOINT_ROWS.map((r,i)=>({c:WIRE_GRID_COLS-1,r,color:i}));
-  const template=WIRE_BLOCK_TEMPLATES[Math.floor(Math.random()*WIRE_BLOCK_TEMPLATES.length)];
-  wirePuzzle={starts,targets,paths:new Map(),drag:null,count:4,blocked:new Set(template.map(p=>p[0]+','+p[1])),mistakes:0};
-  drawPumpPuzzle();
-  if (document.pointerLockElement) document.exitPointerLock();
-}
-function closePumpWirePuzzle(success) {
-  if(success && wirePuzzle) window.__betonEventResult = wirePuzzle.mistakes===0 ? 'ИДЕАЛЬНО' : 'ЧАСТИЧНО';
-  pumpPuzzleOpen=false; wirePuzzle=null; ensurePumpPuzzleUi().classList.remove('show');
-  if (success) {
-    pumpBroken=false; markPourProgressDirty(); savePourProgress(true);
-    if (hoseInteraction) hoseInteraction.text=hoseHeld?'E — бросить шланг · ЛКМ — включить бетон':'E — взять шланг';
-    showToast('НАСОС ЗАПУЩЕН · ПОДАЧА ВОССТАНОВЛЕНА',3.0);
-    dialogueCloseEl?.click();
-  }
-  requestMouseLock();
-}
-function drawPumpPuzzle(cursor=null) {
-  if(!wirePuzzle)return;
-  const root=ensurePumpPuzzleUi(),canvas=root.querySelector('canvas'),ctx=canvas.getContext('2d');
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  const pad=34,cellW=(canvas.width-pad*2)/(WIRE_GRID_COLS-1),cellH=(canvas.height-pad*2)/(WIRE_GRID_ROWS-1);
-  ctx.strokeStyle='rgba(205,205,184,.23)';ctx.lineWidth=1.2;
-  for(let c=0;c<WIRE_GRID_COLS;c++){const x=pad+c*cellW;ctx.beginPath();ctx.moveTo(x,pad);ctx.lineTo(x,canvas.height-pad);ctx.stroke();}
-  for(let r=0;r<WIRE_GRID_ROWS;r++){const y=pad+r*cellH;ctx.beginPath();ctx.moveTo(pad,y);ctx.lineTo(canvas.width-pad,y);ctx.stroke();}
-  for(const key of wirePuzzle.blocked){const parts=key.split(',').map(Number),pt=wirePointForCell({c:parts[0],r:parts[1]},canvas);ctx.fillStyle='rgba(40,43,42,.96)';ctx.strokeStyle='#807b6e';ctx.lineWidth=2;ctx.beginPath();ctx.roundRect(pt.x-cellW*.31,pt.y-cellH*.31,cellW*.62,cellH*.62,8);ctx.fill();ctx.stroke();ctx.fillStyle='#4d4b45';ctx.beginPath();ctx.arc(pt.x,pt.y,6,0,Math.PI*2);ctx.fill();}
-  const drawPath=(path,color,alpha=1)=>{
-    if(!path||path.length<1)return;
-    const pts=path.map(c=>wirePointForCell(c,canvas));
-    ctx.globalAlpha=alpha;ctx.lineJoin='round';ctx.lineCap='round';
-    ctx.strokeStyle='rgba(0,0,0,.82)';ctx.lineWidth=16;ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.stroke();
-    ctx.strokeStyle=WIRE_COLORS[color];ctx.lineWidth=10;ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.stroke();
-    ctx.strokeStyle='rgba(255,255,255,.28)';ctx.lineWidth=2;ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y-2):ctx.moveTo(p.x,p.y-2));ctx.stroke();ctx.globalAlpha=1;
-  };
-  for(const [color,path] of wirePuzzle.paths)drawPath(path,color,1);
-  if(wirePuzzle.drag){const temp=[...wirePuzzle.drag.path]; if(cursor){const cell=wireCellFromPoint(cursor,canvas);if(cell&&!(temp[temp.length-1]?.c===cell.c&&temp[temp.length-1]?.r===cell.r))temp.push(cell);}drawPath(temp,wirePuzzle.drag.color,.78);}
-  for(let color=0;color<wirePuzzle.count;color++)for(const cell of [wirePuzzle.starts[color],wirePuzzle.targets[color]]){const p=wirePointForCell(cell,canvas);ctx.fillStyle='#111';ctx.beginPath();ctx.arc(p.x,p.y,19,0,Math.PI*2);ctx.fill();ctx.strokeStyle=WIRE_COLORS[color];ctx.lineWidth=8;ctx.stroke();ctx.fillStyle=WIRE_COLORS[color];ctx.beginPath();ctx.arc(p.x,p.y,7,0,Math.PI*2);ctx.fill();}
-  const status=root.querySelector('.betonWireStatus'); if(status)status.textContent='ПРОВОДОВ: '+wirePuzzle.paths.size+' / '+wirePuzzle.count+(wirePuzzle.mistakes?' · ОШИБОК: '+wirePuzzle.mistakes:'');
-}
-function pumpWireDown(e){
-  if(!wirePuzzle)return;
-  const c=e.currentTarget,cell=wireCellFromPoint(wireCanvasPoint(e,c),c);
-  if(!cell)return;
-  const endpoint=isWireEndpoint(cell);
-  if(!endpoint||endpoint.side!=='start')return;
-  if(wirePuzzle.paths.has(endpoint.color))wirePuzzle.paths.delete(endpoint.color);
-  wirePuzzle.drag={color:endpoint.color,path:[{c:cell.c,r:cell.r}]};
-  try{c.setPointerCapture(e.pointerId)}catch(_){}
-  drawPumpPuzzle();e.preventDefault();
-}
-function pumpWireMove(e){
-  if(!wirePuzzle?.drag)return;
-  const c=e.currentTarget,cell=wireCellFromPoint(wireCanvasPoint(e,c),c);
-  if(!cell)return;
-  const path=wirePuzzle.drag.path,last=path[path.length-1];
-  if(cell.c===last.c&&cell.r===last.r)return;
-  const prev=path[path.length-2];
-  if(prev&&cell.c===prev.c&&cell.r===prev.r){path.pop();drawPumpPuzzle();e.preventDefault();return;}
-  if(Math.abs(cell.c-last.c)+Math.abs(cell.r-last.r)!==1)return;
-  if(path.some(p=>p.c===cell.c&&p.r===cell.r))return;
-  if(isWireCellBlocked(cell,wirePuzzle.drag.color,path))return;
-  path.push({c:cell.c,r:cell.r});drawPumpPuzzle();e.preventDefault();
-}
-function pumpWireUp(e){
-  if(!wirePuzzle?.drag)return;
-  const c=e.currentTarget,drag=wirePuzzle.drag,cell=wireCellFromPoint(wireCanvasPoint(e,c),c);
-  const target=wirePuzzle.targets[drag.color];
-  const ok=cell&&cell.c===target.c&&cell.r===target.r&&drag.path.length>1;
-  if(ok){
-    if(!(drag.path[drag.path.length-1].c===target.c&&drag.path[drag.path.length-1].r===target.r)){
-      const last=drag.path[drag.path.length-1];
-      if(Math.abs(target.c-last.c)+Math.abs(target.r-last.r)===1)drag.path.push({c:target.c,r:target.r});
-      else { wirePuzzle.mistakes++; wirePuzzle.drag=null; drawPumpPuzzle(); e.preventDefault(); return; }
-    }
-    wirePuzzle.paths.set(drag.color,drag.path.map(p=>({c:p.c,r:p.r})));mobileHaptic(12);
-  }else wirePuzzle.mistakes++;
-  wirePuzzle.drag=null;drawPumpPuzzle();
-  if(wirePuzzle.paths.size>=wirePuzzle.count)setTimeout(()=>closePumpWirePuzzle(true),320);
-  e.preventDefault();
-}
 function prepareZoneRandomEvent(zone, index = 0) {
   if (!zone) return;
+  // Every map gets exactly one event. Rotating the random pick by map index
+  // keeps one playthrough varied without making the order predictable.
   const randomIndex = Math.floor(Math.random() * POUR_EVENT_TYPES.length);
   zone.eventType = POUR_EVENT_TYPES[(randomIndex + index) % POUR_EVENT_TYPES.length];
   zone.eventThreshold = THREE.MathUtils.randFloat(.26, .62);
   zone.eventTriggered = false;
 }
 
-POUR_ZONES.forEach((zone,index)=>prepareZoneRandomEvent(zone,index));
 
-function cancelQTEWithoutPenalty(){if(!qteActive)return;qteActive=false;qteLayerEl.classList.remove('active');qteTargetEl.classList.remove('pulse','perfect','badclick');resetQTECooldown();}
-function dropHoseFromEvent(message){hoseHeld=false;playHoseSlipAudio();if(hoseInteraction)hoseInteraction.text=pouring?'E — взять шланг · БЕТОН ЛЬЁТСЯ!':'E — взять шланг';showToast(message,4.2);}
+POUR_ZONES.forEach((zone, index) => prepareZoneRandomEvent(zone, index));
+
+
+function cancelQTEWithoutPenalty() {
+  if (!qteActive) return;
+  qteActive = false;
+  qteLayerEl.classList.remove('active');
+  qteTargetEl.classList.remove('pulse', 'perfect', 'badclick');
+  resetQTECooldown();
+}
+
+
+function dropHoseFromEvent(message) {
+  hoseHeld = false;
+  playHoseSlipAudio();
+  if (hoseInteraction) hoseInteraction.text = pouring
+    ? 'E — взять шланг · БЕТОН ЛЬЁТСЯ!'
+    : 'E — взять шланг';
+  showToast(message, 4.2);
+}
+
 
 function showPourEventAlarm(zone) {
   if (!zone || zone.eventTriggered || pendingPourEvent) return;
-  zone.eventTriggered=true; pendingPourEvent={zone,type:zone.eventType}; eventAlarmTimer=EVENT_ALARM_SECONDS;
-  const copy=POUR_EVENT_COPY[zone.eventType]||POUR_EVENT_COPY.pressure;
-  if(eventAlarmEl){eventAlarmEl.dataset.event=zone.eventType;eventAlarmTitleEl.textContent=copy.title;eventAlarmTextEl.textContent=copy.text;eventAlarmEl.classList.remove('show');void eventAlarmEl.offsetWidth;eventAlarmEl.classList.add('show');}
-  playQTEAppearAudio(); mobileHaptic(35); markPourProgressDirty();
+  zone.eventTriggered = true;
+  pendingPourEvent = { zone, type: zone.eventType };
+  eventAlarmTimer = 1.35;
+  const copy = POUR_EVENT_COPY[zone.eventType] || POUR_EVENT_COPY.pressure;
+  if (eventAlarmEl) {
+    eventAlarmEl.dataset.event = zone.eventType;
+    eventAlarmTitleEl.textContent = copy.title;
+    eventAlarmTextEl.textContent = copy.text;
+    eventAlarmEl.classList.remove('show');
+    void eventAlarmEl.offsetWidth;
+    eventAlarmEl.classList.add('show');
+  }
+  playQTEAppearAudio();
+  mobileHaptic(35);
+  markPourProgressDirty();
 }
+
 
 function executePendingPourEvent() {
-  const event=pendingPourEvent; pendingPourEvent=null; eventAlarmTimer=0; eventAlarmEl?.classList.remove('show'); pressurePulseMesh.visible=false;
-  if(!event)return;
-  if(event.type==='pressure'){
-    // Turning the pump off during the 1.0 s warning is a full counter.
-    if(!pouring){pressureSpikePending=false;pressureSpikeVolumeM3=0;window.__betonEventResult='ИДЕАЛЬНО';showToast('ДАВЛЕНИЕ СБРОШЕНО · ПОДАЧА БЫЛА ВЫКЛЮЧЕНА',2.2);return;}
-    const ratio=zoneVolume(event.zone)/Math.max(.000001,event.zone.targetVolume);
-    const currentPct=ratio*100;
-    // Aim the uncontrolled slug at roughly 103-105% total. Therefore at 95%
-    // it adds ~8-10%, while at 85% it adds ~18-20%. Minimum slug is 8%.
-    const dangerTargetPct=THREE.MathUtils.randFloat(103,105);
-    const spikePct=THREE.MathUtils.clamp(dangerTargetPct-currentPct,8,22);
-    pressureSpikeVolumeM3=event.zone.targetVolume*(spikePct/100);
-    pressureSpikePending=true;
-    window.__betonEventResult='ЧАСТИЧНО';
-    showToast('ПРОБКА ДОШЛА ДО КОНЦА — ОТВЕДИ ШЛАНГ!',2.2);
+  const event = pendingPourEvent;
+  pendingPourEvent = null;
+  eventAlarmTimer = 0;
+  eventAlarmEl?.classList.remove('show');
+  if (!event) return;
+
+
+  if (event.type === 'pressure') {
+    pressureSpikePending = true;
+    showToast('СКАЧОК ДАВЛЕНИЯ — ТЯЖЁЛАЯ ПЛЮХА!', 3.4);
     return;
   }
-  if(event.type==='hose'){
-    cancelQTEWithoutPenalty(); hoseRecoveryNeeded=true; hoseWhipClock=0;
-    dropHoseFromEvent('ШЛАНГ ВЫРВАЛО — ОН БЬЁТСЯ И ПРОДОЛЖАЕТ ЛИТЬ!');
+
+
+  if (event.type === 'hose') {
+    cancelQTEWithoutPenalty();
+    dropHoseFromEvent('ШЛАНГ ВЫСКОЛЬЗНУЛ — ПОДБЕРИ ЕГО! БЕТОН ПРОДОЛЖАЕТ ЛИТЬСЯ');
     return;
   }
-  if(event.type==='pump'){
-    cancelQTEWithoutPenalty(); pumpBroken=true; pouring=false;
-    if(hoseInteraction)hoseInteraction.text='НАСОС СЛОМАН · ИДИ К ДЖОРДЖУ';
-    // Pump alert is a notification AFTER the failure, not a reaction countdown.
-    if(eventAlarmEl){
-      eventAlarmEl.dataset.event='pump';
-      eventAlarmTitleEl.textContent=POUR_EVENT_COPY.pump.title;
-      eventAlarmTextEl.textContent=POUR_EVENT_COPY.pump.text;
-      eventAlarmEl.classList.remove('show'); void eventAlarmEl.offsetWidth; eventAlarmEl.classList.add('show');
-      setTimeout(()=>eventAlarmEl?.classList.remove('show'),1450);
-    }
-    playQTEAppearAudio(); mobileHaptic(28);
-    showToast('НАСОС ВСТАЛ · У ДЖОРДЖА ОТКРОЙ ЩИТОК',4.0); markPourProgressDirty(); return;
+
+
+  if (event.type === 'pump') {
+    cancelQTEWithoutPenalty();
+    pumpBroken = true;
+    pouring = false;
+    if (hoseInteraction) hoseInteraction.text = 'НАСОС СЛОМАН · ИДИ К ДЖОРДЖУ';
+    showToast('НАСОС СЛОМАН · ИДИ К ДЖОРДЖУ', 5.2);
+    markPourProgressDirty();
+    return;
   }
-  if(event.type==='eye'){startEyeWipe();showToast('БЕТОН В ГЛАЗ — СМАХНИ ЕГО СЛЕВА НАПРАВО',2.0);}
+
+
+  if (event.type === 'eye') {
+    blindnessTimer = 2.0;
+    blindnessOverlayEl?.classList.add('active');
+    showToast('КАПЛЯ БЕТОНА ПОПАЛА В ГЛАЗ', 2.2);
+  }
 }
+
 
 function updatePourEvents(dt) {
-  if(eventAlarmTimer>0){eventAlarmTimer-=dt;updatePressureHosePulse();if(eventAlarmTimer<=0)executePendingPourEvent();}
-  else pressurePulseMesh.visible=false;
-
-  updateHoseControlQTE(dt);
-  if(hoseRecoveryNeeded && !hoseHeld && pouring && hosePoints.length){
-    hoseWhipClock+=dt;
-    const tip=hosePoints[HOSE_SEGMENTS];
-    const prev=hosePrev[HOSE_SEGMENTS];
-    const amp=.055+Math.min(.10,hoseWhipClock*.012);
-    tip.x+=Math.sin(hoseWhipClock*16.7)*amp;
-    tip.z+=Math.cos(hoseWhipClock*13.1)*amp;
-    if(prev){prev.x-=Math.sin(hoseWhipClock*11.3)*amp*.6;prev.z-=Math.cos(hoseWhipClock*15.1)*amp*.6;}
+  if (eventAlarmTimer > 0) {
+    eventAlarmTimer -= dt;
+    if (eventAlarmTimer <= 0) executePendingPourEvent();
   }
 
-  if(blindnessTimer>0){blindnessTimer=Math.max(0,blindnessTimer-dt);if(blindnessTimer<=0&&eyeWipeActive)finishEyeWipe(true);}
-  if(pendingPourEvent||pumpBroken||qteActive||!pouring||jobState!=='active')return;
-  const zone=activePourZone(); if(!zone||zone.eventTriggered)return;
-  const ratio=zoneVolume(zone)/Math.max(.000001,zone.targetVolume);
-  if(ratio>=zone.eventThreshold){
-    if(zone.eventType==='pressure') showPourEventAlarm(zone);
-    else {
-      zone.eventTriggered=true;
-      pendingPourEvent={zone,type:zone.eventType};
-      markPourProgressDirty();
-      executePendingPourEvent();
-    }
+
+  if (blindnessTimer > 0) {
+    blindnessTimer = Math.max(0, blindnessTimer - dt);
+    if (blindnessTimer <= 0) blindnessOverlayEl?.classList.remove('active');
   }
+
+
+  if (
+    pendingPourEvent || pumpBroken || qteActive || !pouring ||
+    jobState !== 'active'
+  ) return;
+
+
+  const zone = activePourZone();
+  if (!zone || zone.eventTriggered) return;
+  const ratio = zoneVolume(zone) / Math.max(.000001, zone.targetVolume);
+  if (ratio >= zone.eventThreshold) showPourEventAlarm(zone);
 }
+
 
 // Deliberately simple material ladder requested for settlement:
 // S/diamond = a HUD-clean 100.0%, A/gold <=105%, B/iron <=115%,
@@ -4049,6 +3343,7 @@ const POUR_GRADE_RULES = [
 ];
 const BASE_ZONE_REWARD = 500;
 
+
 function zoneOverpourPercent(zone) {
   if (!zone) return 0;
   // Use the same live physical volume that drives the HUD. The old hidden
@@ -4056,6 +3351,7 @@ function zoneOverpourPercent(zone) {
   // capped edge cell, so a visible 100.1% slab could incorrectly receive F.
   return Math.max(0, zoneVolume(zone) / Math.max(.000001, zone.targetVolume) * 100 - 100);
 }
+
 
 function gradePourZone(zone) {
   const overpour = zoneOverpourPercent(zone);
@@ -4066,6 +3362,8 @@ function gradePourZone(zone) {
     reward: Math.round(BASE_ZONE_REWARD * rule.multiplier),
   };
 }
+
+
 
 
 // -----------------------------
@@ -4083,6 +3381,7 @@ const spillGroup = new THREE.Group();
 spillGroup.name = 'PERSISTENT_SURFACE_CONCRETE_SPILLS';
 scene.add(spillGroup);
 
+
 // Shared cheap hemisphere. Each clump is scaled into a wide, low wet mound.
 const spillGeom = new THREE.SphereGeometry(
   1, 18, 8,
@@ -4096,6 +3395,7 @@ const spillMat = registerWetConcreteMaterial(new THREE.MeshStandardMaterial({
   side: THREE.DoubleSide
 }), .022);
 let spillSerial = 1;
+
 
 function spillShapeFromVolume(volume, spread = 1) {
   // Volume-preserving half ellipsoid. Fresh plops begin compact,
@@ -4118,8 +3418,10 @@ function spillShapeFromVolume(volume, spread = 1) {
   return { radius: r, height: h };
 }
 
+
 function refreshSpillClump(p) {
   if (!p || !p.mesh) return;
+
 
   if (p.volume <= .001) {
     p.volume = 0;
@@ -4127,12 +3429,15 @@ function refreshSpillClump(p) {
     return;
   }
 
+
   const shape = spillShapeFromVolume(p.volume, p.spread || 1);
   p.radius = shape.radius;
   p.height = shape.height;
 
+
   const speed = Math.hypot(p.vx || 0, p.vz || 0);
   const smear = THREE.MathUtils.clamp(speed * .28, 0, .28);
+
 
   p.mesh.visible = true;
   p.mesh.position.set(
@@ -4148,11 +3453,13 @@ function refreshSpillClump(p) {
   );
 }
 
+
 function recycleSpillClump(x, z, volume, impactVX, impactVZ, impactSpeed) {
   let victim = spillClumps[0];
   for (const p of spillClumps) {
     if ((p.volume || 0) < (victim.volume || 0)) victim = p;
   }
+
 
   // Preserve the victim's concrete by folding it into its nearest neighbour,
   // then reuse the already-uploaded Mesh for the new impact point.
@@ -4181,6 +3488,7 @@ function recycleSpillClump(x, z, volume, impactVX, impactVZ, impactSpeed) {
     }
   }
 
+
   victim.x = x;
   victim.z = z;
   victim.volume = Math.max(0, volume);
@@ -4195,6 +3503,7 @@ function recycleSpillClump(x, z, volume, impactVX, impactVZ, impactSpeed) {
   return victim;
 }
 
+
 function createSpillClump(x, z, volume, impactVX = 0, impactVZ = 0, impactSpeed = 0) {
   if (spillClumps.length >= SPILL_CLUMP_MAX) {
     return recycleSpillClump(x, z, volume, impactVX, impactVZ, impactSpeed);
@@ -4204,6 +3513,7 @@ function createSpillClump(x, z, volume, impactVX = 0, impactVZ = 0, impactSpeed 
   mesh.castShadow = false;
   mesh.receiveShadow = true;
   spillGroup.add(mesh);
+
 
   const p = {
     mesh,
@@ -4222,6 +3532,7 @@ function createSpillClump(x, z, volume, impactVX = 0, impactVZ = 0, impactSpeed 
   return p;
 }
 
+
 function deleteDeadSpills() {
   for (let i = spillClumps.length - 1; i >= 0; i--) {
     const p = spillClumps[i];
@@ -4231,11 +3542,13 @@ function deleteDeadSpills() {
   }
 }
 
+
 function surfaceSpillVolume() {
   let v = 0;
   for (const p of spillClumps) v += Math.max(0, p.volume);
   return v;
 }
+
 
 function addSurfaceSpillVolumeAt(
   x, z, volumeM3,
@@ -4247,15 +3560,19 @@ function addSurfaceSpillVolumeAt(
   if (volumeM3 <= 0) return false;
   if (!insideSlab(x, z) || zoneAt(x, z)) return false;
 
+
   let best = null;
   let bestD2 = Infinity;
+
 
   for (const p of spillClumps) {
     if (p === exclude || p.volume <= .001) continue;
 
+
     const dx = p.x - x;
     const dz = p.z - z;
     const d2 = dx * dx + dz * dz;
+
 
     // Don't let one infinite blob eat the entire slab.
     // Same-location pouring merges until it is a sizeable mound,
@@ -4264,6 +3581,7 @@ function addSurfaceSpillVolumeAt(
       .32 + p.radius * .32,
       .38, .72
     );
+
 
     if (
       d2 <= mergeR * mergeR &&
@@ -4275,14 +3593,17 @@ function addSurfaceSpillVolumeAt(
     }
   }
 
+
   if (!best) {
     createSpillClump(x, z, volumeM3, impactVX, impactVZ, impactSpeed);
     markPourProgressDirty();
     return true;
   }
 
+
   const oldV = best.volume;
   const newV = oldV + volumeM3;
+
 
   // Weighted centre lets a moving hose smear the spot instead of leaving
   // perfectly static circular decals.
@@ -4301,8 +3622,10 @@ function addSurfaceSpillVolumeAt(
   return true;
 }
 
+
 function spillHeightAt(x, z) {
   let h = 0;
+
 
   for (const p of spillClumps) {
     if (p.volume <= .001) continue;
@@ -4312,12 +3635,14 @@ function spillHeightAt(x, z) {
     const r2 = p.radius * p.radius;
     if (d2 >= r2) continue;
 
+
     // Hemisphere profile.
     const local = p.height * Math.sqrt(Math.max(0, 1 - d2 / r2));
     if (local > h) h = local;
   }
   return h;
 }
+
 
 function clearSurfaceSpills() {
   for (const p of spillClumps) {
@@ -4327,16 +3652,22 @@ function clearSurfaceSpills() {
 }
 
 
+
+
 function relaxSurfaceSpills(dt) {
   if (jobState !== 'active' || !spillClumps.length) return;
 
+
   let changed = false;
+
 
   for (const p of spillClumps) {
     if (p.volume <= .001) continue;
 
+
     p.age = (p.age || 0) + dt;
     p.mobility = Math.max(.18, (p.mobility || .7) * Math.exp(-dt / 38));
+
 
     const drag = Math.exp(
       -THREE.MathUtils.lerp(3.2, 7.8, 1 - p.mobility) * dt
@@ -4344,9 +3675,11 @@ function relaxSurfaceSpills(dt) {
     p.vx *= drag;
     p.vz *= drag;
 
+
     const nx = p.x + p.vx * dt;
     const nz = p.z + p.vz * dt;
     const targetZone = zoneAt(nx, nz);
+
 
     if (targetZone && targetZone === activePourZone()) {
       const moved = Math.min(
@@ -4373,6 +3706,7 @@ function relaxSurfaceSpills(dt) {
       p.vz *= -.06;
     }
 
+
     // Fresh concrete quickly loses height and gains footprint.
     const targetSpread = THREE.MathUtils.clamp(
       1.05 + Math.sqrt(p.volume) * .18,
@@ -4384,24 +3718,30 @@ function relaxSurfaceSpills(dt) {
       1 - Math.exp(-THREE.MathUtils.lerp(.45, 1.65, p.mobility) * dt)
     );
 
+
     refreshSpillClump(p);
   }
+
 
   // Merge only strongly overlapping neighboring plops.
   for (let i = 0; i < spillClumps.length; i++) {
     const a = spillClumps[i];
     if (a.volume <= .001) continue;
 
+
     for (let j = i + 1; j < spillClumps.length; j++) {
       const b = spillClumps[j];
       if (b.volume <= .001) continue;
+
 
       const dx = b.x - a.x;
       const dz = b.z - a.z;
       const d2 = dx * dx + dz * dz;
       const mergeD = (a.radius + b.radius) * .26;
 
+
       if (d2 > mergeD * mergeD) continue;
+
 
       const av = a.volume, bv = b.volume, total = av + bv;
       a.x = (a.x * av + b.x * bv) / total;
@@ -4418,9 +3758,11 @@ function relaxSurfaceSpills(dt) {
     }
   }
 
+
   deleteDeadSpills();
   if (changed) markPourProgressDirty();
 }
+
 
 // -----------------------------
 // 3-LEVEL LOCAL POUR MOUNDS
@@ -4434,10 +3776,12 @@ for (const L of POUR_PILE_LAYERS) {
   L.capacity = Math.PI * L.maxRadius * L.maxRadius * L.height * .90;
 }
 
+
 function getActivePourPile(zone, x, z) {
   const now = performance.now() * .001;
   let best = null;
   let bestD2 = .65 * .65;
+
 
   for (const p of zone.piles) {
     if (now - p.lastTime > 2.2) continue;
@@ -4448,6 +3792,7 @@ function getActivePourPile(zone, x, z) {
       best = p;
     }
   }
+
 
   if (!best) {
     best = { x, z, volume: 0, lastTime: now };
@@ -4460,16 +3805,20 @@ function getActivePourPile(zone, x, z) {
   return best;
 }
 
+
 function depositDiskTowardLevel(zone, cx, cz, radius, targetLevel, amountM3) {
   const candidates = [];
   const r2 = radius * radius;
+
 
   const minC = Math.max(0, Math.floor((cx - radius - zone.minX) / zone.cellX));
   const maxC = Math.min(zone.cols - 1, Math.floor((cx + radius - zone.minX) / zone.cellX));
   const minR = Math.max(0, Math.floor((cz - radius - zone.minZ) / zone.cellZ));
   const maxR = Math.min(zone.rows - 1, Math.floor((cz + radius - zone.minZ) / zone.cellZ));
 
+
   let deficitVolume = 0;
+
 
   for (let r = minR; r <= maxR; r++) {
     for (let c = minC; c <= maxC; c++) {
@@ -4478,19 +3827,24 @@ function depositDiskTowardLevel(zone, cx, cz, radius, targetLevel, amountM3) {
       const dx = x - cx, dz = z - cz;
       if (dx * dx + dz * dz > r2) continue;
 
+
       const idx = zoneIndex(zone, c, r);
       const deficitH = Math.max(0, targetLevel - zone.fill[idx]);
       if (deficitH <= 1e-7) continue;
+
 
       candidates.push([idx, deficitH]);
       deficitVolume += deficitH * zone.cellArea;
     }
   }
 
+
   if (!candidates.length || deficitVolume <= 1e-9) return 0;
+
 
   const used = Math.min(amountM3, deficitVolume);
   const fraction = used / deficitVolume;
+
 
   for (const [idx, deficitH] of candidates) {
     zone.fill[idx] = Math.min(
@@ -4500,6 +3854,7 @@ function depositDiskTowardLevel(zone, cx, cz, radius, targetLevel, amountM3) {
   }
   return used;
 }
+
 
 function depositConcreteImpact(
   zone,
@@ -4511,11 +3866,13 @@ function depositConcreteImpact(
 ) {
   if (amountM3 <= 0) return false;
 
+
   const radius = THREE.MathUtils.clamp(
     .20 + Math.cbrt(Math.max(.00001, amountM3)) * .30 + impactSpeed * .008,
     .20, .40
   );
   const r2 = radius * radius;
+
 
   // Keep the numerical impact kernel inside the recess. Previously a circle
   // centred against a wall was cut in half and the full volume was normalized
@@ -4525,13 +3882,16 @@ function depositConcreteImpact(
   const kernelX = THREE.MathUtils.clamp(cx, zone.minX + edgeInsetX, zone.maxX - edgeInsetX);
   const kernelZ = THREE.MathUtils.clamp(cz, zone.minZ + edgeInsetZ, zone.maxZ - edgeInsetZ);
 
+
   const minC = Math.max(0, Math.floor((kernelX - radius - zone.minX) / zone.cellX));
   const maxC = Math.min(zone.cols - 1, Math.floor((kernelX + radius - zone.minX) / zone.cellX));
   const minR = Math.max(0, Math.floor((kernelZ - radius - zone.minZ) / zone.cellZ));
   const maxR = Math.min(zone.rows - 1, Math.floor((kernelZ + radius - zone.minZ) / zone.cellZ));
 
+
   const cells = [];
   let weightSum = 0;
+
 
   for (let r = minR; r <= maxR; r++) {
     for (let c = minC; c <= maxC; c++) {
@@ -4541,6 +3901,7 @@ function depositConcreteImpact(
       const d2 = dx * dx + dz * dz;
       if (d2 > r2) continue;
 
+
       const q = 1 - d2 / r2;
       const w = .10 + q * q * 2.25;
       const idx = zoneIndex(zone, c, r);
@@ -4549,10 +3910,12 @@ function depositConcreteImpact(
     }
   }
 
+
   if (!cells.length) {
     cells.push([zoneCellAt(zone, kernelX, kernelZ).index, 1]);
     weightSum = 1;
   }
+
 
   for (const [idx, w] of cells) {
     const cellVolume = amountM3 * (w / weightSum);
@@ -4560,6 +3923,7 @@ function depositConcreteImpact(
       zone.maxH,
       zone.fill[idx] + cellVolume / zone.cellArea
     );
+
 
     zone.mobility[idx] = Math.max(
       zone.mobility[idx],
@@ -4569,13 +3933,16 @@ function depositConcreteImpact(
     // coarse wet look until the player works that cell again.
     zone.rakeTouched[idx] = 0;
 
+
     zone.velX[idx] += THREE.MathUtils.clamp(impactVX * .045, -.28, .28);
     zone.velZ[idx] += THREE.MathUtils.clamp(impactVZ * .045, -.28, .28);
   }
 
+
   markZoneDirty(zone);
   return true;
 }
+
 
 function addConcreteVolumeAt(
   x, z, volumeM3,
@@ -4586,9 +3953,11 @@ function addConcreteVolumeAt(
 ) {
   if (jobState !== 'active' || volumeM3 <= 0) return false;
 
+
   let zone = zoneAt(x, z);
   let depositX = x;
   let depositZ = z;
+
 
   // A ray/particle landing on the inner lip should feed the currently active
   // recess, not create a thin spill exactly along its wall.
@@ -4601,6 +3970,7 @@ function addConcreteVolumeAt(
       depositZ = THREE.MathUtils.clamp(z, zone.minZ + zone.cellZ * .35, zone.maxZ - zone.cellZ * .35);
     }
   }
+
 
   // Keep the existing sequential job design.
   if (zone) {
@@ -4616,6 +3986,7 @@ function addConcreteVolumeAt(
     }
   }
 
+
   if (!zone) {
     if (insideSlab(x, z)) {
       return addSurfaceSpillVolumeAt(
@@ -4628,7 +3999,9 @@ function addConcreteVolumeAt(
     return false;
   }
 
+
   if (fromHose) zone.hosePouredVolume += volumeM3;
+
 
   const changed = depositConcreteImpact(
     zone,
@@ -4639,12 +4012,14 @@ function addConcreteVolumeAt(
     impactSpeed
   );
 
+
   if (changed) {
     markPourProgressDirty();
     evaluateJob();
   }
   return changed;
 }
+
 
 // -----------------------------
 // VISCOUS SHALLOW-FLOW PHYSICS
@@ -4660,13 +4035,16 @@ function relaxZoneConcrete(zone, step) {
   const delta = zone.flowDelta;
   const budget = zone.flowBudget;
 
+
   delta.fill(0);
+
 
   // A) gravity slope -> persistent horizontal momentum.
   for (let r = 0; r < zone.rows; r++) {
     for (let c = 0; c < zone.cols; c++) {
       const i = zoneIndex(zone, c, r);
       const h = fill[i];
+
 
       if (h <= .00035) {
         vx[i] *= .35;
@@ -4676,20 +4054,25 @@ function relaxZoneConcrete(zone, step) {
         continue;
       }
 
+
       mob[i] = Math.max(.14, mob[i] * Math.exp(-step / 46));
+
 
       const iL = c > 0 ? zoneIndex(zone, c - 1, r) : i;
       const iR = c + 1 < zone.cols ? zoneIndex(zone, c + 1, r) : i;
       const iD = r > 0 ? zoneIndex(zone, c, r - 1) : i;
       const iU = r + 1 < zone.rows ? zoneIndex(zone, c, r + 1) : i;
 
+
       const gx = (fill[iR] - fill[iL]) /
         ((c > 0 && c + 1 < zone.cols ? 2 : 1) * zone.cellX);
       const gz = (fill[iU] - fill[iD]) /
         ((r > 0 && r + 1 < zone.rows ? 2 : 1) * zone.cellZ);
 
+
       const slope = Math.hypot(gx, gz);
       const yieldSlope = THREE.MathUtils.lerp(.125, .045, mob[i]);
+
 
       if (slope > yieldSlope) {
         const yieldFactor = (slope - yieldSlope) / Math.max(slope, 1e-6);
@@ -4698,10 +4081,12 @@ function relaxZoneConcrete(zone, step) {
         vz[i] += -gz * accel * yieldFactor * step;
       }
 
+
       const viscosity = THREE.MathUtils.lerp(16.0, 6.0, mob[i]);
       const damp = Math.exp(-viscosity * step);
       vx[i] *= damp;
       vz[i] *= damp;
+
 
       const maxSpeed = THREE.MathUtils.lerp(.08, .35, mob[i]);
       const speed = Math.hypot(vx[i], vz[i]);
@@ -4711,9 +4096,11 @@ function relaxZoneConcrete(zone, step) {
         vz[i] *= s;
       }
 
+
       budget[i] = h * .32;
     }
   }
+
 
   // B) directional advection. Mass is conserved.
   for (let r = 0; r < zone.rows; r++) {
@@ -4722,14 +4109,18 @@ function relaxZoneConcrete(zone, step) {
       const h = fill[i];
       if (h <= .00035 || budget[i] <= 0) continue;
 
+
       let fx = Math.abs(vx[i]) * step / zone.cellX;
       let fz = Math.abs(vz[i]) * step / zone.cellZ;
+
 
       if ((vx[i] < 0 && c === 0) || (vx[i] > 0 && c === zone.cols - 1)) fx = 0;
       if ((vz[i] < 0 && r === 0) || (vz[i] > 0 && r === zone.rows - 1)) fz = 0;
 
+
       const raw = fx + fz;
       if (raw <= 1e-7) continue;
+
 
       const moveH = Math.min(
         budget[i],
@@ -4737,8 +4128,10 @@ function relaxZoneConcrete(zone, step) {
       );
       if (moveH <= 1e-8) continue;
 
+
       budget[i] -= moveH;
       delta[i] -= moveH;
+
 
       if (fx > 0) {
         const ni = zoneIndex(zone, c + Math.sign(vx[i]), r);
@@ -4753,6 +4146,7 @@ function relaxZoneConcrete(zone, step) {
     }
   }
 
+
   // C) yield-limited creep between unique neighbour pairs.
   const dirs = [
     [1, 0, 1.0],
@@ -4761,13 +4155,16 @@ function relaxZoneConcrete(zone, step) {
     [-1, 1, .707],
   ];
 
+
   for (let r = 0; r < zone.rows; r++) {
     for (let c = 0; c < zone.cols; c++) {
       const i = zoneIndex(zone, c, r);
 
+
       for (const [dc, dr, diag] of dirs) {
         const cc = c + dc, rr = r + dr;
         if (cc < 0 || cc >= zone.cols || rr < 0 || rr >= zone.rows) continue;
+
 
         const j = zoneIndex(zone, cc, rr);
         const hi = fill[i] + delta[i];
@@ -4776,20 +4173,24 @@ function relaxZoneConcrete(zone, step) {
         const absDiff = Math.abs(diff);
         if (absDiff <= 1e-7) continue;
 
+
         const pairMob = Math.max(.12, (mob[i] + mob[j]) * .5);
         const yieldH = THREE.MathUtils.lerp(.032, .012, pairMob) / diag;
         const excess = absDiff - yieldH;
         if (excess <= 0) continue;
 
+
         const donor = diff > 0 ? i : j;
         const recv = diff > 0 ? j : i;
         if (budget[donor] <= 1e-8) continue;
+
 
         const moveH = Math.min(
           budget[donor],
           excess * THREE.MathUtils.lerp(.16, .52, pairMob) * diag * step
         );
         if (moveH <= 1e-8) continue;
+
 
         budget[donor] -= moveH;
         delta[donor] -= moveH;
@@ -4799,6 +4200,7 @@ function relaxZoneConcrete(zone, step) {
     }
   }
 
+
   let changed = false;
   for (let i = 0; i < fill.length; i++) {
     if (Math.abs(delta[i]) <= 1e-9) continue;
@@ -4806,31 +4208,39 @@ function relaxZoneConcrete(zone, step) {
     changed = true;
   }
 
+
   if (changed) {
     markZoneDirty(zone);
     markPourProgressDirty();
   }
 }
 
+
 const CONCRETE_SOLVER_DT = 1 / 30;
+
 
 function relaxConcrete(dt) {
   if (jobState !== 'active') return;
 
+
   concreteRelaxTimer += Math.min(dt, .10);
   let loops = 0;
 
+
   while (concreteRelaxTimer >= CONCRETE_SOLVER_DT && loops < 4) {
     concreteRelaxTimer -= CONCRETE_SOLVER_DT;
+
 
     for (const zone of POUR_ZONES) {
       relaxZoneConcrete(zone, CONCRETE_SOLVER_DT);
     }
     relaxSurfaceSpills(CONCRETE_SOLVER_DT);
 
+
     loops++;
   }
 }
+
 
 // Falling blobs are short-lived stream visuals. Persistent volume lives either in a bay heightfield or in surface spill clumps.
 const BLOB_MAX = TOUCH_DEVICE ? 48 : 120;
@@ -4840,6 +4250,7 @@ const blobs = [];
 const blobGroup = new THREE.Group();
 blobGroup.name = 'CONCRETE_PHYSICS_BLOBS';
 scene.add(blobGroup);
+
 
 for (let i = 0; i < BLOB_MAX; i++) {
   const mesh = new THREE.Mesh(blobGeom, blobMat);
@@ -4857,6 +4268,7 @@ for (let i = 0; i < BLOB_MAX; i++) {
 }
 let blobCursor = 0;
 let blobSpawnAccumulator = 0;
+
 
 // Lightweight pooled hose splashes. They are purely visual and never allocate
 // during gameplay, which keeps repeated pouring safe on iPhone Safari.
@@ -4880,6 +4292,7 @@ for (let i = 0; i < HOSE_SPLASH_MAX; i++) {
 }
 let hoseSplashCursor = 0;
 let hoseSplashAccumulator = 0;
+
 
 // Short-lived flat wet spots sell the impact of droplets without becoming
 // permanent decals or adding collision. Every mesh is pooled up front.
@@ -4908,6 +4321,7 @@ for (let i = 0; i < SPLASH_SPOT_MAX; i++) {
   splashSpots.push({ mesh, age: 0, life: 2, baseOpacity: .16 });
 }
 let splashSpotCursor = 0;
+
 
 // Expanding surface ripples make the hose impact read as a heavy viscous
 // liquid. They are flat, pooled and collision-free, so the effect is cheap on
@@ -4938,6 +4352,7 @@ for (let i = 0; i < IMPACT_RIPPLE_MAX; i++) {
 }
 let impactRippleCursor = 0;
 
+
 function spawnConcreteImpactRipple(x, z, surfaceY, intensity) {
   const ripple = impactRipples[impactRippleCursor++ % impactRipples.length];
   ripple.age = 0;
@@ -4949,6 +4364,7 @@ function spawnConcreteImpactRipple(x, z, surfaceY, intensity) {
   ripple.mesh.scale.setScalar(.055 * ripple.intensity);
   ripple.mesh.material.opacity = .26;
 }
+
 
 function spawnWetSplashSpot(x, z, surfaceY, intensity) {
   const spot = splashSpots[splashSpotCursor++ % splashSpots.length];
@@ -4966,6 +4382,7 @@ function spawnWetSplashSpot(x, z, surfaceY, intensity) {
   const radius = THREE.MathUtils.randFloat(.075, .16) * Math.max(.8, intensity);
   spot.mesh.scale.set(radius * THREE.MathUtils.randFloat(.75, 1.35), radius, radius);
 }
+
 
 function spawnHoseSplashBurst(x, z, zone, intensity = 1) {
   const surfaceY = zone
@@ -4991,6 +4408,7 @@ function spawnHoseSplashBurst(x, z, zone, intensity = 1) {
   spawnConcreteImpactRipple(x, z, surfaceY, intensity);
 }
 
+
 function updateHoseSplashes(dt) {
   for (const p of hoseSplashes) {
     if (!p.mesh.visible) continue;
@@ -5004,6 +4422,7 @@ function updateHoseSplashes(dt) {
     }
   }
 
+
   for (const spot of splashSpots) {
     if (!spot.mesh.visible) continue;
     spot.age += dt;
@@ -5015,6 +4434,7 @@ function updateHoseSplashes(dt) {
     }
     spot.mesh.material.opacity = spot.baseOpacity * lifeLeft * lifeLeft;
   }
+
 
   for (const ripple of impactRipples) {
     if (!ripple.mesh.visible) continue;
@@ -5030,6 +4450,7 @@ function updateHoseSplashes(dt) {
     ripple.mesh.material.opacity = .26 * Math.pow(1 - t, 1.7);
   }
 }
+
 
 // Pooled rake grooves sit a few millimetres above the wet heightfield and are
 // recycled after several seconds. They make each real sweep visible without
@@ -5066,6 +4487,7 @@ const rakeMarkFlatQuat = new THREE.Quaternion().setFromUnitVectors(
 );
 const rakeMarkYawQuat = new THREE.Quaternion();
 
+
 function spawnRakeMarks(px, pz, dirX, dirZ) {
   const zone = zoneAt(px, pz);
   if (!zone) return;
@@ -5091,6 +4513,7 @@ function spawnRakeMarks(px, pz, dirX, dirZ) {
   }
 }
 
+
 function updateRakeMarks(dt) {
   rakeMarkCooldown = Math.max(0, rakeMarkCooldown - dt);
   for (const mark of rakeMarks) {
@@ -5100,11 +4523,13 @@ function updateRakeMarks(dt) {
   }
 }
 
+
 const pourTipPrevSafe = new THREE.Vector3();
 const pourTipVelSafe = new THREE.Vector3();
 const pourOutletDirSafe = new THREE.Vector3();
 const pourVisualVelSafe = new THREE.Vector3();
 let pourTipPrevSafeValid = false;
+
 
 function spawnBlob(pos, burst = false, inheritedVel = null, radius = .145) {
   const b = blobs[blobCursor++ % BLOB_MAX];
@@ -5125,9 +4550,11 @@ function spawnBlob(pos, burst = false, inheritedVel = null, radius = .145) {
 function updateBlobs(dt) {
   const g = 7.25;
 
+
   for (const b of blobs) {
     if (!b.active) continue;
     b.age += dt;
+
 
     const x = b.mesh.position.x;
     const z = b.mesh.position.z;
@@ -5136,12 +4563,15 @@ function updateBlobs(dt) {
       ? blobZone.bottomY + getFillHeightAt(x, z)
       : groundHeightAt(x, z);
 
+
     if (!b.settled) {
       b.vel.y -= g * dt;
       b.mesh.position.addScaledVector(b.vel, dt);
 
+
       // Slight penetration on impact already makes the blob feel heavy/wet.
       const impactY = surfaceY + b.radius * .54;
+
 
       if (b.mesh.position.y <= impactY) {
         b.mesh.position.y = impactY;
@@ -5153,16 +4583,19 @@ function updateBlobs(dt) {
       }
     }
 
+
     if (b.settled) {
       // 0.25-0.35 sec wet splat: widen rapidly while being swallowed by the
       // continuous surface. It never remains as a marble sitting on top.
       const settleAge = Math.max(0, b.age);
       const mergeT = THREE.MathUtils.clamp((settleAge - .05) / .32, 0, 1);
 
+
       const targetXZ = (b.radius / .15) * THREE.MathUtils.lerp(1.0, 1.75, mergeT);
       b.mesh.scale.x = THREE.MathUtils.damp(b.mesh.scale.x, targetXZ, 14, dt);
       b.mesh.scale.z = THREE.MathUtils.damp(b.mesh.scale.z, targetXZ, 14, dt);
       b.mesh.scale.y = THREE.MathUtils.damp(b.mesh.scale.y, .10, 16, dt);
+
 
       // Track the live heightfield and sink below it during the merge.
       const targetY = surfaceY - b.radius * THREE.MathUtils.lerp(.05, .55, mergeT);
@@ -5173,11 +4606,13 @@ function updateBlobs(dt) {
         dt
       );
 
+
       if (mergeT >= .98 || b.age > .55) {
         b.active = false;
         b.mesh.visible = false;
       }
     }
+
 
     // Safety cleanup for blobs that miss the pour area.
     if (b.age > 2.8) {
@@ -5186,6 +4621,7 @@ function updateBlobs(dt) {
     }
   }
 }
+
 
 function setCylinderBetween(mesh, a, b) {
   hoseTmpDir.copy(b).sub(a);
@@ -5196,6 +4632,8 @@ function setCylinderBetween(mesh, a, b) {
   mesh.quaternion.setFromUnitVectors(Y_AXIS, hoseTmpDir.normalize());
   mesh.scale.set(1, len, 1);
 }
+
+
 
 
 // -----------------------------
@@ -5213,6 +4651,7 @@ let rakeStrokeTimer = 0;
 let rakeBob = 0;
 let rakeAnimClock = 0;
 
+
 // Continuous sweep state. Holding LMB engages the tool; movement of the
 // work point across the bay determines what is actually levelled.
 let rakeSweepAccumulator = 0;
@@ -5223,6 +4662,7 @@ const rakeSweepPrevPoint = new THREE.Vector3();
 const rakeSweepNowPoint = new THREE.Vector3();
 const rakeSweepDir = new THREE.Vector3();
 
+
 // v51.3: stable lower-right FPS framing.
 // v51.5: rake head stays forward over the work surface; handle returns
 // toward the player in the lower-right corner.
@@ -5230,13 +4670,16 @@ const RAKE_VM_BASE_POS = new THREE.Vector3(.72, -.58, -1.68);
 // v51.29 — handle points back toward the player instead of sideways across the frame.
 const RAKE_VM_BASE_ROT = new THREE.Euler(-.16, -.18, -.06, 'XYZ');
 
+
 const RAKE_VIEWMODEL_LAYER = 2;
+
 
 const rakeVM = new THREE.Group();
 rakeVM.name = 'SCENE_CONCRETE_RAKE_VM';
 rakeVM.visible = false;
 rakeVM.layers.set(RAKE_VIEWMODEL_LAYER);
 camera.add(rakeVM);
+
 
 // The rake is rendered in a dedicated second pass/layer. Enable the normal
 // scene lights on that layer too, otherwise MeshStandardMaterial renders black.
@@ -5246,11 +4689,13 @@ function enableRakeViewmodelLighting() {
   });
 }
 
+
 function setRakeViewmodelLayer(root) {
   if (!root) return;
   root.layers.set(RAKE_VIEWMODEL_LAYER);
   root.traverse?.(o => o.layers.set(RAKE_VIEWMODEL_LAYER));
 }
+
 
 function objectIsInside(root, obj) {
   let p = obj;
@@ -5260,6 +4705,7 @@ function objectIsInside(root, obj) {
   }
   return false;
 }
+
 
 function sceneRakeCandidates(root) {
   // In SCENE3 the exported parent `grably...` contains TWO actual rakes near x~4.5
@@ -5271,6 +4717,7 @@ function sceneRakeCandidates(root) {
     const o = root.getObjectByName(name);
     if (o && !out.includes(o)) out.push(o);
   }
+
 
   // Future-safe fallback: if names change, use direct children of the known rake group
   // that are tall/slender enough to look like a rake.
@@ -5287,8 +4734,11 @@ function sceneRakeCandidates(root) {
   return out;
 }
 
+
 const rakePickupInteractions = [];
 const rakeCandidateRoots = [];
+
+
 
 
 function cloneOpaqueRakeMaterial(sourceMat) {
@@ -5300,12 +4750,15 @@ function cloneOpaqueRakeMaterial(sourceMat) {
     });
   }
 
+
   const m = sourceMat.clone();
+
 
   if (m.map) {
     m.map.colorSpace = THREE.SRGBColorSpace;
     m.map.needsUpdate = true;
   }
+
 
   // Kill every common transparency path.
   m.transparent = false;
@@ -5315,14 +4768,17 @@ function cloneOpaqueRakeMaterial(sourceMat) {
   m.premultipliedAlpha = false;
   m.blending = THREE.NormalBlending;
 
+
   // Important difference from generic FPS props:
   // rake must depth-test against ITSELF.
   m.depthTest = true;
   m.depthWrite = true;
   m.colorWrite = true;
 
+
   if ('transmission' in m) m.transmission = 0;
   if ('transmissionMap' in m) m.transmissionMap = null;
+
 
   // Rake source has thin metal geometry; DoubleSide prevents missing reverse
   // faces while still remaining fully opaque.
@@ -5330,20 +4786,25 @@ function cloneOpaqueRakeMaterial(sourceMat) {
   m.forceSinglePass = false;
   m.needsUpdate = true;
 
+
   return m;
 }
+
 
 function makeRakeGeometryOpaque(root) {
   if (!root) return;
 
+
   root.traverse?.(o => {
     if (!o.isMesh) return;
+
 
     if (Array.isArray(o.material)) {
       o.material = o.material.map(cloneOpaqueRakeMaterial);
     } else {
       o.material = cloneOpaqueRakeMaterial(o.material);
     }
+
 
     o.renderOrder = 0;
     o.castShadow = false;
@@ -5352,15 +4813,18 @@ function makeRakeGeometryOpaque(root) {
   });
 }
 
+
 function buildRakeViewModelFromScene(source) {
   rakeVM.clear();
   source.updateWorldMatrix(true, true);
+
 
   const sourceBox = new THREE.Box3().setFromObject(source);
   const center = sourceBox.getCenter(new THREE.Vector3());
   const size = sourceBox.getSize(new THREE.Vector3());
   const baked = new THREE.Group();
   baked.name = 'RAKE_SCENE_MODEL_BAKED';
+
 
   source.traverse(o => {
     if (!o.isMesh || !o.geometry) return;
@@ -5378,6 +4842,7 @@ function buildRakeViewModelFromScene(source) {
     baked.add(mesh);
   });
 
+
   const holder = new THREE.Group();
   holder.name = 'RAKE_VM_HOLDER';
   holder.add(baked);
@@ -5388,9 +4853,11 @@ function buildRakeViewModelFromScene(source) {
   holder.position.set(0, 0, 0);
   rakeVM.add(holder);
 
+
   rakeVM.position.copy(RAKE_VM_BASE_POS);
   rakeVM.rotation.copy(RAKE_VM_BASE_ROT);
   enableRakeViewmodelLighting();
+
 
   // Do NOT run generic prepViewModel() here: it disables depth testing and
   // makes complex rake geometry appear transparent.
@@ -5398,9 +4865,11 @@ function buildRakeViewModelFromScene(source) {
   setRakeViewmodelLayer(rakeVM);
 }
 
+
 function setupSceneRake(root) {
   rakeCandidateRoots.length = 0;
   rakePickupInteractions.length = 0;
+
 
   const candidates = sceneRakeCandidates(root);
   if (!candidates.length) {
@@ -5408,21 +4877,25 @@ function setupSceneRake(root) {
     return;
   }
 
+
   for (const source of candidates) {
     source.visible = true;
     makeRakeGeometryOpaque(source);
     source.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
     rakeCandidateRoots.push(source);
 
+
     const bb = new THREE.Box3().setFromObject(source);
     const center = bb.getCenter(new THREE.Vector3());
     // Put the interaction point around hand height but keep X/Z at this rake only.
     center.y = Math.min(bb.max.y, Math.max(bb.min.y + .75, .9));
 
+
     const proxy = new THREE.Object3D();
     proxy.name = `RAKE_PICKUP_${source.name}`;
     proxy.position.copy(center);
     scene.add(proxy);
+
 
     const it = {
       obj: proxy,
@@ -5440,6 +4913,7 @@ function setupSceneRake(root) {
     console.log('Scene rake pickup ready:', source.name, center, bb.min, bb.max);
   }
 
+
   // Canonical rake model for first-person/hotbar. The world can contain
   // multiple authored rake props with different transforms, but picking any of
   // them must always give the SAME viewmodel in the player's hand.
@@ -5450,15 +4924,18 @@ function setupSceneRake(root) {
   setHotbar3DModel('rake', rakeSceneSource);
 }
 
+
 function pickupRake(source = null) {
   if (rakeOwned) return;
   rakeOwned = true;
+
 
   // Hide only the physical rake that was picked. Do not rebuild the FPS
   // viewmodel from it: the hand model is canonical and independent of pickup.
   const pickedWorldRake = source || rakeWorld || rakeCandidateRoots[0] || null;
   rakeWorld = pickedWorldRake;
   if (pickedWorldRake) pickedWorldRake.visible = false;
+
 
   for (const it of rakePickupInteractions) {
     const i = interactive.indexOf(it);
@@ -5468,13 +4945,17 @@ function pickupRake(source = null) {
   rakePickupInteractions.length = 0;
   rakePickupInteraction = null;
 
+
   showToast('ГРАБЛИ ПОДОБРАНЫ · 4 — ДОСТАТЬ / УБРАТЬ');
   setRakeEquipped(true);
 }
 
 
+
+
 function stowRakeForSpecial() {
   rakeHiddenBySpecial = !!rakeEquipped;
+
 
   // Do not unequip logically: just remove the viewmodel/contact while hands
   // are busy with cigarette/cans.
@@ -5482,8 +4963,10 @@ function stowRakeForSpecial() {
   rakeSweepPrevValid = false;
   rakeSweepAccumulator = 0;
 
+
   if (rakeVM) rakeVM.visible = false;
 }
+
 
 function restoreRakeAfterSpecial() {
   if (rakeHiddenBySpecial && rakeEquipped && rakeVM) {
@@ -5495,6 +4978,7 @@ function restoreRakeAfterSpecial() {
   }
   rakeHiddenBySpecial = false;
 }
+
 
 function setRakeEquipped(on) {
   if (on && !rakeOwned) {
@@ -5527,15 +5011,18 @@ function setRakeEquipped(on) {
   }
 }
 
+
 const rakeAimOrigin = new THREE.Vector3();
 const rakeAimDir = new THREE.Vector3();
 const rakeAimPoint = new THREE.Vector3();
+
 
 function getRakeWorkPoint(out) {
   camera.getWorldDirection(rakeAimDir);
   rakeAimDir.y = 0;
   if (rakeAimDir.lengthSq() < .001) return false;
   rakeAimDir.normalize();
+
 
   // Slightly farther than before because the rake head now visually sits
   // forward over the concrete instead of in the middle of the screen.
@@ -5547,8 +5034,10 @@ function getRakeWorkPoint(out) {
   return true;
 }
 
+
 function levelConcreteAtPoint(px, pz, step, moveDirX, moveDirZ) {
   let didSomething = false;
+
 
   // ------------------------------------------------
   // A) CONTINUOUSLY PUSH SURFACE SPILLS
@@ -5556,13 +5045,16 @@ function levelConcreteAtPoint(px, pz, step, moveDirX, moveDirZ) {
   // Small transfer every 30 Hz instead of a huge chunk per click.
   const spillBrushR = 1.224;
 
+
   for (const p of spillClumps) {
     if (p.volume <= .001) continue;
+
 
     const dx = p.x - px;
     const dz = p.z - pz;
     const reach = spillBrushR + Math.min(.35, p.radius * .20);
     if (dx * dx + dz * dz > reach * reach) continue;
+
 
     const fraction = THREE.MathUtils.clamp(step * 1.15, 0, .045);
     const movedVolume = Math.min(
@@ -5571,13 +5063,16 @@ function levelConcreteAtPoint(px, pz, step, moveDirX, moveDirZ) {
     );
     if (movedVolume <= .0001) continue;
 
+
     const pushDist = .15;
     const dstX = p.x + moveDirX * pushDist;
     const dstZ = p.z + moveDirZ * pushDist;
     if (!insideSlab(dstX, dstZ)) continue;
 
+
     p.volume -= movedVolume;
     refreshSpillClump(p);
+
 
     const dstZone = zoneAt(dstX, dstZ);
     if (dstZone) {
@@ -5599,14 +5094,17 @@ function levelConcreteAtPoint(px, pz, step, moveDirX, moveDirZ) {
       );
     }
 
+
     didSomething = true;
   }
+
 
   // ------------------------------------------------
   // B) CONTINUOUS ARCADE LEVELING INSIDE A BAY
   // ------------------------------------------------
   const zone = zoneAt(px, pz) || zoneNearEdge(px, pz, .62, activePourZone());
   if (!zone) return didSomething;
+
 
   // Clamp only the simulation brush centre. The visible rake remains exactly
   // under the player's aim, while its useful area now reaches the wall cells.
@@ -5621,11 +5119,13 @@ function levelConcreteAtPoint(px, pz, step, moveDirX, moveDirZ) {
     zone.maxZ - zone.cellZ * .35
   );
 
+
   const brushRadius = 1.55;
   const brushR2 = brushRadius * brushRadius;
   const cells = [];
   let localSum = 0;
   let weightSum = 0;
+
 
   for (let r = 0; r < zone.rows; r++) {
     for (let c = 0; c < zone.cols; c++) {
@@ -5636,6 +5136,7 @@ function levelConcreteAtPoint(px, pz, step, moveDirX, moveDirZ) {
       const d2 = dx * dx + dz * dz;
       if (d2 > brushR2) continue;
 
+
       const idx = zoneIndex(zone, c, r);
       const radial = 1 - THREE.MathUtils.clamp(
         Math.sqrt(d2) / brushRadius,
@@ -5643,45 +5144,57 @@ function levelConcreteAtPoint(px, pz, step, moveDirX, moveDirZ) {
       );
       const weight = .24 + radial * .76;
 
+
       cells.push([idx, weight, c, r]);
       localSum += zone.fill[idx] * weight;
       weightSum += weight;
     }
   }
 
+
   if (cells.length < 2 || weightSum <= 0) return didSomething;
 
+
   const localMean = localSum / weightSum;
+
 
   // Continuous strength: roughly 12–15% correction per 30 Hz tick at the
   // center. A patch becomes visibly flatter while the player sweeps over it,
   // but one stationary hold cannot finish the whole bay.
   const centerStrength = 1 - Math.exp(-8.20 * step);
 
+
   let before = 0;
   let after = 0;
+
 
   for (const [idx, weight] of cells) {
     before += zone.fill[idx];
 
+
     const s = centerStrength * (.38 + weight * .62);
     zone.fill[idx] += (localMean - zone.fill[idx]) * s;
 
+
     zone.rakeTouched[idx] = 1;
     zone.mobility[idx] = Math.max(zone.mobility[idx], .94);
+
 
     // Finishing kills chaotic flow locally.
     zone.velX[idx] *= .72;
     zone.velZ[idx] *= .72;
 
+
     after += zone.fill[idx];
   }
+
 
   // Exact local mass correction.
   const correction = (before - after) / cells.length;
   for (const [idx] of cells) {
     zone.fill[idx] = Math.max(0, zone.fill[idx] + correction);
   }
+
 
   // Finishing assist: once the bay is essentially full and the player has
   // genuinely raked a meaningful portion of it, gently relax the remaining tiny
@@ -5707,11 +5220,13 @@ function levelConcreteAtPoint(px, pz, step, moveDirX, moveDirZ) {
     }
   }
 
+
   // A tiny directional comb effect. It gives a sense that the rake is being
   // pulled through the material rather than acting as a magic blur tool.
   const combDepth = .00022;
   for (const [idx, weight, c, r] of cells) {
     if (weight < .55 || zone.fill[idx] <= combDepth) continue;
+
 
     let dc = 0, dr = 0;
     if (Math.abs(moveDirX) > Math.abs(moveDirZ)) {
@@ -5720,9 +5235,11 @@ function levelConcreteAtPoint(px, pz, step, moveDirX, moveDirZ) {
       dr = Math.sign(moveDirZ);
     }
 
+
     const tc = c + dc;
     const tr = r + dr;
     if (tc < 0 || tc >= zone.cols || tr < 0 || tr >= zone.rows) continue;
+
 
     const dst = zoneIndex(zone, tc, tr);
     const moved = Math.min(
@@ -5730,14 +5247,17 @@ function levelConcreteAtPoint(px, pz, step, moveDirX, moveDirZ) {
       zone.fill[idx]
     );
 
+
     zone.fill[idx] -= moved;
     zone.fill[dst] += moved;
     zone.rakeTouched[dst] = 1;
   }
 
+
   markZoneDirty(zone);
   return true;
 }
+
 
 function rakeContinuousSweepStep(step) {
   if (!rakeEquipped || !raking || jobState !== 'active') {
@@ -5745,7 +5265,9 @@ function rakeContinuousSweepStep(step) {
     return;
   }
 
+
   if (!getRakeWorkPoint(rakeSweepNowPoint)) return;
+
 
   // First sample starts at the current work point.
   if (!rakeSweepPrevValid) {
@@ -5753,9 +5275,11 @@ function rakeContinuousSweepStep(step) {
     rakeSweepPrevValid = true;
   }
 
+
   rakeSweepDir
     .copy(rakeSweepNowPoint)
     .sub(rakeSweepPrevPoint);
+
 
   const travel = rakeSweepDir.length();
   rakeSweepTravel = THREE.MathUtils.damp(
@@ -5765,10 +5289,12 @@ function rakeContinuousSweepStep(step) {
     step
   );
 
+
   // Direction of material pull follows actual sweep movement. If the player
   // is almost stationary, use the camera-forward direction.
   let dirX = rakeAimDir.x;
   let dirZ = rakeAimDir.z;
+
 
   if (travel > .012) {
     rakeSweepDir.multiplyScalar(1 / travel);
@@ -5776,10 +5302,12 @@ function rakeContinuousSweepStep(step) {
     dirZ = rakeSweepDir.z;
   }
 
+
   // Interpolate along the path so fast camera/player motion cannot skip cells.
   const spacing = .28;
   const samples = Math.max(1, Math.ceil(travel / spacing));
   let changed = false;
+
 
   for (let i = 1; i <= samples; i++) {
     const t = i / samples;
@@ -5794,6 +5322,7 @@ function rakeContinuousSweepStep(step) {
       t
     );
 
+
     changed = levelConcreteAtPoint(
       x, z,
       step / samples,
@@ -5802,7 +5331,9 @@ function rakeContinuousSweepStep(step) {
     ) || changed;
   }
 
+
   rakeSweepPrevPoint.copy(rakeSweepNowPoint);
+
 
   if (changed) {
     markPourProgressDirty();
@@ -5815,21 +5346,27 @@ function rakeContinuousSweepStep(step) {
       rakeDragCooldown = THREE.MathUtils.randFloat(.38, .52);
     }
 
+
     evaluateJob();
   }
 }
 
 
+
+
 function updateRake(dt) {
   rakeDragCooldown = Math.max(0, rakeDragCooldown - dt);
+
 
   if (!rakeEquipped) {
     rakeSweepPrevValid = false;
     return;
   }
 
+
   applyProceduralRakePose(dt);
   rakeBob = THREE.MathUtils.damp(rakeBob, raking ? 1 : 0, 12, dt);
+
 
   if (!raking) {
     rakeSweepPrevValid = false;
@@ -5837,10 +5374,12 @@ function updateRake(dt) {
     return;
   }
 
+
   // Physics/tool contact at a stable 30 Hz, independent of rendering FPS.
   rakeSweepAccumulator += Math.min(dt, .10);
   let loops = 0;
   const step = 1 / 30;
+
 
   while (rakeSweepAccumulator >= step && loops < 4) {
     rakeSweepAccumulator -= step;
@@ -5848,6 +5387,7 @@ function updateRake(dt) {
     loops++;
   }
 }
+
 
 // -----------------------------
 // OSU-like pressure QTE
@@ -5864,6 +5404,7 @@ let qtePerfects = 0;
 let qteX = innerWidth * .5, qteY = innerHeight * .5;
 let qteCursorX = innerWidth * .5, qteCursorY = innerHeight * .5;
 
+
 function resetQTECooldown() {
   qteCooldown = THREE.MathUtils.randFloat(10.0, 15.0);
 }
@@ -5878,14 +5419,17 @@ function startQTE() {
   if (qteActive || pendingPourEvent || eventAlarmTimer > 0 || pumpBroken || jobState !== 'active' || !hoseHeld || !pouring) return;
   qteActive = true;
 
+
   // Central 50% x 50% only. Never near screen corners.
   const minX = innerWidth * .25;
   const maxX = innerWidth * .75;
   const minY = innerHeight * .25;
   const maxY = innerHeight * .75;
 
+
   qteX = THREE.MathUtils.randFloat(minX, maxX);
   qteY = THREE.MathUtils.randFloat(minY, maxY);
+
 
   qteTargetEl.style.left = `${qteX}px`;
   qteTargetEl.style.top = `${qteY}px`;
@@ -5893,15 +5437,19 @@ function startQTE() {
   qteCursorEl.style.top = `${qteCursorY}px`;
   qteLayerEl.classList.add('active');
 
+
   qteTargetEl.classList.remove('pulse');
   void qteTargetEl.offsetWidth;
   qteTargetEl.classList.add('pulse');
 
+
   qteStartTime = performance.now();
   qteDeadline = qteStartTime + QTE_DURATION_MS;
 
+
   playQTEAppearAudio();
 }
+
 
 function endQTE(success, perfect = false) {
   if (!qteActive) return;
@@ -5909,6 +5457,7 @@ function endQTE(success, perfect = false) {
   qteLayerEl.classList.remove('active');
   qteTargetEl.classList.remove('pulse');
   qteTargetEl.classList.remove('perfect');
+
 
   if (success) {
     qteHits++;
@@ -5929,6 +5478,7 @@ function endQTE(success, perfect = false) {
     markPourProgressDirty();
     playHoseSlipAudio();
 
+
     // The pump does NOT magically switch off when the hose is ripped out of
     // the worker's hands.  If concrete was flowing, it keeps flowing on the
     // floor until the player grabs the hose again and switches the pump off.
@@ -5941,6 +5491,7 @@ function endQTE(success, perfect = false) {
       : 'QTE ПРОВАЛЕН — ШЛАНГ ВЫРВАЛО ИЗ РУК');
   }
 
+
   resetQTECooldown();
 }
 function clickQTE() {
@@ -5950,6 +5501,7 @@ function clickQTE() {
   const inside = dx * dx + dy * dy <= 68 * 68; // +~30% target size
   if (inside) {
     playQTEHitAudio();
+
 
     const now = performance.now();
     const perfectTime = qteStartTime + QTE_DURATION_MS * QTE_PERFECT_AT;
@@ -5972,6 +5524,7 @@ function updateQTE(dt) {
   }
 }
 
+
 // -----------------------------
 // Hose physics
 // -----------------------------
@@ -5980,6 +5533,7 @@ function initializeHose(anchorPos) {
   hosePrev.length = 0;
   hoseMeshes.length = 0;
   if (hoseTip.parent !== hoseGroup) hoseGroup.add(hoseTip);
+
 
   for (let i = 0; i <= HOSE_SEGMENTS; i++) {
     const p = anchorPos.clone();
@@ -5991,6 +5545,7 @@ function initializeHose(anchorPos) {
     hosePrev.push(p.clone());
   }
 
+
   hoseGroup.visible = true;
   hoseTube.visible = true;
   hoseOutline.visible = false;
@@ -5999,11 +5554,13 @@ function initializeHose(anchorPos) {
   hoseCoupler.rotation.set(0, 0, 0);
   updateHoseTubeGeometry();
 
+
   hoseProxy = new THREE.Object3D();
   hoseProxy.name = 'HOSE_GRAB_END';
   scene.add(hoseProxy);
   hoseProxy.position.copy(hosePoints[hosePoints.length - 1]);
   hoseTip.position.copy(hosePoints[hosePoints.length - 1]);
+
 
   hoseInteraction = {
     obj: hoseProxy,
@@ -6029,10 +5586,12 @@ function constrainHose() {
     hoseCoupler.position.y -= .16;
   }
 
+
   if (hoseHeld) {
     camera.updateWorldMatrix(true, false);
     hoseHandTarget.set(.34, -.31, -1.32).applyQuaternion(camera.quaternion).add(camera.position);
     hosePoints[HOSE_SEGMENTS].copy(hoseHandTarget);
+
 
     camera.getWorldDirection(hoseHeldForward);
     hoseHeldForward.y = THREE.MathUtils.clamp(hoseHeldForward.y - 0.08, -0.22, 0.18);
@@ -6048,12 +5607,14 @@ function constrainHose() {
     }
   }
 
+
   for (let i = 0; i < HOSE_SEGMENTS; i++) {
     const a = hosePoints[i];
     const b = hosePoints[i + 1];
     hoseTmpDir.copy(b).sub(a);
     const len = Math.max(hoseTmpDir.length(), .00001);
     const diff = (len - HOSE_REST) / len;
+
 
     if (i === 0) {
       b.addScaledVector(hoseTmpDir, -diff);
@@ -6064,6 +5625,7 @@ function constrainHose() {
       b.addScaledVector(hoseTmpDir, -diff * .5);
     }
   }
+
 
   for (let i = 1; i <= HOSE_SEGMENTS; i++) {
     if (i === HOSE_SEGMENTS && hoseHeld) continue;
@@ -6076,6 +5638,7 @@ function updatePhysicalHose(dt) {
   if (!hosePoints.length) return;
   const subDt = Math.min(dt, .033);
   const gravity = 9.81 * subDt * subDt;
+
 
   for (let i = 1; i <= HOSE_SEGMENTS; i++) {
     if (i === HOSE_SEGMENTS && hoseHeld) continue;
@@ -6090,13 +5653,16 @@ function updatePhysicalHose(dt) {
     p.z += vz;
   }
 
+
   for (let k = 0; k < 9; k++) constrainHose();
   hosePrev[0].copy(hosePoints[0]);
   if (hoseHeld) hosePrev[HOSE_SEGMENTS].copy(hosePoints[HOSE_SEGMENTS]);
 
+
   updateHoseTubeGeometry();
   if (hoseProxy) hoseProxy.position.copy(hosePoints[HOSE_SEGMENTS]);
   hoseTip.position.copy(hosePoints[HOSE_SEGMENTS]);
+
 
   updatePouring(dt);
   updatePourEvents(dt);
@@ -6113,6 +5679,7 @@ function updatePhysicalHose(dt) {
   updateQTE(dt);
 }
 
+
 const BASE_POUR_RATE_M3 = 0.175; // ~53 s base fill time per bay at pump level 0
 const PUMP_RATE_MULT = [1.0, 1.18, 1.40, 1.66];
 function currentPumpRateMultiplier() { return PUMP_RATE_MULT[pumpLevel] || 1.0; }
@@ -6123,6 +5690,7 @@ function currentPourRateM3() {
   return BASE_POUR_RATE_M3 * currentPumpRateMultiplier() * currentPerfectQTEBoost();
 }
 
+
 function updatePouring(dt) {
   // Pump state and hand state are separate. A dropped hose can keep dumping
   // concrete until the player recovers it and turns the pump off.
@@ -6131,7 +5699,9 @@ function updatePouring(dt) {
     return;
   }
 
+
   const end = hosePoints[HOSE_SEGMENTS];
+
 
   // Actual hose-tip motion influences the stream and the impacted concrete.
   if (pourTipPrevSafeValid && dt > 1e-5) {
@@ -6143,6 +5713,7 @@ function updatePouring(dt) {
     pourTipPrevSafeValid = true;
   }
   pourTipPrevSafe.copy(end);
+
 
   if (hoseHeld) {
     camera.getWorldDirection(pourOutletDirSafe);
@@ -6162,12 +5733,15 @@ function updatePouring(dt) {
     pourOutletDirSafe.normalize();
   }
 
+
   const rateMult = currentPumpRateMultiplier() * currentPerfectQTEBoost();
+
 
   pourVisualVelSafe
     .copy(pourOutletDirSafe)
     .multiplyScalar((hoseHeld ? 2.35 : 1.35) * rateMult)
     .addScaledVector(pourTipVelSafe, hoseHeld ? .22 : .42);
+
 
   // Predict a short fall from the hose end to the work surface.
   // This keeps numerical mass near where the visible stream actually lands,
@@ -6179,22 +5753,25 @@ function updatePouring(dt) {
     .05, .55
   );
 
+
   const impactX = end.x + pourVisualVelSafe.x * fallTime * .72;
   const impactZ = end.z + pourVisualVelSafe.z * fallTime * .72;
   let volume = currentPourRateM3() * dt;
 
-  // Pressure spike: one dangerous mass-bearing slug. Its volume is precomputed from
-  // the current map percentage so ignoring it nearly always threatens an overpour.
+
+  // Pressure-spike event: one oversized, heavy concrete slug carries roughly
+  // two seconds of flow at once. It is mass-bearing, not just a visual effect.
   const pressureSpike = pressureSpikePending;
   if (pressureSpike) {
     pressureSpikePending = false;
-    const spikeVolume = Math.max(0, pressureSpikeVolumeM3);
-    pressureSpikeVolumeM3 = 0;
+    const spikeVolume = currentPourRateM3() * 1.85;
     volume += spikeVolume;
-    spawnBlob(end, true, pourVisualVelSafe, .52);
+    spawnBlob(end, true, pourVisualVelSafe, .46);
   }
 
+
   recordCareerStat('concreteM3', volume);
+
 
   addConcreteVolumeAt(
     impactX,
@@ -6205,6 +5782,7 @@ function updatePouring(dt) {
     pourVisualVelSafe.length(),
     true
   );
+
 
   hoseSplashAccumulator += dt;
   const splashInterval = TOUCH_DEVICE ? .115 : .075;
@@ -6217,6 +5795,7 @@ function updatePouring(dt) {
       pressureSpike ? 1.8 : 1
     );
   }
+
 
   // Denser stream at higher pump levels.
   const blobInterval = .065 / Math.pow(rateMult, .30);
@@ -6238,6 +5817,7 @@ function updatePouring(dt) {
 function evaluateJob() {
   if (jobState !== 'active') return;
 
+
   // Reaching the target no longer turns the pump off. The player owns the
   // switch and can deliberately overpour; Pavel converts that excess into a
   // lower rank and payout at settlement.
@@ -6245,6 +5825,7 @@ function evaluateJob() {
   if (currentZone) {
     const currentRatio = zoneVolume(currentZone) / currentZone.targetVolume;
     const currentLevel = zoneLevelStats(currentZone);
+
 
     if (
       currentRatio >= .995 &&
@@ -6260,6 +5841,7 @@ function evaluateJob() {
     }
   }
 
+
   // Advance the authored sequence only after the current highlighted map is
   // both deep enough and sufficiently covered. If it happens while the pump
   // is still ON, keep that map active until the player switches it off so an
@@ -6272,6 +5854,7 @@ function evaluateJob() {
     preloadSettlementRankSheet();
     showToast(`КАРТА №${currentZone.id} ЗАЛИТА · ДОСТУПЕН РАСЧЁТ — ПОДОЙДИ К ПАШЕ`, 5.4);
   }
+
 
   const beforeAdvance = activePourZoneIndex;
   if (!pouring) {
@@ -6289,9 +5872,11 @@ function evaluateJob() {
     }
   }
 
+
   const allReady =
     activePourZoneIndex >= POUR_ZONES.length &&
     POUR_ZONES.every(zone => zoneReadyForSequence(zone));
+
 
   // Surface concrete is recoverable, not "waste".
   // The foreman won't accept the slab while visible plops are still lying around.
@@ -6310,8 +5895,10 @@ function evaluateJob() {
   }
 }
 
+
 function finishJob(success, failedZone = null) {
   if (jobState !== 'active') return;
+
 
   pouring = false;
   if (qteActive) {
@@ -6319,12 +5906,14 @@ function finishJob(success, failedZone = null) {
     qteLayerEl.classList.remove('active');
   }
 
+
   if (success) {
     jobState = 'ready';
     markPourProgressDirty();
     showToast('ЗАЛИВКА ГОТОВА. СДАЙ ОБЪЕКТ ПАВЛУ ПЕТРОВИЧУ.');
     return;
   }
+
 
   jobState = 'failed';
   markPourProgressDirty();
@@ -6334,6 +5923,7 @@ function finishJob(success, failedZone = null) {
     'ПЕРЕДЕЛАТЬ'
   );
 }
+
 
 function resetPourJob() {
   for (let zoneIndex = 0; zoneIndex < POUR_ZONES.length; zoneIndex++) {
@@ -6356,10 +5946,12 @@ function resetPourJob() {
   refreshConcreteSurfaces();
   clearSurfaceSpills();
 
+
   for (const b of blobs) {
     b.active = false;
     b.mesh.visible = false;
   }
+
 
   jobState = 'active';
   paidPourZoneCount = 0;
@@ -6372,12 +5964,6 @@ function resetPourJob() {
   qtePerfectBoostUntil = 0;
   pumpBroken = false;
   pressureSpikePending = false;
-  hoseRecoveryNeeded = false;
-  hoseControlActive = false;
-  hoseControlHeld = false;
-  hoseControlFailures = 0;
-  window.__betonEventResult = '—';
-  document.querySelector('#betonHoseControl')?.classList.remove('show','pressed');
   pendingPourEvent = null;
   eventAlarmTimer = 0;
   blindnessTimer = 0;
@@ -6396,9 +5982,11 @@ function resetPourJob() {
   updatePourHUD();
 }
 
+
 function bestHUDZone() {
   const target = activePourZone();
   if (target && jobState === 'active') return target;
+
 
   if (hosePoints.length) {
     const hp = hosePoints[HOSE_SEGMENTS];
@@ -6406,8 +5994,10 @@ function bestHUDZone() {
     if (hz) return hz;
   }
 
+
   const pz = zoneAt(playerPos.x, playerPos.z);
   if (pz) return pz;
+
 
   // Otherwise show the least-complete bay, which is usually the next useful target.
   let best = POUR_ZONES[0];
@@ -6421,6 +6011,7 @@ function bestHUDZone() {
   }
   return best;
 }
+
 
 function updatePourHUD() {
   const volume = totalConcreteVolume();
@@ -6436,13 +6027,16 @@ function updatePourHUD() {
     : Math.max(0, zone.targetVolume - zoneVol);
   const avgH = zoneAverageHeight(zone);
 
+
   const completed = POUR_ZONES.filter(z => zoneReadyForSequence(z)).length;
+
 
   fillBarEl.style.width = `${Math.min(100, zonePct)}%`;
   fillBarEl.classList.toggle(
     'danger',
     POUR_ZONES.some(z => zoneVolume(z) / z.targetVolume > 1.0)
   );
+
 
   fillPercentEl.textContent = `${zonePct.toFixed(1)}%`;
   fillRemainingEl.textContent = `${zoneRemaining.toFixed(2)} м³`;
@@ -6471,14 +6065,17 @@ function updatePourHUD() {
     zoneProgressEl.textContent = `№${zone.id}: ${zonePct.toFixed(0)}% · готово ${completed}/6`;
   }
 
+
   const spillV = surfaceSpillVolume();
   spillVolumeEl.textContent =
     spillV > .015 ? `${spillV.toFixed(2)} м³ · УБРАТЬ` : '0.00 м³';
+
 
   const boostLeft = Math.max(0, (qtePerfectBoostUntil - performance.now()) / 1000);
   qteScoreEl.textContent = boostLeft > 0
     ? `${qteHits} OK · ${qtePerfects} PERFECT · BOOST ${boostLeft.toFixed(1)}с`
     : `${qteHits} OK · ${qtePerfects} PERFECT · ${qteMisses} MISS`;
+
 
   pourHudEl.classList.toggle(
     'visible',
@@ -6486,14 +6083,17 @@ function updatePourHUD() {
   );
 }
 
+
 let lastTaskTrackerKey = '';
 let taskTrackerPulseTimer = 0;
+
 
 function updateTaskTracker() {
   if (!taskTrackerEl) return;
   const blocked = !started || shopOpen || resultOpen || dialogueOpen || statsOpen || settlementCutsceneActive;
   taskTrackerEl.classList.toggle('isHidden', blocked);
   if (blocked) return;
+
 
   const active = activePourZone();
   const step = active
@@ -6504,6 +6104,7 @@ function updateTaskTracker() {
   let title = 'Ожидайте задачу';
   let detail = 'Объект №17';
   let progress = 0;
+
 
   if (jobState === 'accepted') {
     key = 'complete';
@@ -6538,6 +6139,7 @@ function updateTaskTracker() {
       0,
       1
     ) * 100);
+
 
     if (ratio < .985) {
       key = hoseHeld ? `pour-${active.id}` : `take-hose-${active.id}`;
@@ -6574,6 +6176,7 @@ function updateTaskTracker() {
     }
   }
 
+
   taskTrackerStepEl.textContent = jobState === 'accepted' ? '6/6' : step;
   taskTrackerIconEl.textContent = icon;
   taskTrackerTitleEl.textContent = title;
@@ -6581,6 +6184,7 @@ function updateTaskTracker() {
   taskTrackerFillEl.style.width = `${THREE.MathUtils.clamp(progress, 0, 100)}%`;
   taskTrackerEl.dataset.state = key.startsWith('repair') || key.startsWith('spill') ? 'warning' :
     key.startsWith('complete') || key.startsWith('pavel') ? 'done' : 'active';
+
 
   if (key !== lastTaskTrackerKey) {
     lastTaskTrackerKey = key;
@@ -6595,6 +6199,8 @@ function updateTaskTracker() {
 }
 
 
+
+
 // -----------------------------
 // Final-layout colliders and interactions
 // -----------------------------
@@ -6604,11 +6210,13 @@ function addFinalLayoutColliders(root) {
   let walkable = 0;
   let skippedHuge = 0;
 
+
   root.traverse(o => {
     if (!o.isMesh || !o.visible) return;
     if (o.isSkinnedMesh) return; // animated NPCs get stable root colliders below
     if (rakeCandidateRoots.some(r => objectIsInside(r, o))) return;
     if (rakeSceneSource && objectIsInside(rakeSceneSource, o)) return;
+
 
     const n = String(o.name || '');
     const low = n.toLowerCase();
@@ -6629,6 +6237,7 @@ function addFinalLayoutColliders(root) {
     ) return;
     if (o.userData?.noCollision) return;
 
+
     // FOLIAGE / GROUND DECALS: never collide with leaf cards, tree crowns, flowers,
     // grass tufts or parking-line decals. These meshes are visual only.
     const materialNames = (Array.isArray(o.material) ? o.material : [o.material])
@@ -6645,6 +6254,7 @@ function addFinalLayoutColliders(root) {
       materialNames.some(m => m.includes('grass') || m.includes('flower') || m.includes('daisy') || m.includes('daffodil') || m.includes('stem'));
     if (isFoliage || isGrassOrFlowers) return;
 
+
     // Also reject any mesh living anywhere under the MONETKA hierarchy, even if
     // Blender changes the child mesh name on the next export.
     let shopAncestor = o.parent;
@@ -6653,11 +6263,13 @@ function addFinalLayoutColliders(root) {
       shopAncestor = shopAncestor.parent;
     }
 
+
     const bb = new THREE.Box3().setFromObject(o);
     if (!Number.isFinite(bb.min.x) || !Number.isFinite(bb.max.x)) return;
     const size = bb.getSize(new THREE.Vector3());
     const footprintMax = Math.max(size.x, size.z);
     const footprintMin = Math.min(size.x, size.z);
+
 
     // Imported pump/mixer CAD is split by material, not by physical solid part. Some of those
     // meshes span 8-12 metres while containing only sparse rails/panels; one OBB then blocks
@@ -6679,6 +6291,7 @@ function addFinalLayoutColliders(root) {
       return;
     }
 
+
     const isParkingDecal =
       inMonetkaParkingZone(bb, 1.0, 1.0) &&
       low.startsWith('plane') &&
@@ -6691,11 +6304,13 @@ function addFinalLayoutColliders(root) {
       return;
     }
 
+
     if (o.userData?.walkOnly) {
       addWalkSurface(n || 'walk surface', bb.min.x, bb.max.x, bb.min.z, bb.max.z, bb.max.y);
       walkable++;
       return;
     }
+
 
     // ROAD / PAVEMENT / GROUND FIX:
     // A low, broad mesh whose top is around walking height is a floor patch.
@@ -6713,12 +6328,14 @@ function addFinalLayoutColliders(root) {
       return;
     }
 
+
     // The main authored site ground is also explicitly walkable.
     if (low === 'site_ground') {
       addWalkSurface(n, bb.min.x, bb.max.x, bb.min.z, bb.max.z, bb.max.y);
       walkable++;
       return;
     }
+
 
     // The authored bus-stop asset is a single combined mesh with open space inside.
     // An OBB around the whole thing becomes a solid invisible room. It is decorative,
@@ -6727,6 +6344,7 @@ function addFinalLayoutColliders(root) {
       console.log('[COLLISION] decorative bus stop skipped:', n);
       return;
     }
+
 
     // Any combined mesh whose box encloses the authored spawn is also unsafe:
     // by definition the player must be able to stand and leave this marker.
@@ -6741,6 +6359,7 @@ function addFinalLayoutColliders(root) {
       }
     }
 
+
     // SCENE3 HOTFIX: these exported joined strips have geometry scattered along a
     // ~64 m box. A single OBB turns the empty gaps/openings into a continuous
     // invisible wall. They are visual boundary/fence aggregates, not valid boxes.
@@ -6750,6 +6369,7 @@ function addFinalLayoutColliders(root) {
       return;
     }
 
+
     // Generic protection against the same authoring pattern: a very long, thin,
     // ground-level joined mesh must never become one solid collision bar.
     const longThinJoinedStrip = footprintMax > 14.0 && footprintMin < 2.6 && bb.min.y < 1.4 && bb.max.y > .35;
@@ -6758,6 +6378,7 @@ function addFinalLayoutColliders(root) {
       console.warn('[COLLISION] long/thin joined strip skipped:', n, size);
       return;
     }
+
 
     // NEVER use one OBB for a broad joined asset. This was the source of the
     // huge invisible wall between the two site zones: meshes such as Object_5
@@ -6772,14 +6393,17 @@ function addFinalLayoutColliders(root) {
       return;
     }
 
+
     // Never turn an enormous environment card/group into one invisible rectangular wall.
     if (size.x > 26 && size.z > 26) {
       skippedHuge++;
       return;
     }
 
+
     // Degenerate helpers/lines have no useful player collision.
     if (size.x < .035 && size.z < .035) return;
+
 
     // Everything else uses an oriented box from the mesh's OWN local bounds.
     // This fixes the old invisible walls caused by world-axis AABBs around
@@ -6787,6 +6411,7 @@ function addFinalLayoutColliders(root) {
     addMeshOBBCollider(o, n || 'scene mesh');
     added++;
   });
+
 
   // v51.29 — explicit collision along the authored scene perimeter. The vehicle gate stays open.
   addColliderXZ('PERIMETER_NORTH', -32.50, 32.50, 22.80, 23.30, 0, 2.25);
@@ -6797,6 +6422,7 @@ function addFinalLayoutColliders(root) {
   addColliderXZ('PERIMETER_EAST_MAIN', 32.20, 32.55, -23.25, 23.30, 0, 2.25);
   addColliderXZ('PERIMETER_WEST_YARD', -32.55, -32.20, -51.40, -22.95, 0, 2.25);
   addColliderXZ('PERIMETER_EAST_YARD', 32.20, 32.55, -51.40, -22.95, 0, 2.25);
+
 
   // Prefer higher overlapping walk surfaces (e.g. pavement over SITE_GROUND).
   walkSurfaces.sort((a, b) => b.topY - a.topY);
@@ -6812,10 +6438,13 @@ function addEmbeddedNPCCollider(root, label) {
 }
 
 
+
+
 // ---------------------------------------------------------------------------
 // Authored spawn + authored world pickups + Baba Kapa shop interaction
 // ---------------------------------------------------------------------------
 const worldPickupInteractions = [];
+
 
 function setupPlayerSpawn(root) {
   const spawn = root.getObjectByName('spawn') || root.getObjectByName('Spawn');
@@ -6824,6 +6453,7 @@ function setupPlayerSpawn(root) {
     return;
   }
   spawn.updateWorldMatrix(true, true);
+
 
   // The plane pivot is authored at the intended feet position. The exported
   // marker has no useful rotation, so face the actual construction yard
@@ -6840,6 +6470,7 @@ function setupPlayerSpawn(root) {
   console.log('PLAYER SPAWN FROM BLENDER:', p, 'facing construction yard, yaw=', yaw);
 }
 
+
 function removeInteraction(it) {
   const i = interactive.indexOf(it);
   if (i >= 0) interactive.splice(i, 1);
@@ -6848,12 +6479,14 @@ function removeInteraction(it) {
   if (it.obj?.parent) it.obj.parent.remove(it.obj);
 }
 
+
 function setupWorldPickup(root, spec) {
   const source = root.getObjectByName(spec.node);
   if (!source) {
     console.warn('World pickup node not found:', spec.node);
     return;
   }
+
 
   // LitEnergy2 was already marked as collected in some test-build saves while its
   // authored position changed. Give that one pickup a fresh persistence slot once.
@@ -6865,6 +6498,7 @@ function setupWorldPickup(root, spec) {
     return;
   }
 
+
   source.visible = true;
   source.traverse?.(o => {
     o.visible = true;
@@ -6872,12 +6506,14 @@ function setupWorldPickup(root, spec) {
   });
   source.updateWorldMatrix(true, true);
 
+
   const bb = new THREE.Box3().setFromObject(source);
   const center = bb.getCenter(new THREE.Vector3());
   const proxy = new THREE.Object3D();
   proxy.name = `WORLD_PICKUP_${spec.node}`;
   proxy.position.copy(center);
   scene.add(proxy);
+
 
   const it = {
     obj: proxy,
@@ -6896,6 +6532,7 @@ function setupWorldPickup(root, spec) {
   interactive.push(it);
   console.log('World pickup ready:', spec.node, center);
 }
+
 
 function setupWorldPickups(root) {
   setupWorldPickup(root, {
@@ -6928,10 +6565,12 @@ function setupWorldPickups(root) {
   });
 }
 
+
 function pickupWorldItem(it) {
   if (!it || it.kind !== 'worldPickup') return;
   if (it.pickupType === 'samec') cigarettes += it.pickupAmount;
   if (it.pickupType === 'rewind') energyCans += it.pickupAmount;
+
 
   localStorage.setItem(it.storageKey, '1');
   if (it.source) it.source.visible = false;
@@ -6941,12 +6580,14 @@ function pickupWorldItem(it) {
   showToast(it.toast || 'ПОДОБРАНО');
 }
 
+
 function addBabaInteraction(baba) {
   if (!baba) return;
   baba.updateWorldMatrix(true, true);
   const bb = new THREE.Box3().setFromObject(baba);
   const center = bb.getCenter(new THREE.Vector3());
   center.y = Math.max(bb.min.y + .95, Math.min(bb.max.y, center.y));
+
 
   const proxy = new THREE.Object3D();
   proxy.name = 'NPC_INTERACTION_baba';
@@ -6962,6 +6603,7 @@ function addBabaInteraction(baba) {
   });
 }
 
+
 function addShopInteraction(root) {
   const shop = root.getObjectByName('MONETKA');
   if (!shop) {
@@ -6972,10 +6614,12 @@ function addShopInteraction(root) {
   const center = bb.getCenter(new THREE.Vector3());
   center.y = Math.max(1.0, bb.min.y + 1.0);
 
+
   shopProxy = new THREE.Object3D();
   shopProxy.name = 'MONETKA_SHOP_INTERACTION';
   shopProxy.position.copy(center);
   scene.add(shopProxy);
+
 
   shopInteraction = {
     obj: shopProxy,
@@ -6985,6 +6629,7 @@ function addShopInteraction(root) {
   };
   interactive.push(shopInteraction);
 }
+
 
 function rotateStaticArmVertices(mesh, centerX, leftShoulderX, rightShoulderX, pivotY, angleRad) {
   if (!mesh?.isMesh || !mesh.geometry?.attributes?.position || mesh.userData?.babaArmsRelaxed) return;
@@ -7008,6 +6653,7 @@ function rotateStaticArmVertices(mesh, centerX, leftShoulderX, rightShoulderX, p
   mesh.userData.babaArmsRelaxed = true;
 }
 
+
 function relaxBabaKapaTPose(root) {
   if (!root) return;
   const torso = root.getObjectByName('туловище');
@@ -7029,6 +6675,7 @@ function relaxBabaKapaTPose(root) {
   console.log('[BABA] static T-pose arms relaxed procedurally');
 }
 
+
 let babaIdleClock = 0;
 let babaIdleBaseYaw = 0;
 function updateBabaProceduralIdle(dt) {
@@ -7041,6 +6688,7 @@ function updateBabaProceduralIdle(dt) {
   babaWorldRoot.rotation.y = babaIdleBaseYaw + sway * .015;
   babaWorldRoot.updateMatrixWorld(true);
 }
+
 
 function findOrCreateBabaKapa(root) {
   if (!root) return null;
@@ -7070,6 +6718,7 @@ function findOrCreateBabaKapa(root) {
   return group;
 }
 
+
 mobileDebugStage(TOUCH_DEVICE ? (MOBILE_SAFE_MODE ? 'scene-loading-safe' : 'scene-loading-normal') : 'desktop-scene-loading');
 loader.load(FINAL_SCENE_URL, gltf => {
   layoutRoot = gltf.scene;
@@ -7078,8 +6727,10 @@ loader.load(FINAL_SCENE_URL, gltf => {
   scene.add(layoutRoot);
   layoutRoot.updateWorldMatrix(true, true);
 
+
   // Spawn point is authored in Blender. The marker itself is hidden in runtime.
   setupPlayerSpawn(layoutRoot);
+
 
   // The panorama dome is intentionally PBR in the Blender export. Give it a
   // low emissive contribution so the zenith does not turn almost black under
@@ -7100,6 +6751,7 @@ loader.load(FINAL_SCENE_URL, gltf => {
     });
   }
 
+
   // Replace flat Blender slab with the actual runtime recess. Hide every matching node
   // (mobile glTF can expose mesh/group wrappers differently) and force the runtime pit visible.
   layoutRoot.traverse(o => {
@@ -7116,6 +6768,7 @@ loader.load(FINAL_SCENE_URL, gltf => {
     mobileDebugLog(`runtime pits visible: ${pitMeshes.length} meshes; slabBoxes=mobile`);
   }
 
+
   // HOSE ANCHOR
   // Blender Empty nodes have repeatedly disappeared or exported as identity in our GLB.
   // Preferred authoring method: a tiny mesh named `ShlangAnchor` at the exact hose outlet.
@@ -7123,10 +6776,12 @@ loader.load(FINAL_SCENE_URL, gltf => {
   let anchorPos = null;
   hoseAnchorObject = null;
 
+
   const anchorMarker =
     layoutRoot.getObjectByName('ShlangAnchor') ||
     layoutRoot.getObjectByName('SHLANG_ANCHOR') ||
     layoutRoot.getObjectByName('Shlang_Anchor');
+
 
   if (anchorMarker) {
     anchorMarker.updateWorldMatrix(true, true);
@@ -7135,6 +6790,7 @@ loader.load(FINAL_SCENE_URL, gltf => {
     anchorMarker.visible = false;
     console.log('Runtime hose anchor from ShlangAnchor:', anchorMarker.name, anchorPos);
   }
+
 
   // Keep legacy Empty support if it ever exports with a real transform.
   if (!anchorPos) {
@@ -7145,6 +6801,7 @@ loader.load(FINAL_SCENE_URL, gltf => {
       else hoseAnchorObject = null;
     }
   }
+
 
   if (!anchorPos) {
     // Current SCENE3 fallback: Geom3D.022 is the authored hanging boom-end piece.
@@ -7162,6 +6819,7 @@ loader.load(FINAL_SCENE_URL, gltf => {
       console.warn('No ShlangAnchor mesh in GLB; using Geom3D.022 bottom:', anchorPos);
     }
   }
+
 
   if (anchorPos) {
     hoseAnchorFallback.copy(anchorPos);
@@ -7181,8 +6839,10 @@ loader.load(FINAL_SCENE_URL, gltf => {
     console.error('NO VALID HOSE ANCHOR FOUND — add a tiny mesh named ShlangAnchor in Blender');
   }
 
+
   // Rake is authored/positioned in Blender now. Use that exact scene model.
   setupSceneRake(layoutRoot);
+
 
   // FINAL contains Baba as separated static parts in a T-pose (no skin/armature was exported).
   // Relax the arms directly from their actual mesh bounds, then run a subtle procedural idle.
@@ -7191,6 +6851,7 @@ loader.load(FINAL_SCENE_URL, gltf => {
   if (baba) {
     baba.visible = true;
     baba.updateWorldMatrix(true, true);
+
 
     // In SCENE3(1) Baba's skinned geometry exported below ground
     // (bbox bottom about -2.27 m). Keep the authored X/Z, but put her feet on y=0.
@@ -7202,6 +6863,7 @@ loader.load(FINAL_SCENE_URL, gltf => {
       babaBox = new THREE.Box3().setFromObject(baba);
       console.warn('[BABA KAPA] lifted to ground by', lift.toFixed(3), 'm', babaBox);
     }
+
 
     baba.traverse(o => {
       o.visible = true;
@@ -7232,27 +6894,33 @@ loader.load(FINAL_SCENE_URL, gltf => {
     console.warn('BabaKapa node not found in scene');
   }
 
+
   // Pickups are authored scene meshes. Register them before collision generation so
   // they never leave invisible blockers after being collected.
   setupWorldPickups(layoutRoot);
+
 
   // Scene cleanup / art polish for the new export.
   removeFrontSiteFlower(layoutRoot);
   repaintConstructionVehicles(layoutRoot);
   setupConstructionMachineLife(layoutRoot);
 
+
   // The real storefront was omitted because it was hidden during Blender export.
   // Restore that missing mesh from a tiny standalone asset; no Blender re-export required.
   forceMonetka5Visible(layoutRoot);
+
 
   // Small parking-marking planes near MONETKA need alpha punch-through and must never
   // become solid blockers in the storefront parking lane.
   fixMonetkaParking(layoutRoot);
 
+
   // Mobile static batching happens after all scene-art fixes and before collider extraction.
   // Grass/flowers are visual-only and already collision-free, so replacing them with instancing
   // cannot affect gameplay volumes.
   instanceMobileVegetation(layoutRoot);
+
 
   addFinalLayoutColliders(layoutRoot);
   carveMonetkaParkingPassage();
@@ -7280,6 +6948,7 @@ loader.load(FINAL_SCENE_URL, gltf => {
     startSceneNPCs();
   }
 
+
   assetsLoaded++;
   sessionStorage.removeItem(SCENE_RETRY_KEY);
   updateLoadState();
@@ -7305,6 +6974,7 @@ loader.load(FINAL_SCENE_URL, gltf => {
   recoverBrokenScene('final GLTF load failed');
 });
 
+
 // FIRST-PERSON PLAYER / CONTROLS
 // Movement is deterministic: no acceleration, no velocity carry-over, no camera orbit smoothing.
 const keys = Object.create(null);
@@ -7314,6 +6984,7 @@ let pitch = 0;
 // stops before the camera can flip upside down.
 const FPS_PITCH_LIMIT = THREE.MathUtils.degToRad(85);
 let stamina = staminaMax, energyBoost = 0, toastTimer = 0, mapVisible = false;
+
 
 function savedInt(key, fallback) {
   const raw = localStorage.getItem(key);
@@ -7332,6 +7003,7 @@ let cigarettes = savedInt('beton_cigarettes', 3);
 let energyCans = savedInt('beton_energy', 0);
 let beerCans = savedInt('beton_beer', 4);
 
+
 function saveEconomy() {
   localStorage.setItem('beton_money', String(money));
   localStorage.setItem('beton_cigarettes', String(cigarettes));
@@ -7344,6 +7016,7 @@ function addMoney(amount) {
   recordCareerStat('moneyEarned', earned);
   saveEconomy();
 }
+
 
 let specialMode = null;
 let specialTimer = 0;
@@ -7377,6 +7050,7 @@ let eyeHeight = calibratedEyeHeight + cameraHeightOffset;
 const SITE = { minX: -31.7, maxX: 31.7, minZ: -49.9, maxZ: 22.9 };
 const playerPos = new THREE.Vector3(0, 0, 18.0); // fallback until Blender `spawn` is loaded
 
+
 function updateSunShadowFollow() {
   // Keep the same sun direction while moving the shadow camera with the player.
   // This lets us use a small frustum instead of wasting 2048px over ~160m.
@@ -7391,13 +7065,16 @@ function updateSunShadowFollow() {
   sun.updateMatrixWorld();
 }
 
+
 const moveForward = new THREE.Vector3();
 const moveRight = new THREE.Vector3();
 const moveWorld = new THREE.Vector3();
 
+
 // Camera is the player in FPS mode. Adding it to the scene lets us attach first-person props.
 scene.add(camera);
 camera.rotation.order = 'YXZ';
+
 
 function groundHeightAt(x, z) {
   // Start with authored low horizontal scene surfaces. This lets roads and pavements
@@ -7409,6 +7086,7 @@ function groundHeightAt(x, z) {
     }
   }
 
+
   if (insideSlab(x, z)) {
     const zone = zoneAt(x, z);
     if (zone) {
@@ -7416,17 +7094,20 @@ function groundHeightAt(x, z) {
       return zone.bottomY + getFillHeightAt(x, z);
     }
 
+
     // Persistent accidental spill has real surface height too.
     return SLAB.floorY + spillHeightAt(x, z);
   }
   return y;
 }
 
+
 let walkBobPhase = 0;
 let walkBobX = 0;
 let walkBobY = 0;
 let walkBobRoll = 0;
 let walkBobPitch = 0;
+
 
 function syncCameraToPlayer() {
   const groundY = groundHeightAt(playerPos.x, playerPos.z);
@@ -7443,6 +7124,7 @@ function syncCameraToPlayer() {
 }
 syncCameraToPlayer();
 
+
 // FIRST-PERSON ARMS / PROPS --------------------------------------------------
 // Full Mixamo skeleton stays alive for animation, but only shoulder/arm/hand vertices are rendered.
 // This avoids the classic "camera inside the head/body" FPS problem while preserving Smoking/Drinking.
@@ -7456,6 +7138,7 @@ let playerLocomotionState = 'idle';
 let playerMovingNow = false;
 let playerSprintingNow = false;
 
+
 // ================================================================
 // v51.7 GAME AUDIO
 // ================================================================
@@ -7464,33 +7147,40 @@ let gameAudioMaster = null;
 let gameAudioReady = false;
 let gameAudioInitPromise = null;
 
+
 // v51.14 — central audio mix. Tuned from the actual supplied source levels.
 // Dialogue sits above music; local SFX sit below dialogue; machinery is ambience.
 const AUDIO_MIX = Object.freeze({
   master: .88,
+
 
   footstepWalkMin: .34,
   footstepWalkMax: .44,
   footstepRunMin: .44,
   footstepRunMax: .54,
 
+
   pour: .38,
   rakeMin: .20,
   rakeMax: .34,
 
+
   pumpNear: .55,
   mixerNear: .16,
   ambienceDuckWhileVoice: .58,
+
 
   seryogaGreeting: 1.05,
   seryogaFarewell: 1.55,
   pavelGreeting: .82,
   pavelFarewell: 1.50,
 
+
   // The success voice source is much quieter than the music source.
   // These values put the voice ~1.2 dB above the success music by RMS.
   pavelSuccessVoice: 1.18,
   pavelSuccessMusic: .34,
+
 
   georgeGreeting: .98,
   georgeUpgrade1: .92,
@@ -7498,24 +7188,31 @@ const AUDIO_MIX = Object.freeze({
   georgeUpgrade3: 1.10,
   georgeNoMoney: 1.28,
 
+
   cigarettePuff: .42,
+
 
   // Supplied can opening + close-up gulps.
   drinkCanOpen: .46,
   drinkGulps: 2.55,
 
+
   wetFootstep: .48,
+
 
   qteAppear: .34,
   qteHit: .72,
   hoseSlip: .56,
+
 
   babaGreeting: 1.12,
   babaFarewell: .84,
   babaPurchase: .84
 });
 
+
 const PAVEL_SUCCESS_DANCE_SECONDS = 6.0;
+
 
 const stepBuffers = [];
 let footstepDistanceAcc = 0;
@@ -7523,10 +7220,12 @@ let footstepSide = 1;
 const footstepPrevPos = new THREE.Vector3();
 let footstepPrevValid = false;
 
+
 let pourBuffer = null;
 let pourSource = null;
 let pourGain = null;
 let pourAudioActive = false;
+
 
 let pumpBuffer = null;
 let mixerBuffer = null;
@@ -7560,23 +7259,29 @@ let drinkCanOpenSource = null;
 let drinkGulpsSource = null;
 let wetFootstepBuffer = null;
 
+
 let qteAppearBuffer = null;
 let qteHitBuffer = null;
 let hoseSlipBuffer = null;
+
 
 let babaGreetingBuffer = null;
 let babaFarewellBuffer = null;
 let babaPurchaseBuffer = null;
 let babaVoiceSource = null;
 
+
 let shopOpenedFromBaba = false;
+
 
 let pumpLoopSource = null;
 let mixerLoopSource = null;
 let pumpSpatialGain = null;
 let mixerSpatialGain = null;
 
+
 let rakeDragCooldown = 0;
+
 
 // World positions for spatial machine audio.
 // They are resolved from scene objects when available and otherwise fall back
@@ -7589,12 +7294,14 @@ const machineAudioNearestPoint = new THREE.Vector3();
 let pumpAudioWorldValid = false;
 let mixerAudioWorldValid = false;
 
+
 async function decodeGameAudio(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Audio HTTP ${res.status}: ${url}`);
   const data = await res.arrayBuffer();
   return await gameAudioCtx.decodeAudioData(data.slice(0));
 }
+
 
 async function initGameAudio() {
   if (gameAudioInitPromise) {
@@ -7604,6 +7311,7 @@ async function initGameAudio() {
     return gameAudioInitPromise;
   }
 
+
   gameAudioInitPromise = (async () => {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) {
@@ -7611,10 +7319,12 @@ async function initGameAudio() {
       return;
     }
 
+
     gameAudioCtx = new AC();
     gameAudioMaster = gameAudioCtx.createGain();
     gameAudioMaster.gain.value = AUDIO_MIX.master;
     gameAudioMaster.connect(gameAudioCtx.destination);
+
 
     try {
       const [
@@ -7657,6 +7367,7 @@ async function initGameAudio() {
         decodeGameAudio('./assets/audio/voices/baba/purchase.mp3')
       ]);
 
+
       stepBuffers.push(s1, s2);
       pourBuffer = pour;
       pumpBuffer = pump;
@@ -7677,19 +7388,23 @@ async function initGameAudio() {
       drinkCanOpenBuffer = drinkCanOpen;
       drinkGulpsBuffer = drinkGulps;
 
+
       wetFootstepBuffer = wetFootstep;
       qteAppearBuffer = qteAppear;
       qteHitBuffer = qteHit;
       hoseSlipBuffer = hoseSlip;
+
 
       babaGreetingBuffer = babaGreeting;
       babaFarewellBuffer = babaFarewell;
       babaPurchaseBuffer = babaPurchase;
       gameAudioReady = true;
 
+
       if (gameAudioCtx.state === 'suspended') {
         try { await gameAudioCtx.resume(); } catch (_) {}
       }
+
 
       console.log('[AUDIO] footsteps + concrete pour ready');
     } catch (e) {
@@ -7697,21 +7412,26 @@ async function initGameAudio() {
     }
   })();
 
+
   return gameAudioInitPromise;
 }
+
 
 function playConcreteFootstep(sprinting = false) {
   if (!gameAudioReady || !gameAudioCtx || !stepBuffers.length) return;
   if (gameAudioCtx.state !== 'running') return;
 
+
   const buffer = stepBuffers[Math.floor(Math.random() * stepBuffers.length)];
   const source = gameAudioCtx.createBufferSource();
   source.buffer = buffer;
+
 
   // Tiny randomization turns two samples into a much larger perceived set.
   source.playbackRate.value =
     (sprinting ? 1.055 : 1.0) *
     THREE.MathUtils.randFloat(.93, 1.07);
+
 
   const gain = gameAudioCtx.createGain();
   gain.gain.value = THREE.MathUtils.randFloat(
@@ -7719,7 +7439,9 @@ function playConcreteFootstep(sprinting = false) {
     sprinting ? AUDIO_MIX.footstepRunMax : AUDIO_MIX.footstepWalkMax
   );
 
+
   let tail = gain;
+
 
   // Very subtle L/R alternation. Still feels centered in first person.
   if (gameAudioCtx.createStereoPanner) {
@@ -7734,8 +7456,10 @@ function playConcreteFootstep(sprinting = false) {
     gain.connect(gameAudioMaster);
   }
 
+
   source.start();
 }
+
 
 function updateFootstepAudio(dt, moving, sprinting) {
   if (!started || !moving || !locked) {
@@ -7744,7 +7468,9 @@ function updateFootstepAudio(dt, moving, sprinting) {
     return;
   }
 
+
   if (!gameAudioReady) return;
+
 
   if (!footstepPrevValid) {
     footstepPrevPos.copy(playerPos);
@@ -7752,15 +7478,19 @@ function updateFootstepAudio(dt, moving, sprinting) {
     return;
   }
 
+
   const dx = playerPos.x - footstepPrevPos.x;
   const dz = playerPos.z - footstepPrevPos.z;
   const dist = Math.hypot(dx, dz);
   footstepPrevPos.copy(playerPos);
 
+
   const movementFactor = concreteMovementFactor(playerPos.x, playerPos.z);
   const onWetConcrete = movementFactor <= .985;
 
+
   footstepDistanceAcc += dist;
+
 
   if (onWetConcrete) {
     // One supplied wet-concrete step is varied in pitch/volume.
@@ -7774,6 +7504,7 @@ function updateFootstepAudio(dt, moving, sprinting) {
     return;
   }
 
+
   const dryStride = sprinting ? 1.62 : 1.44;
   while (footstepDistanceAcc >= dryStride) {
     footstepDistanceAcc -= dryStride;
@@ -7782,11 +7513,15 @@ function updateFootstepAudio(dt, moving, sprinting) {
 }
 
 
+
+
 function objectVisualCenter(obj, out) {
   if (!obj) return false;
 
+
   obj.updateWorldMatrix(true, true);
   const box = new THREE.Box3().setFromObject(obj);
+
 
   if (!box.isEmpty()) {
     const c = box.getCenter(out);
@@ -7797,6 +7532,7 @@ function objectVisualCenter(obj, out) {
     ) return true;
   }
 
+
   obj.getWorldPosition(out);
   return (
     Number.isFinite(out.x) &&
@@ -7804,6 +7540,7 @@ function objectVisualCenter(obj, out) {
     Number.isFinite(out.z)
   );
 }
+
 
 function objectVisualBounds(obj, outBox, outCenter) {
   if (!obj) return false;
@@ -7814,9 +7551,11 @@ function objectVisualBounds(obj, outBox, outCenter) {
   return [outCenter.x, outCenter.y, outCenter.z].every(Number.isFinite);
 }
 
+
 function resolveMachineAudioWorldPositions() {
   pumpAudioWorldValid = false;
   mixerAudioWorldValid = false;
+
 
   // IMPORTANT:
   // ShlangAnchor is at the end of the boom/hose, so using it made both
@@ -7827,16 +7566,20 @@ function resolveMachineAudioWorldPositions() {
     scene.getObjectByName('Hoze Truck') ||
     scene.getObjectByName('Geom3D_Hoze Truck');
 
+
   const mixerTruck =
     scene.getObjectByName('Concrete Mixer Truck');
+
 
   if (pumpTruck) {
     pumpAudioWorldValid = objectVisualBounds(pumpTruck, pumpAudioBounds, pumpAudioWorld);
   }
 
+
   if (mixerTruck) {
     mixerAudioWorldValid = objectVisualBounds(mixerTruck, mixerAudioBounds, mixerAudioWorld);
   }
+
 
   // Last-resort fallbacks only.
   if (!pumpAudioWorldValid) {
@@ -7845,10 +7588,12 @@ function resolveMachineAudioWorldPositions() {
       scene.getObjectByName('camec2') ||
       scene.getObjectByName('ShlangAnchor');
 
+
     if (fallback) {
       pumpAudioWorldValid = objectVisualBounds(fallback, pumpAudioBounds, pumpAudioWorld);
     }
   }
+
 
   if (!mixerAudioWorldValid && pumpAudioWorldValid) {
     const fallbackOffset = new THREE.Vector3(-4.0, 0, 1.0);
@@ -7857,6 +7602,7 @@ function resolveMachineAudioWorldPositions() {
     mixerAudioWorldValid = true;
   }
 
+
   console.log(
     '[AUDIO] machine emitters',
     'pump=', pumpAudioWorld.toArray(),
@@ -7864,25 +7610,32 @@ function resolveMachineAudioWorldPositions() {
   );
 }
 
+
 function startMachineLoop(buffer, gainValue = .25) {
   if (!gameAudioCtx || !gameAudioMaster || !buffer) return null;
 
+
   const source = gameAudioCtx.createBufferSource();
   const gain = gameAudioCtx.createGain();
+
 
   source.buffer = buffer;
   source.loop = true;
   gain.gain.value = gainValue;
 
+
   source.connect(gain);
   gain.connect(gameAudioMaster);
   source.start();
 
+
   return { source, gain };
 }
 
+
 function ensureMachineLoops() {
   if (!gameAudioReady || !gameAudioCtx || gameAudioCtx.state !== 'running') return;
+
 
   if (!pumpLoopSource && pumpBuffer) {
     const node = startMachineLoop(pumpBuffer, .0001);
@@ -7891,6 +7644,7 @@ function ensureMachineLoops() {
       pumpSpatialGain = node.gain;
     }
   }
+
 
   if (!mixerLoopSource && mixerBuffer) {
     const node = startMachineLoop(mixerBuffer, .0001);
@@ -7901,20 +7655,24 @@ function ensureMachineLoops() {
   }
 }
 
+
 function distanceGain3D(listenerPos, sourcePos, nearDist, farDist, maxGain) {
   const d = listenerPos.distanceTo(sourcePos);
   if (d <= nearDist) return maxGain;
   if (d >= farDist) return .0001;
+
 
   const t = THREE.MathUtils.clamp(
     (d - nearDist) / Math.max(.001, farDist - nearDist),
     0, 1
   );
 
+
   // smoother than linear, but dies off clearly with distance
   const k = (1 - t);
   return Math.max(.0001, maxGain * k * k);
 }
+
 
 function distanceGainFromVehicle(listenerPos, bounds, fallbackCenter, nearDist, farDist, maxGain) {
   if (bounds && !bounds.isEmpty()) {
@@ -7924,21 +7682,27 @@ function distanceGainFromVehicle(listenerPos, bounds, fallbackCenter, nearDist, 
   return distanceGain3D(listenerPos, fallbackCenter, nearDist, farDist, maxGain);
 }
 
+
 function updateMachineAudio() {
   if (!started || !gameAudioReady || !gameAudioCtx) return;
 
+
   ensureMachineLoops();
+
 
   if (!pumpAudioWorldValid || !mixerAudioWorldValid) {
     resolveMachineAudioWorldPositions();
   }
 
+
   const now = gameAudioCtx.currentTime;
+
 
   if (pumpSpatialGain && pumpAudioWorldValid) {
     const voiceDuck = isVoiceOrSuccessMomentActive()
       ? AUDIO_MIX.ambienceDuckWhileVoice
       : 1;
+
 
     const g = distanceGainFromVehicle(
       camera.position,
@@ -7951,10 +7715,12 @@ function updateMachineAudio() {
     pumpSpatialGain.gain.setTargetAtTime(g, now, .08);
   }
 
+
   if (mixerSpatialGain && mixerAudioWorldValid) {
     const voiceDuck = isVoiceOrSuccessMomentActive()
       ? AUDIO_MIX.ambienceDuckWhileVoice
       : 1;
+
 
     const g = distanceGainFromVehicle(
       camera.position,
@@ -7973,14 +7739,23 @@ function updateMachineAudio() {
 
 
 
+
+
+
+
+
+
 function stopPavelSuccessMusic(fadeSeconds = .12) {
   const src = pavelSuccessMusicSource;
   const gain = pavelSuccessMusicGain;
 
+
   pavelSuccessMusicSource = null;
   pavelSuccessMusicGain = null;
 
+
   if (!src || !gameAudioCtx) return;
+
 
   const now = gameAudioCtx.currentTime;
   try {
@@ -7995,6 +7770,7 @@ function stopPavelSuccessMusic(fadeSeconds = .12) {
   }
 }
 
+
 function playPavelSuccessMusic() {
   if (
     !gameAudioReady ||
@@ -8003,17 +7779,22 @@ function playPavelSuccessMusic() {
     gameAudioCtx.state !== 'running'
   ) return;
 
+
   stopPavelSuccessMusic(.04);
+
 
   const source = gameAudioCtx.createBufferSource();
   const gain = gameAudioCtx.createGain();
   const now = gameAudioCtx.currentTime;
 
+
   source.buffer = pavelSuccessMusicBuffer;
   source.loop = false;
   source.playbackRate.value = 1.0;
 
+
   gain.gain.setValueAtTime(AUDIO_MIX.pavelSuccessMusic, now);
+
 
   // The supplied music is 6.88 s, but almost all meaningful energy ends by 6 s.
   // Fade its tail so the musical moment ends exactly with Pavel's dance.
@@ -8024,11 +7805,14 @@ function playPavelSuccessMusic() {
     now + PAVEL_SUCCESS_DANCE_SECONDS
   );
 
+
   source.connect(gain);
   gain.connect(gameAudioMaster);
 
+
   pavelSuccessMusicSource = source;
   pavelSuccessMusicGain = gain;
+
 
   source.onended = () => {
     if (pavelSuccessMusicSource === source) {
@@ -8037,9 +7821,11 @@ function playPavelSuccessMusic() {
     }
   };
 
+
   source.start(now);
   source.stop(now + PAVEL_SUCCESS_DANCE_SECONDS + .03);
 }
+
 
 function isVoiceOrSuccessMomentActive() {
   return !!(
@@ -8055,13 +7841,17 @@ function isVoiceOrSuccessMomentActive() {
 }
 
 
+
+
 function playGeorgeVoice(buffer, gainValue) {
   if (!gameAudioReady || !gameAudioCtx || !buffer || gameAudioCtx.state !== 'running') return;
+
 
   if (georgeVoiceSource) {
     try { georgeVoiceSource.stop(); } catch (_) {}
     georgeVoiceSource = null;
   }
+
 
   const source = gameAudioCtx.createBufferSource();
   const gain = gameAudioCtx.createGain();
@@ -8072,6 +7862,7 @@ function playGeorgeVoice(buffer, gainValue) {
   source.connect(gain);
   gain.connect(gameAudioMaster);
 
+
   georgeVoiceSource = source;
   source.onended = () => {
     if (georgeVoiceSource === source) georgeVoiceSource = null;
@@ -8079,15 +7870,20 @@ function playGeorgeVoice(buffer, gainValue) {
   source.start();
 }
 
+
 function playGeorgeGreetingVoice() {
   playGeorgeVoice(georgeGreetingBuffer, AUDIO_MIX.georgeGreeting);
 }
+
 
 function playGeorgeUpgradeVoice(level) {
   if (level === 1) playGeorgeVoice(georgeUpgrade1Buffer, AUDIO_MIX.georgeUpgrade1);
   else if (level === 2) playGeorgeVoice(georgeUpgrade2Buffer, AUDIO_MIX.georgeUpgrade2);
   else if (level === 3) playGeorgeVoice(georgeUpgrade3Buffer, AUDIO_MIX.georgeUpgrade3);
 }
+
+
+
 
 
 
@@ -8099,20 +7895,25 @@ function playSimpleGameOneShot(buffer, gainValue, playbackRate = 1.0) {
     gameAudioCtx.state !== 'running'
   ) return null;
 
+
   const source = gameAudioCtx.createBufferSource();
   const gain = gameAudioCtx.createGain();
+
 
   source.buffer = buffer;
   source.loop = false;
   source.playbackRate.value = playbackRate;
   gain.gain.value = gainValue;
 
+
   source.connect(gain);
   gain.connect(gameAudioMaster);
   source.start();
 
+
   return source;
 }
+
 
 function stopDrinkAudio() {
   for (const src of [drinkCanOpenSource, drinkGulpsSource]) {
@@ -8123,10 +7924,12 @@ function stopDrinkAudio() {
   drinkGulpsSource = null;
 }
 
+
 function playCanDrinkAudio() {
   if (!gameAudioReady || !gameAudioCtx || gameAudioCtx.state !== 'running') return;
   stopDrinkAudio();
   const now = gameAudioCtx.currentTime;
+
 
   if (drinkCanOpenBuffer) {
     const source = gameAudioCtx.createBufferSource();
@@ -8139,6 +7942,7 @@ function playCanDrinkAudio() {
     source.onended = () => { if (drinkCanOpenSource === source) drinkCanOpenSource = null; };
     source.start(now);
   }
+
 
   if (drinkGulpsBuffer) {
     const source = gameAudioCtx.createBufferSource();
@@ -8153,17 +7957,21 @@ function playCanDrinkAudio() {
   }
 }
 
+
 function playQTEAppearAudio() {
   playSimpleGameOneShot(qteAppearBuffer, AUDIO_MIX.qteAppear);
 }
+
 
 function playQTEHitAudio() {
   playSimpleGameOneShot(qteHitBuffer, AUDIO_MIX.qteHit);
 }
 
+
 function playHoseSlipAudio() {
   playSimpleGameOneShot(hoseSlipBuffer, AUDIO_MIX.hoseSlip);
 }
+
 
 function playWetConcreteFootstep(sprinting = false) {
   playSimpleGameOneShot(
@@ -8173,6 +7981,7 @@ function playWetConcreteFootstep(sprinting = false) {
   );
 }
 
+
 function playBabaVoice(buffer, gainValue) {
   if (
     !gameAudioReady ||
@@ -8181,41 +7990,51 @@ function playBabaVoice(buffer, gainValue) {
     gameAudioCtx.state !== 'running'
   ) return;
 
+
   if (babaVoiceSource) {
     try { babaVoiceSource.stop(); } catch (_) {}
     babaVoiceSource = null;
   }
 
+
   const source = gameAudioCtx.createBufferSource();
   const gain = gameAudioCtx.createGain();
+
 
   source.buffer = buffer;
   source.loop = false;
   source.playbackRate.value = 1.0;
   gain.gain.value = gainValue;
 
+
   source.connect(gain);
   gain.connect(gameAudioMaster);
+
 
   babaVoiceSource = source;
   source.onended = () => {
     if (babaVoiceSource === source) babaVoiceSource = null;
   };
 
+
   source.start();
 }
+
 
 function playBabaGreetingVoice() {
   playBabaVoice(babaGreetingBuffer, AUDIO_MIX.babaGreeting);
 }
 
+
 function playBabaFarewellVoice() {
   playBabaVoice(babaFarewellBuffer, AUDIO_MIX.babaFarewell);
 }
 
+
 function playBabaPurchaseVoice() {
   playBabaVoice(babaPurchaseBuffer, AUDIO_MIX.babaPurchase);
 }
+
 
 function playCigarettePuffAudio() {
   if (
@@ -8225,34 +8044,42 @@ function playCigarettePuffAudio() {
     gameAudioCtx.state !== 'running'
   ) return;
 
+
   // Never stack multiple close-up inhale samples.
   if (cigarettePuffSource) {
     try { cigarettePuffSource.stop(); } catch (_) {}
     cigarettePuffSource = null;
   }
 
+
   const source = gameAudioCtx.createBufferSource();
   const gain = gameAudioCtx.createGain();
+
 
   source.buffer = cigarettePuffBuffer;
   source.loop = false;
   source.playbackRate.value = THREE.MathUtils.randFloat(.98, 1.02);
   gain.gain.value = AUDIO_MIX.cigarettePuff;
 
+
   source.connect(gain);
   gain.connect(gameAudioMaster);
+
 
   cigarettePuffSource = source;
   source.onended = () => {
     if (cigarettePuffSource === source) cigarettePuffSource = null;
   };
 
+
   source.start();
 }
+
 
 function playGeorgeNoMoneyVoice() {
   playGeorgeVoice(georgeNoMoneyBuffer, AUDIO_MIX.georgeNoMoney);
 }
+
 
 function playPavelSuccessDanceVoice() {
   if (
@@ -8261,6 +8088,7 @@ function playPavelSuccessDanceVoice() {
     !pavelSuccessDanceBuffer ||
     gameAudioCtx.state !== 'running'
   ) return;
+
 
   // Pavel should not talk over one of his own previous lines.
   for (const src of [pavelGreetingSource, pavelFarewellSource, pavelSuccessDanceSource]) {
@@ -8271,24 +8099,30 @@ function playPavelSuccessDanceVoice() {
   pavelFarewellSource = null;
   pavelSuccessDanceSource = null;
 
+
   const source = gameAudioCtx.createBufferSource();
   const gain = gameAudioCtx.createGain();
+
 
   source.buffer = pavelSuccessDanceBuffer;
   source.loop = false;
   source.playbackRate.value = 1.0;
   gain.gain.value = AUDIO_MIX.pavelSuccessVoice;
 
+
   source.connect(gain);
   gain.connect(gameAudioMaster);
+
 
   pavelSuccessDanceSource = source;
   source.onended = () => {
     if (pavelSuccessDanceSource === source) pavelSuccessDanceSource = null;
   };
 
+
   source.start();
 }
+
 
 function playPavelFarewellVoice() {
   if (
@@ -8298,34 +8132,42 @@ function playPavelFarewellVoice() {
     gameAudioCtx.state !== 'running'
   ) return;
 
+
   if (pavelGreetingSource) {
     try { pavelGreetingSource.stop(); } catch (_) {}
     pavelGreetingSource = null;
   }
+
 
   if (pavelFarewellSource) {
     try { pavelFarewellSource.stop(); } catch (_) {}
     pavelFarewellSource = null;
   }
 
+
   const source = gameAudioCtx.createBufferSource();
   const gain = gameAudioCtx.createGain();
+
 
   source.buffer = pavelFarewellBuffer;
   source.loop = false;
   source.playbackRate.value = 1.0;
   gain.gain.value = AUDIO_MIX.pavelFarewell;
 
+
   source.connect(gain);
   gain.connect(gameAudioMaster);
+
 
   pavelFarewellSource = source;
   source.onended = () => {
     if (pavelFarewellSource === source) pavelFarewellSource = null;
   };
 
+
   source.start();
 }
+
 
 function playPavelGreetingVoice() {
   if (
@@ -8335,29 +8177,36 @@ function playPavelGreetingVoice() {
     gameAudioCtx.state !== 'running'
   ) return;
 
+
   if (pavelGreetingSource) {
     try { pavelGreetingSource.stop(); } catch (_) {}
     pavelGreetingSource = null;
   }
 
+
   const source = gameAudioCtx.createBufferSource();
   const gain = gameAudioCtx.createGain();
+
 
   source.buffer = pavelGreetingBuffer;
   source.loop = false;
   source.playbackRate.value = 1.0;
   gain.gain.value = AUDIO_MIX.pavelGreeting;
 
+
   source.connect(gain);
   gain.connect(gameAudioMaster);
+
 
   pavelGreetingSource = source;
   source.onended = () => {
     if (pavelGreetingSource === source) pavelGreetingSource = null;
   };
 
+
   source.start();
 }
+
 
 function playSeryogaFarewellVoice() {
   if (
@@ -8367,35 +8216,43 @@ function playSeryogaFarewellVoice() {
     gameAudioCtx.state !== 'running'
   ) return;
 
+
   // Don't let greeting/farewell talk over one another.
   if (seryogaGreetingSource) {
     try { seryogaGreetingSource.stop(); } catch (_) {}
     seryogaGreetingSource = null;
   }
 
+
   if (seryogaFarewellSource) {
     try { seryogaFarewellSource.stop(); } catch (_) {}
     seryogaFarewellSource = null;
   }
 
+
   const source = gameAudioCtx.createBufferSource();
   const gain = gameAudioCtx.createGain();
+
 
   source.buffer = seryogaFarewellBuffer;
   source.loop = false;
   source.playbackRate.value = 1.0;
   gain.gain.value = AUDIO_MIX.seryogaFarewell;
 
+
   source.connect(gain);
   gain.connect(gameAudioMaster);
+
 
   seryogaFarewellSource = source;
   source.onended = () => {
     if (seryogaFarewellSource === source) seryogaFarewellSource = null;
   };
 
+
   source.start();
 }
+
 
 function playSeryogaGreetingVoice() {
   if (
@@ -8405,32 +8262,40 @@ function playSeryogaGreetingVoice() {
     gameAudioCtx.state !== 'running'
   ) return;
 
+
   // Prevent accidental overlap if interact is spammed.
   if (seryogaGreetingSource) {
     try { seryogaGreetingSource.stop(); } catch (_) {}
     seryogaGreetingSource = null;
   }
 
+
   const source = gameAudioCtx.createBufferSource();
   const gain = gameAudioCtx.createGain();
+
 
   source.buffer = seryogaGreetingBuffer;
   source.loop = false;
   source.playbackRate.value = 1.0;
 
+
   // Dialogue is intentionally clearer/louder than ambient machinery.
   gain.gain.value = AUDIO_MIX.seryogaGreeting;
 
+
   source.connect(gain);
   gain.connect(gameAudioMaster);
+
 
   seryogaGreetingSource = source;
   source.onended = () => {
     if (seryogaGreetingSource === source) seryogaGreetingSource = null;
   };
 
+
   source.start();
 }
+
 
 function playRakeDragAudio(intensity = 1) {
   if (
@@ -8440,9 +8305,11 @@ function playRakeDragAudio(intensity = 1) {
     gameAudioCtx.state !== 'running'
   ) return;
 
+
   const source = gameAudioCtx.createBufferSource();
   source.buffer = rakeDragBuffer;
   source.playbackRate.value = THREE.MathUtils.randFloat(.94, 1.06);
+
 
   const gain = gameAudioCtx.createGain();
   gain.gain.value = THREE.MathUtils.lerp(
@@ -8451,10 +8318,12 @@ function playRakeDragAudio(intensity = 1) {
     THREE.MathUtils.clamp(intensity, 0, 1)
   ) * THREE.MathUtils.randFloat(.90, 1.08);
 
+
   source.connect(gain);
   gain.connect(gameAudioMaster);
   source.start();
 }
+
 
 function startPourAudio() {
   if (
@@ -8465,9 +8334,11 @@ function startPourAudio() {
     gameAudioCtx.state !== 'running'
   ) return;
 
+
   pourSource = gameAudioCtx.createBufferSource();
   pourSource.buffer = pourBuffer;
   pourSource.loop = true;
+
 
   pourGain = gameAudioCtx.createGain();
   pourGain.gain.setValueAtTime(.0001, gameAudioCtx.currentTime);
@@ -8476,23 +8347,29 @@ function startPourAudio() {
     gameAudioCtx.currentTime + .18
   );
 
+
   pourSource.connect(pourGain);
   pourGain.connect(gameAudioMaster);
   pourSource.start();
 
+
   pourAudioActive = true;
 }
+
 
 function stopPourAudio() {
   if (!pourAudioActive) return;
   pourAudioActive = false;
+
 
   const src = pourSource;
   const gain = pourGain;
   pourSource = null;
   pourGain = null;
 
+
   if (!gameAudioCtx || !gain || !src) return;
+
 
   const now = gameAudioCtx.currentTime;
   try {
@@ -8505,12 +8382,14 @@ function stopPourAudio() {
   }
 }
 
+
 function updatePourAudio() {
   const shouldPlay =
     started &&
     pouring &&
     jobState === 'active' &&
     gameAudioReady;
+
 
   if (shouldPlay) startPourAudio();
   else stopPourAudio();
@@ -8523,6 +8402,7 @@ let rightMiddleBone = null;
 let leftIndexBone = null;
 let leftMiddleBone = null;
 
+
 // Procedural upper-body animation bones.
 // Locomotion remains authored FBX; smoking/drinking/raking are applied AFTER
 // the locomotion mixer updates, so they cannot replace/break movement clips.
@@ -8531,9 +8411,11 @@ let rightForeArmBone = null;
 let leftUpperArmBone = null;
 let leftForeArmBone = null;
 
+
 let proceduralSpecialElapsed = 0;
 let proceduralSpecialDuration = 0;
 // rakeAnimClock is declared once in the rake runtime state above
+
 
 const procTargetA = new THREE.Vector3();
 const procTargetB = new THREE.Vector3();
@@ -8548,12 +8430,15 @@ const procDirTarget = new THREE.Vector3();
 const procEuler = new THREE.Euler();
 const procTiltQ = new THREE.Quaternion();
 
+
 let cigaretteProp = null;
+
 
 const cigaretteSmokeGroup = new THREE.Group();
 scene.add(cigaretteSmokeGroup);
 const cigaretteSmokeParticles = [];
 let cigaretteSmokeSpawnTimer = 0;
+
 
 function makeCigaretteSmokeTexture() {
   const c = document.createElement('canvas');
@@ -8569,6 +8454,7 @@ function makeCigaretteSmokeTexture() {
 }
 const cigaretteSmokeTexture=makeCigaretteSmokeTexture();
 
+
 for(let i=0;i<48;i++){
   const mat=new THREE.SpriteMaterial({
     map:cigaretteSmokeTexture,transparent:true,opacity:0,
@@ -8580,11 +8466,13 @@ for(let i=0;i<48;i++){
   cigaretteSmokeParticles.push({sprite,vel:new THREE.Vector3(),age:0,life:0});
 }
 
+
 const smokeTipWorld=new THREE.Vector3();
 const smokeBox=new THREE.Box3();
 const smokeCorner=new THREE.Vector3();
 const smokeBest=new THREE.Vector3();
 const smokeCenter=new THREE.Vector3();
+
 
 function getCigaretteBurnTipWorld(out){
   if(!cigaretteProp)return false;
@@ -8605,6 +8493,7 @@ function getCigaretteBurnTipWorld(out){
   return true;
 }
 
+
 function spawnCigaretteSmoke(strength=1){
   if(!getCigaretteBurnTipWorld(smokeTipWorld))return;
   let p=cigaretteSmokeParticles.find(x=>!x.sprite.visible);
@@ -8624,6 +8513,7 @@ function spawnCigaretteSmoke(strength=1){
   p.sprite.material.opacity=.50+strength*.20;
   p.sprite.material.rotation=Math.random()*Math.PI*2;
 }
+
 
 function updateCigaretteSmoke(dt){
   for(const p of cigaretteSmokeParticles){
@@ -8648,6 +8538,7 @@ function updateCigaretteSmoke(dt){
     procPulse(t,.18,.115),procPulse(t,.50,.115),procPulse(t,.79,.115)
   );
 
+
   // Three discrete inhalations, synchronized to the same drag timing that
   // drives the cigarette smoke animation.
   let dragIndex = -1;
@@ -8655,10 +8546,12 @@ function updateCigaretteSmoke(dt){
   else if (Math.abs(t - .50) <= .055) dragIndex = 1;
   else if (Math.abs(t - .79) <= .055) dragIndex = 2;
 
+
   if (dragIndex >= 0 && dragIndex !== cigarettePuffLastDrag) {
     cigarettePuffLastDrag = dragIndex;
     playCigarettePuffAudio();
   }
+
 
   cigaretteSmokeSpawnTimer-=dt;
   if(cigaretteSmokeSpawnTimer<=0){
@@ -8672,6 +8565,7 @@ let beerProp = null;
 let lighterProp = null;
 let armsReady = false;
 
+
 const armsRig = new THREE.Group();
 armsRig.name = 'PLAYER_WORLD_BODY';
 armsRig.visible = false;
@@ -8680,6 +8574,7 @@ armsRig.rotation.order = 'YXZ';
 // IMPORTANT: body is a world object, not a camera child. It follows player X/Z + yaw only,
 // so looking up/down can never tilt the entire worker.
 scene.add(armsRig);
+
 
 const cigaretteVM = new THREE.Group();
 cigaretteVM.visible = false;
@@ -8693,6 +8588,7 @@ camera.add(beerVM);
 const lighterVM = new THREE.Group();
 lighterVM.visible = false;
 camera.add(lighterVM);
+
 
 const fbxManager = new THREE.LoadingManager();
 function basenameURL(url) {
@@ -8709,7 +8605,9 @@ fbxManager.setURLModifier(url => {
 const fbxLoader = new FBXLoader(fbxManager);
 function loadFBX(url) { return new Promise((resolve, reject) => fbxLoader.load(url, resolve, undefined, reject)); }
 
+
 const shopPreviewSourceCache = new Map();
+
 
 function makeBootPreview(tier = 1) {
   const g = new THREE.Group();
@@ -8732,6 +8630,7 @@ function makeBootPreview(tier = 1) {
   return g;
 }
 
+
 function cloneForShopPreview(source) {
   // Scene-authored products live tens of metres away from world origin. Scaling and
   // recentering that same transformed object leaves it off-camera. Put a detached
@@ -8742,6 +8641,7 @@ function cloneForShopPreview(source) {
   cloned.matrixAutoUpdate = false;
   cloned.matrix.copy(source.matrixWorld || new THREE.Matrix4());
   cloned.matrixWorldNeedsUpdate = true;
+
 
   cloned.traverse(o => {
     o.visible = true;
@@ -8764,15 +8664,18 @@ function cloneForShopPreview(source) {
     }
   });
 
+
   const wrapper = new THREE.Group();
   wrapper.add(cloned);
   wrapper.updateWorldMatrix(true, true);
+
 
   const bb = new THREE.Box3().setFromObject(wrapper);
   const size = bb.getSize(new THREE.Vector3());
   const center = bb.getCenter(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z, .001);
   const scale = 1.75 / maxDim;
+
 
   wrapper.scale.setScalar(scale);
   wrapper.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
@@ -8781,9 +8684,11 @@ function cloneForShopPreview(source) {
   return wrapper;
 }
 
+
 function bakeSceneObjectForShopPreview(source) {
   if (!source) throw new Error('shop preview source missing');
   source.updateWorldMatrix?.(true, true);
+
 
   const baked = new THREE.Group();
   baked.name = `SHOP_BAKED_${source.name || 'PRODUCT'}`;
@@ -8801,12 +8706,14 @@ function bakeSceneObjectForShopPreview(source) {
     baked.add(m);
   });
 
+
   if (!baked.children.length) throw new Error(`${source.name}: no preview meshes`);
   const bb = new THREE.Box3().setFromObject(baked);
   const center = bb.getCenter(new THREE.Vector3());
   const size = bb.getSize(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z, .001);
   baked.position.copy(center).multiplyScalar(-1);
+
 
   const wrapper = new THREE.Group();
   wrapper.add(baked);
@@ -8816,10 +8723,12 @@ function bakeSceneObjectForShopPreview(source) {
   return wrapper;
 }
 
+
 async function getShopPreviewSource(productKey) {
   if (shopPreviewSourceCache.has(productKey)) {
     return (await shopPreviewSourceCache.get(productKey)).clone(true);
   }
+
 
   const p = (async () => {
     if (productKey === 'rewind') {
@@ -8828,6 +8737,7 @@ async function getShopPreviewSource(productKey) {
       );
       return cloneForShopPreview(gltf.scene);
     }
+
 
     if (productKey === 'samec') {
       // The authored pack has its transforms baked into child geometry. Cloning
@@ -8841,10 +8751,12 @@ async function getShopPreviewSource(productKey) {
       return model;
     }
 
+
     if (productKey === 'beer') {
       const fbx = await loadFBX('./assets/beer/Baltika.fbx');
       return cloneForShopPreview(fbx);
     }
+
 
     if (productKey === 'belomor') {
       const gltf = await new Promise((resolve, reject) =>
@@ -8852,6 +8764,7 @@ async function getShopPreviewSource(productKey) {
       );
       return cloneForShopPreview(gltf.scene);
     }
+
 
     if (productKey === 'boots1') {
       const gltf = await new Promise((resolve, reject) =>
@@ -8863,6 +8776,7 @@ async function getShopPreviewSource(productKey) {
       return model;
     }
 
+
     if (productKey === 'boots2') {
       const gltf = await new Promise((resolve, reject) =>
         loader.load('./assets/shop/rubberbootstier2.gltf', resolve, undefined, reject)
@@ -8872,6 +8786,7 @@ async function getShopPreviewSource(productKey) {
       model.rotation.y = 0.24;
       return model;
     }
+
 
     if (productKey === 'boots3') {
       const gltf = await new Promise((resolve, reject) =>
@@ -8883,16 +8798,20 @@ async function getShopPreviewSource(productKey) {
       return model;
     }
 
+
     throw new Error(`Unknown shop preview: ${productKey}`);
   })();
+
 
   shopPreviewSourceCache.set(productKey, p);
   return (await p).clone(true);
 }
 
+
 async function setShopPreviewModel(productKey) {
   const requestId = ++shopPreviewRequestId;
   while (shopPreviewRoot.children.length) shopPreviewRoot.remove(shopPreviewRoot.children[0]);
+
 
   try {
     const model = await getShopPreviewSource(productKey);
@@ -8904,6 +8823,8 @@ async function setShopPreviewModel(productKey) {
     console.warn('Shop 3D preview failed:', productKey, e);
   }
 }
+
+
 
 
 function prepViewModelMaterial(mat) {
@@ -8942,6 +8863,7 @@ function forceOpaqueProp(root, keepDepthOverlay = false) {
   });
 }
 
+
 function prepViewModel(root) {
   root.traverse(o => {
     if (o.isMesh || o.isSkinnedMesh) {
@@ -8954,6 +8876,7 @@ function prepViewModel(root) {
     }
   });
 }
+
 
 function prepPlayerWorldBody(root) {
   root.traverse(o => {
@@ -8993,12 +8916,14 @@ function buildHeadShadowGeometry(mesh) {
   const skinWeight = mesh.geometry.attributes.skinWeight;
   if (!skinIndex || !skinWeight) return null;
 
+
   const headBones = new Set();
   mesh.skeleton.bones.forEach((b, i) => {
     const core = canonicalBoneCore(b.name);
     if (core === 'head' || core === 'neck' || core.startsWith('headtop') || core.includes('headend')) headBones.add(i);
   });
   if (!headBones.size) return null;
+
 
   const src = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
   const si = src.attributes.skinIndex, sw = src.attributes.skinWeight, pos = src.attributes.position;
@@ -9038,6 +8963,7 @@ function buildHeadShadowGeometry(mesh) {
   return ng;
 }
 
+
 function ensurePlayerHeadShadowCaster(root) {
   if (!root || playerHeadShadowCaster) return;
   const holder = new THREE.Group();
@@ -9048,6 +8974,7 @@ function ensurePlayerHeadShadowCaster(root) {
   shadowMat.colorWrite = false;
   shadowMat.depthWrite = false;
   shadowMat.depthTest = false;
+
 
   const additions = [];
   root.traverse(o => {
@@ -9088,7 +9015,9 @@ function normalizeCharacter(root, targetHeight = 1.78) {
   root.position.y -= bb.min.y;
 }
 
+
 const hotbar3D=new Map();
+
 
 function cloneForHotbarPreview(source){
   if(!source)return null;
@@ -9112,6 +9041,7 @@ function cloneForHotbarPreview(source){
   return clone;
 }
 
+
 function createHotbar3DPreview(kind,canvas){
   if(!canvas||TOUCH_DEVICE)return null;
   const renderer=new THREE.WebGLRenderer({canvas,alpha:true,antialias:true,powerPreference:'low-power'});
@@ -9121,6 +9051,7 @@ function createHotbar3DPreview(kind,canvas){
   renderer.toneMapping=THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure=1.18;
   renderer.setClearColor(0x000000,0);
+
 
   const s=new THREE.Scene();
   const c=new THREE.PerspectiveCamera(28,72/46,.01,10);
@@ -9133,10 +9064,12 @@ function createHotbar3DPreview(kind,canvas){
   hotbar3D.set(kind,entry);return entry;
 }
 
+
 createHotbar3DPreview('smoke',hotbarSmokePreviewEl);
 createHotbar3DPreview('energy',hotbarDrinkPreviewEl);
 createHotbar3DPreview('beer',hotbarBeerPreviewEl);
 createHotbar3DPreview('rake',hotbarRakePreviewEl);
+
 
 function setHotbar3DModel(kind,source){
   const entry=hotbar3D.get(kind);
@@ -9148,6 +9081,7 @@ function setHotbar3DModel(kind,source){
   model.position.set(0,0,0);model.rotation.set(0,0,0);model.scale.setScalar(1);
   model.updateWorldMatrix(true,true);
 
+
   const box=new THREE.Box3().setFromObject(model);
   const center=box.getCenter(new THREE.Vector3());
   const size=box.getSize(new THREE.Vector3());
@@ -9155,12 +9089,14 @@ function setHotbar3DModel(kind,source){
   model.position.sub(center);
   model.scale.setScalar(1.18/longest);
 
+
   if(kind==='smoke'){model.rotation.set(.18,-.55,-.15);model.scale.multiplyScalar(1.28);}
   else if(kind==='energy'){model.rotation.set(.12,-.50,.03);}
   else if(kind==='beer'){model.rotation.set(.10,-.55,.03);}
   else if(kind==='rake'){model.rotation.set(.18,-.25,-.68);model.scale.multiplyScalar(.92);}
   entry.model=model;
 }
+
 
 function renderHotbar3DPreviews(dt){
   if(TOUCH_DEVICE)return;
@@ -9171,6 +9107,7 @@ function renderHotbar3DPreviews(dt){
     entry.renderer.render(entry.scene,entry.camera);
   }
 }
+
 
 function normalizeProp(root, targetLongest) {
   root.updateMatrixWorld(true);
@@ -9203,6 +9140,7 @@ function findBone(root, suffix) {
   return buildBoneMap(root).get(canonicalBoneCore(suffix)) || null;
 }
 
+
 function isHiddenViewMeshName(name) {
   const n = String(name || '').toLowerCase();
   return n.includes('head') || n.includes('hair') || n.includes('eye') || n.includes('lash') ||
@@ -9219,6 +9157,7 @@ function rebuildSkinnedMeshWithoutHeadWeights(mesh) {
   const bones = mesh.skeleton?.bones || [];
   if (!skinIndex || !skinWeight || !bones.length) return false;
 
+
   const headBoneIndices = new Set();
   bones.forEach((b, i) => {
     const core = canonicalBoneCore(b.name);
@@ -9231,16 +9170,19 @@ function rebuildSkinnedMeshWithoutHeadWeights(mesh) {
   });
   if (!headBoneIndices.size) return false;
 
+
   const src = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
   const si = src.attributes.skinIndex;
   const sw = src.attributes.skinWeight;
   const pos = src.attributes.position;
   if (!si || !sw || !pos) { src.dispose(); return false; }
 
+
   const srcGroups = src.groups.length ? src.groups : [{ start: 0, count: pos.count, materialIndex: 0 }];
   const attrNames = Object.keys(src.attributes);
   const out = Object.fromEntries(attrNames.map(n => [n, []]));
   const keptMaterials = [];
+
 
   function headWeight(v) {
     let total = 0;
@@ -9252,6 +9194,7 @@ function rebuildSkinnedMeshWithoutHeadWeights(mesh) {
     return total;
   }
 
+
   const triCount = Math.floor(pos.count / 3);
   for (let t = 0; t < triCount; t++) {
     const base = t * 3;
@@ -9260,6 +9203,7 @@ function rebuildSkinnedMeshWithoutHeadWeights(mesh) {
     const avgHead = (h0 + h1 + h2) / 3;
     // Remove face/head triangles reliably regardless of FBX local axis/scale.
     if (maxHead > .12 || avgHead > .055) continue;
+
 
     const matIndex = groupMaterialAt(srcGroups, base);
     keptMaterials.push(matIndex);
@@ -9272,6 +9216,7 @@ function rebuildSkinnedMeshWithoutHeadWeights(mesh) {
       }
     }
   }
+
 
   if (!keptMaterials.length) { src.dispose(); return false; }
   const ng = new THREE.BufferGeometry();
@@ -9295,6 +9240,7 @@ function rebuildSkinnedMeshWithoutHeadWeights(mesh) {
   src.dispose();
   return true;
 }
+
 
 function trimSkinnedMeshToHeadlessBody(mesh, cutY = 1.46) {
   // Coordinate fallback for unusual rigs with no skin weights / no Head bone.
@@ -9334,6 +9280,7 @@ function trimSkinnedMeshToHeadlessBody(mesh, cutY = 1.46) {
   ng.addGroup(gs,gc,cm); ng.computeBoundingBox(); ng.computeBoundingSphere();
   mesh.geometry=ng; src.dispose();
 }
+
 
 function trimGeometryAboveWorldY(mesh, cutWorldY) {
   if (!mesh?.geometry?.attributes?.position) return;
@@ -9378,6 +9325,7 @@ function trimGeometryAboveWorldY(mesh, cutWorldY) {
   mesh.geometry=ng; src.dispose();
 }
 
+
 function forceHeadlessWorldCut(root, referenceBox = null) {
   root.updateWorldMatrix(true,true);
   const bb = referenceBox ? referenceBox.clone() : new THREE.Box3().setFromObject(root);
@@ -9388,6 +9336,7 @@ function forceHeadlessWorldCut(root, referenceBox = null) {
     if (o.isMesh || o.isSkinnedMesh) trimGeometryAboveWorldY(o,cutY);
   });
 }
+
 
 function trimCharacterToArms(root) {
   // Keep the full FPS body, but surgically remove the head.  The old local-Y
@@ -9432,6 +9381,8 @@ function retargetClip(root, clip, name, options = {}) {
 }
 
 
+
+
 // ---------------------------------------------------------------------------
 // SCENE NPCs — latest Blender scene placeholders -> rigged Mixamo characters
 // ---------------------------------------------------------------------------
@@ -9442,6 +9393,7 @@ const npcTextureLoader = new THREE.TextureLoader();
 const npcRuntime = new Map();
 const npcDanceCache = new Map();
 
+
 const PAVEL_DANCES = [
   './assets/npcs/dances/Snake_Hip_Hop_Dance.fbx',
   './assets/npcs/dances/Dancing_Maraschino_Step.fbx',
@@ -9450,6 +9402,7 @@ const PAVEL_DANCES = [
   './assets/npcs/dances/Hip_Hop_Dancing.fbx',
 ];
 let pavelLastDanceIndex = -1;
+
 
 const NPC_SPECS = [
   {
@@ -9489,6 +9442,7 @@ const NPC_SPECS = [
   },
 ];
 
+
 function loadNPCTexture(url, srgb = false) {
   return new Promise((resolve, reject) => {
     npcTextureLoader.load(url, tex => {
@@ -9498,6 +9452,7 @@ function loadNPCTexture(url, srgb = false) {
     }, undefined, reject);
   });
 }
+
 
 async function buildNPCMaterialSet(spec) {
   // Keep character base-color at full source resolution on all devices. On phones,
@@ -9514,6 +9469,7 @@ async function buildNPCMaterialSet(spec) {
   ]);
   return { base, mr, normal };
 }
+
 
 function applyNPCPBR(root, maps, spec) {
   root.traverse(o => {
@@ -9541,6 +9497,7 @@ function applyNPCPBR(root, maps, spec) {
   });
 }
 
+
 function placeholderPose(obj) {
   obj.updateWorldMatrix(true, true);
   const box = new THREE.Box3().setFromObject(obj);
@@ -9554,6 +9511,7 @@ function placeholderPose(obj) {
   };
 }
 
+
 async function spawnRiggedNPC(spec, idleSource) {
   if (!layoutRoot) return;
   const placeholder = layoutRoot.getObjectByName(spec.placeholder);
@@ -9561,6 +9519,7 @@ async function spawnRiggedNPC(spec, idleSource) {
     console.warn(`NPC placeholder not found: ${spec.placeholder}`);
     return;
   }
+
 
   const pose = spec.cachedLayoutPose || placeholderPose(placeholder);
   // Small gameplay collider around the character's feet; do not use the full donor
@@ -9571,12 +9530,14 @@ async function spawnRiggedNPC(spec, idleSource) {
   // Hide only the static donor mesh; its bbox/rotation above determine runtime placement.
   placeholder.visible = false;
 
+
   const [character, maps] = await Promise.all([
     loadFBX(spec.fbx),
     buildNPCMaterialSet(spec),
   ]);
   applyNPCPBR(character, maps, spec);
   normalizeCharacter(character, pose.height);
+
 
   const wrap = new THREE.Group();
   wrap.name = `NPC_${spec.label}`;
@@ -9589,6 +9550,7 @@ async function spawnRiggedNPC(spec, idleSource) {
   wrap.add(character);
   scene.add(wrap);
   wrap.updateMatrixWorld(true);
+
 
   const idleClip = retargetClip(
     character,
@@ -9609,8 +9571,10 @@ async function spawnRiggedNPC(spec, idleSource) {
     console.warn(`${spec.label}: idle retarget produced 0 tracks`);
   }
 
+
   const runtime = { spec, character, wrap, mixer, idleAction, pose, busyAction: null };
   npcRuntime.set(spec.npcKey, runtime);
+
 
   const proxy = new THREE.Object3D();
   proxy.name = `NPC_INTERACTION_${spec.npcKey}`;
@@ -9626,6 +9590,7 @@ async function spawnRiggedNPC(spec, idleSource) {
   });
 }
 
+
 function idleEmbeddedRig(root, idleSource, label) {
   if (!root) return;
   const clip = retargetClip(root, idleSource.animations[0], `${label}_Idle`);
@@ -9635,6 +9600,7 @@ function idleEmbeddedRig(root, idleSource, label) {
   npcMixers.push(mixer);
   console.log(`${label}: Neutral Idle, ${clip.tracks.length} tracks`);
 }
+
 
 function lockBabaToGround() {
   if (!babaGroundLockEnabled || !babaWorldRoot) return;
@@ -9646,6 +9612,7 @@ function lockBabaToGround() {
   }
 }
 
+
 async function startSceneNPCs() {
   if (npcSpawnStarted || !layoutRoot) return;
   npcSpawnStarted = true;
@@ -9654,10 +9621,12 @@ async function startSceneNPCs() {
     const idleSource = await npcIdlePromise;
     if (!idleSource.animations?.length) throw new Error('Neutral Idle.fbx has no animation');
 
+
     // Rigged embedded characters use Neutral Idle. Baba has no skin in FINAL, so her
     // relaxed pose + breathing idle are handled procedurally instead of retargeting Mixamo.
     lockBabaToGround();
     idleEmbeddedRig(layoutRoot.getObjectByName('Armature.001'), idleSource, 'SceneCharacter');
+
 
     await Promise.all(NPC_SPECS.map(spec => spawnRiggedNPC(spec, idleSource)));
     console.log(`Scene NPC idle setup complete: ${npcMixers.length} mixers`);
@@ -9665,6 +9634,7 @@ async function startSceneNPCs() {
     console.error('NPC idle setup failed', e);
   }
 }
+
 
 const handWorldPos = new THREE.Vector3();
 const handWorldPosB = new THREE.Vector3();
@@ -9681,6 +9651,7 @@ function followBoneWithProp(holder, bone, offset, rotOffset, orientationBone = b
   holder.position.copy(handWorldPos).add(offset.clone().applyQuaternion(localHandQuat));
   holder.quaternion.copy(localHandQuat).multiply(rotOffset);
 }
+
 
 // Put a prop at the real grip centre between two hand bones.  This is more
 // stable than a large hand-local offset: fingers can animate freely while the
@@ -9700,6 +9671,7 @@ function followGripBetweenBones(holder, boneA, boneB, offset, rotOffset, orienta
   holder.quaternion.copy(localHandQuat).multiply(rotOffset);
 }
 
+
 const PROP_DEFAULTS = {
   // v51.81: the anchor itself is now the physical grip centre.  The old can
   // offsets pushed the models roughly 11 cm away from the palm on the phone.
@@ -9709,6 +9681,7 @@ const PROP_DEFAULTS = {
   beer:      { pos:[0,0,0], rot:[-0.516996,1.929938,1.121659] },
   rake:      { pos:[.70,-.60,-1.62], rot:[-.20,-1.615,-.50] }
 };
+
 
 function loadPropConfig(name) {
   const d = PROP_DEFAULTS[name];
@@ -9730,6 +9703,7 @@ const propConfigs = {
   rake: loadPropConfig('rake')
 };
 
+
 if (localStorage.getItem('beton_prop_grip_fix_v512') !== '1') {
   for (const name of ['cigarette','lighter','energy','beer']) {
     localStorage.removeItem(`beton_prop_${name}`);
@@ -9741,6 +9715,7 @@ if (localStorage.getItem('beton_prop_grip_fix_v512') !== '1') {
   localStorage.setItem('beton_prop_grip_fix_v512','1');
 }
 
+
 // v51.28: force only the cigarette's new +30° grip once.
 if (localStorage.getItem('beton_cigarette_grip_v528') !== '1') {
   localStorage.removeItem('beton_prop_cigarette');
@@ -9750,6 +9725,7 @@ if (localStorage.getItem('beton_cigarette_grip_v528') !== '1') {
   propConfigs.cigarette.quat.setFromEuler(propConfigs.cigarette.euler);
   localStorage.setItem('beton_cigarette_grip_v528','1');
 }
+
 
 if (localStorage.getItem('beton_prop_grip_fix_v533') !== '1') {
   for (const name of ['cigarette','energy','beer']) {
@@ -9761,6 +9737,7 @@ if (localStorage.getItem('beton_prop_grip_fix_v533') !== '1') {
   }
   localStorage.setItem('beton_prop_grip_fix_v533', '1');
 }
+
 
 // v51.50: discard all old production grip offsets. These props now use one fixed authored grip.
 if (localStorage.getItem('beton_prop_grip_fix_v5155') !== '1') {
@@ -9774,6 +9751,7 @@ if (localStorage.getItem('beton_prop_grip_fix_v5155') !== '1') {
   localStorage.setItem('beton_prop_grip_fix_v5155', '1');
 }
 
+
 // v51.60: final cigarette grip: attach to the hand, not the finger bone, and reset stale saved rotation once.
 if (localStorage.getItem('beton_cigarette_grip_v5160') !== '1') {
   localStorage.removeItem('beton_prop_cigarette');
@@ -9783,6 +9761,7 @@ if (localStorage.getItem('beton_cigarette_grip_v5160') !== '1') {
   propConfigs.cigarette.quat.setFromEuler(propConfigs.cigarette.euler);
   localStorage.setItem('beton_cigarette_grip_v5160', '1');
 }
+
 
 // v51.62: final Blender-authored prop grips. Reset any older localStorage overrides once.
 if (localStorage.getItem('beton_prop_grip_final_v5162') !== '1') {
@@ -9795,6 +9774,7 @@ if (localStorage.getItem('beton_prop_grip_final_v5162') !== '1') {
   }
   localStorage.setItem('beton_prop_grip_final_v5162', '1');
 }
+
 
 // v51.68: runtime grip correction after Blender verification.
 // Force a clean reload once so a browser that already ran v51.62 cannot keep
@@ -9811,6 +9791,7 @@ if (localStorage.getItem('beton_prop_grip_runtimefix_v5168') !== '1') {
   localStorage.setItem('beton_prop_grip_runtimefix_v5168', '1');
 }
 
+
 // v51.70: force the final user-authored Blender grips once, even on browsers
 // that already cached earlier v51.68/v51.69 prop offsets.
 if (localStorage.getItem('beton_prop_grip_final_v5170') !== '1') {
@@ -9824,6 +9805,7 @@ if (localStorage.getItem('beton_prop_grip_final_v5170') !== '1') {
   localStorage.setItem('beton_prop_grip_final_v5170', '1');
 }
 
+
 // v51.80: the old cigarette grip sat almost 39 cm behind the hand. Anchor the
 // prop at the index-finger base and discard that stale production offset once.
 if (localStorage.getItem('beton_cigarette_grip_v5180') !== '1') {
@@ -9834,6 +9816,7 @@ if (localStorage.getItem('beton_cigarette_grip_v5180') !== '1') {
   propConfigs.cigarette.quat.setFromEuler(propConfigs.cigarette.euler);
   localStorage.setItem('beton_cigarette_grip_v5180', '1');
 }
+
 
 // v51.81: switch every hand prop to the bone-to-bone grip centre and clear
 // any manual/stale offsets left by the older single-bone placement.
@@ -9847,6 +9830,7 @@ if (localStorage.getItem('beton_prop_grip_centred_v5181') !== '1') {
   }
   localStorage.setItem('beton_prop_grip_centred_v5181', '1');
 }
+
 
 // v0.48: discard stale broken rake transforms from older localStorage.
 if (localStorage.getItem('beton_rake_vm_safe_v528') !== '1') {
@@ -9868,6 +9852,8 @@ function syncPropQuat(name) {
 }
 
 
+
+
 const playerTextureLoader = new THREE.TextureLoader();
 async function applyNewPlayerMaterials(root) {
   const baseMap = await playerTextureLoader.loadAsync(MOBILE_SAFE_MODE ? './assets/player/player_base_mobile_safe.webp' : './assets/player/player_base.webp');
@@ -9885,6 +9871,7 @@ async function applyNewPlayerMaterials(root) {
   baseMap.anisotropy = aniso;
   if (normalMap) normalMap.anisotropy = aniso;
   if (roughnessMap) roughnessMap.anisotropy = aniso;
+
 
   const makeMat = (source, slotIndex = 0) => {
     const mat = new THREE.MeshStandardMaterial({
@@ -9920,15 +9907,18 @@ async function applyNewPlayerMaterials(root) {
   });
 }
 
+
 function setPlayerLocomotion(moving, sprinting) {
   if (!armsReady || !armsMixer || specialMode) return;
   const desired = !moving ? 'idle' : (sprinting ? 'run' : 'walk');
   if (playerLocomotionState === desired) return;
 
+
   const current = playerLocomotionState === 'run' ? armsRunAction :
                   playerLocomotionState === 'walk' ? armsWalkAction : armsIdleAction;
   const next = desired === 'run' ? armsRunAction : desired === 'walk' ? armsWalkAction : armsIdleAction;
   if (!next) return;
+
 
   if (current?.isRunning()) current.fadeOut(.14);
   next.reset();
@@ -9939,6 +9929,8 @@ function setPlayerLocomotion(moving, sprinting) {
   next.fadeIn(.14).play();
   playerLocomotionState = desired;
 }
+
+
 
 
 async function loadArmsViewModel() {
@@ -9988,6 +9980,7 @@ async function loadArmsViewModel() {
     leftForeArmBone = findBone(character, 'LeftForeArm');
     armsMixer = new THREE.AnimationMixer(character);
 
+
     // IMPORTANT v0.47:
     // only locomotion comes from FBX. Smoking/drinking/rake are procedural JS poses.
     const [idleFbx, walkFbx, runFbx] = await Promise.all([
@@ -10001,6 +9994,7 @@ async function loadArmsViewModel() {
     character.userData.idleClip = idleClip;
     character.userData.walkClip = walkClip;
     character.userData.runClip = runClip;
+
 
     try {
       const cigRoot = await loadFBX('./assets/cigarette/cigarette.fbx');
@@ -10016,6 +10010,7 @@ async function loadArmsViewModel() {
       setHotbar3DModel('smoke',cigRoot);
     } catch (e) { console.warn('Cigarette failed', e); }
 
+
     try {
       const energyGLTF = await new Promise((resolve, reject) => loader.load('./assets/energy/litenergy_classic.gltf', resolve, undefined, reject));
       const eroot=energyGLTF.scene;
@@ -10023,11 +10018,13 @@ async function loadArmsViewModel() {
       energyProp=eroot;energyVM.add(eroot);setHotbar3DModel('energy',eroot);
     } catch (e) { console.warn('Energy failed', e); }
 
+
     try {
       const broot = await loadFBX('./assets/beer/Baltika.fbx');
       prepViewModel(broot);forceOpaqueProp(broot,false);normalizeProp(broot,.148);
       beerProp=broot;beerVM.add(broot);setHotbar3DModel('beer',broot);
     } catch (e) { console.warn('Beer failed', e); }
+
 
     try {
       const lighterGLTF = await new Promise((resolve, reject) => loader.load('./assets/lighter.glb', resolve, undefined, reject));
@@ -10035,6 +10032,7 @@ async function loadArmsViewModel() {
       prepViewModel(lroot);forceOpaqueProp(lroot,false);normalizeProp(lroot,.105);
       lighterProp=lroot;lighterVM.add(lroot);
     } catch (e) { console.warn('Lighter failed', e); }
+
 
     if (!rightHandBone || !leftHandBone ||
         !rightUpperArmBone || !rightForeArmBone ||
@@ -10062,6 +10060,7 @@ async function loadArmsViewModel() {
     armsRunAction.setEffectiveTimeScale(1.0);
     playerLocomotionState = 'idle';
 
+
     // Persistent headless player model: body/hands stay visible in normal FPS.
     armsRig.visible = true;
     loadState.textContent = `SCENE22 готова · игрок · Idle ${idleClip.userData?.boundTracks || 0} · Walk ${walkClip.userData?.boundTracks || 0} · Run ${runClip.userData?.boundTracks || 0} · спец-анимации процедурные`;
@@ -10080,6 +10079,7 @@ if (TOUCH_DEVICE) {
   loadArmsViewModel();
 }
 
+
 function resumePlayerIdle() {
   if (!armsReady || !armsMixer || !armsCharacter) return;
   const clip = armsCharacter.userData.idleClip;
@@ -10094,12 +10094,14 @@ function resumePlayerIdle() {
   playerLocomotionState = 'idle';
 }
 
+
 function stopPlayerIdle() {
   if (armsIdleAction) armsIdleAction.stop();
   if (armsWalkAction) armsWalkAction.stop();
   if (armsRunAction) armsRunAction.stop();
   playerLocomotionState = 'special';
 }
+
 
 function prepareProceduralBaseline() {
   if (!armsReady || !armsMixer) return;
@@ -10115,6 +10117,7 @@ function prepareProceduralBaseline() {
   armsRig.visible = true;
 }
 
+
 function startProceduralSpecial(kind) {
   stowRakeForSpecial();
   if (!armsReady) return 0;
@@ -10127,15 +10130,18 @@ function startProceduralSpecial(kind) {
   return proceduralSpecialDuration;
 }
 
+
 function procSmooth01(x) {
   x = THREE.MathUtils.clamp(x, 0, 1);
   return x * x * (3 - 2 * x);
 }
 
+
 function procPulse(t, center, halfWidth) {
   const d = Math.abs(t - center) / Math.max(halfWidth, .0001);
   return d >= 1 ? 0 : procSmooth01(1 - d);
 }
+
 
 function cameraLocalToWorld(x, y, z, out) {
   out.set(x, y, z);
@@ -10144,28 +10150,35 @@ function cameraLocalToWorld(x, y, z, out) {
   return out;
 }
 
+
 function rotateBoneWorldToward(bone, effector, target, strength = 1) {
   if (!bone || !effector) return;
   bone.updateWorldMatrix(true, true);
   effector.updateWorldMatrix(true, true);
 
+
   bone.getWorldPosition(procTargetA);
   effector.getWorldPosition(procTargetB);
+
 
   procDirNow.copy(procTargetB).sub(procTargetA);
   procDirTarget.copy(target).sub(procTargetA);
   if (procDirNow.lengthSq() < 1e-8 || procDirTarget.lengthSq() < 1e-8) return;
 
+
   procDirNow.normalize();
   procDirTarget.normalize();
   procDeltaQ.setFromUnitVectors(procDirNow, procDirTarget);
+
 
   if (strength < .999) {
     procDeltaQ.slerp(procIdentityQ, 1 - strength);
   }
 
+
   bone.getWorldQuaternion(procWorldQ);
   procWorldQ.premultiply(procDeltaQ);
+
 
   if (bone.parent) {
     bone.parent.getWorldQuaternion(procParentQ).invert();
@@ -10174,12 +10187,15 @@ function rotateBoneWorldToward(bone, effector, target, strength = 1) {
     procLocalQ.copy(procWorldQ);
   }
 
+
   bone.quaternion.copy(procLocalQ);
   bone.updateWorldMatrix(true, true);
 }
 
+
 function solveArmCCD(upper, fore, hand, target, strength = 1) {
   if (!upper || !fore || !hand) return;
+
 
   // A few CCD passes are enough for a two-joint Mixamo arm.
   for (let i = 0; i < 3; i++) {
@@ -10188,6 +10204,7 @@ function solveArmCCD(upper, fore, hand, target, strength = 1) {
   }
 }
 
+
 function applyHandLocalTilt(hand, x, y, z, weight = 1) {
   if (!hand || weight <= 0) return;
   procEuler.set(x * weight, y * weight, z * weight, 'XYZ');
@@ -10195,6 +10212,7 @@ function applyHandLocalTilt(hand, x, y, z, weight = 1) {
   hand.quaternion.multiply(procTiltQ);
   hand.updateWorldMatrix(true, true);
 }
+
 
 function applyProceduralSmokePose(t) {
   // Three distinct drags. The hand drops between them instead of staying glued
@@ -10205,6 +10223,7 @@ function applyProceduralSmokePose(t) {
       procPulse(t, .50, .115),
       procPulse(t, .79, .115)
     );
+
 
   cameraLocalToWorld(.33, -.58, -.48, procTargetA);   // relaxed right hand lower in frame
   cameraLocalToWorld(.18, -.205, -.37, procTargetB); // drag position: around lower third of the screen
@@ -10217,8 +10236,10 @@ function applyProceduralSmokePose(t) {
     .92
   );
 
+
   // Small wrist curl toward the face.
   applyHandLocalTilt(rightHandBone, -.06, .04, -.18, drag);
+
 
   // Lighter only comes up during the first drag.
   const light = procPulse(t, .115, .115);
@@ -10234,8 +10255,10 @@ function applyProceduralSmokePose(t) {
   );
   applyHandLocalTilt(leftHandBone, .05, -.08, .25, light);
 
+
   lighterVM.visible = !!lighterProp && t < .27;
 }
+
 
 function applyProceduralDrinkPose(t, beer = false) {
   // Open low -> lift -> hold at lips -> lower.
@@ -10243,11 +10266,13 @@ function applyProceduralDrinkPose(t, beer = false) {
   const lower = procSmooth01(THREE.MathUtils.clamp((t - .79) / .21, 0, 1));
   const hold = raise * (1 - lower);
 
+
   // Keep the relaxed can and the gripping fingers fully inside the phone
   // viewport instead of burying the hand below the hotbar.
   cameraLocalToWorld(-.23, -.36, -.48, procTargetA);
   cameraLocalToWorld(-.12, -.16, -.29, procTargetB);
   procTargetC.copy(procTargetA).lerp(procTargetB, hold);
+
 
   solveArmCCD(
     leftUpperArmBone,
@@ -10256,6 +10281,7 @@ function applyProceduralDrinkPose(t, beer = false) {
     procTargetC,
     .94
   );
+
 
   // Slightly stronger tilt for Baltika.
   applyHandLocalTilt(
@@ -10267,12 +10293,14 @@ function applyProceduralDrinkPose(t, beer = false) {
   );
 }
 
+
 const rakeProximityRay = new THREE.Ray();
 const rakeProximityOrigin = new THREE.Vector3();
 const rakeProximityDir = new THREE.Vector3();
 const rakeProximityHit = new THREE.Vector3();
 const rakeProximityBox = new THREE.Box3();
 let rakeProximityScaleBlend = 0;
+
 
 // v51.65 — depth-aware FPS rake scale.
 // The rake is a camera-layer viewmodel, so its screen size would normally stay
@@ -10288,6 +10316,7 @@ function updateRakeProximity(dt) {
   camera.getWorldDirection(rakeProximityDir).normalize();
   rakeProximityRay.set(rakeProximityOrigin, rakeProximityDir);
   let nearest = Infinity;
+
 
   for (const c of meshColliders) {
     const hit = c.obb?.intersectRay?.(rakeProximityRay, rakeProximityHit);
@@ -10306,6 +10335,7 @@ function updateRakeProximity(dt) {
     }
   }
 
+
   // Starts imperceptibly around 1.8 m and reaches full correction close to a wall.
   const target = nearest < 1.80
     ? THREE.MathUtils.clamp((1.80 - nearest) / 1.35, 0, 1)
@@ -10313,9 +10343,11 @@ function updateRakeProximity(dt) {
   rakeProximityScaleBlend = THREE.MathUtils.damp(rakeProximityScaleBlend, target, 16, dt);
 }
 
+
 function applyProceduralRakePose(dt) {
   if (!rakeEquipped) return;
   updateRakeProximity(dt);
+
 
   rakeSweepWorkBlend = THREE.MathUtils.damp(
     rakeSweepWorkBlend,
@@ -10324,6 +10356,7 @@ function applyProceduralRakePose(dt) {
     dt
   );
 
+
   rakeSweepTravel = THREE.MathUtils.damp(
     rakeSweepTravel,
     0,
@@ -10331,17 +10364,20 @@ function applyProceduralRakePose(dt) {
     dt
   );
 
+
   // Holding LMB now produces a real visible push/pull stroke even if the
   // player is standing still.  This is viewmodel-only; concrete work logic
   // still uses the actual rake work point below.
   if (raking) rakeAnimClock += dt * 8.4;
   else rakeAnimClock = 0;
 
+
   const work = rakeSweepWorkBlend;
   const travel = rakeSweepTravel;
   const stroke = raking ? Math.sin(rakeAnimClock) : 0;
   const strokeForward = stroke * work;
   const strokeForwardWide = strokeForward * 1.5;
+
 
   // v51.32: much stronger front/back motion.  At full work the rake travels
   // roughly half a metre in camera depth from back extreme to front extreme.
@@ -10351,6 +10387,7 @@ function applyProceduralRakePose(dt) {
     RAKE_VM_BASE_POS.z - work * .285 - strokeForwardWide * .255
   );
 
+
   // Keep the rake head visually level; only a tiny natural pitch/yaw follows
   // the stroke instead of rolling the head diagonally across the screen.
   rakeVM.rotation.set(
@@ -10359,6 +10396,7 @@ function applyProceduralRakePose(dt) {
     RAKE_VM_BASE_ROT.z + strokeForward * .008
   );
 
+
   // When the world surface gets very close, a fixed-size overlay looks tiny.
   // Grow it continuously from measured scene depth instead of per-object rules.
   const nearSurfaceScale = 1 + rakeProximityScaleBlend * .48;
@@ -10366,10 +10404,13 @@ function applyProceduralRakePose(dt) {
 }
 
 
+
+
 const mainThemeAudio = new Audio('./assets/audio/music/main_theme_v528.wav');
 mainThemeAudio.loop = true;
 mainThemeAudio.preload = 'auto';
 mainThemeAudio.volume = 0.14;
+
 
 function startMainTheme() {
   if (!mainThemeAudio.paused) return;
@@ -10388,6 +10429,7 @@ document.addEventListener('pointerdown', unlockMenuMusic, { passive:true });
 document.addEventListener('touchstart', unlockMenuMusic, { passive:true });
 document.addEventListener('keydown', unlockMenuMusic, { passive:true });
 
+
 function requestImmersiveMode() {
   if (!TOUCH_DEVICE) return;
   try {
@@ -10399,6 +10441,7 @@ function requestImmersiveMode() {
   setTimeout(() => { try { window.scrollTo(0, 1); } catch (_) {} }, 60);
   setTimeout(() => { try { window.scrollTo(0, 1); } catch (_) {} }, 360);
 }
+
 
 function requestMouseLock() {
   if (TOUCH_DEVICE) { locked = true; return; }
@@ -10419,6 +10462,7 @@ function enterSite() {
     locked = true;
     requestImmersiveMode();
   } else requestMouseLock();
+
 
   // First-session objective. Mark it immediately so a refresh cannot repeat it;
   // the hose itself remains highlighted until it has actually been picked up.
@@ -10441,6 +10485,7 @@ document.addEventListener('pointerlockchange', () => {
 document.addEventListener('mousemove', e => {
   if (!locked) return;
 
+
   // During QTE the mouse becomes an osu-style software cursor instead of moving the camera.
   if (qteActive) {
     qteCursorX = THREE.MathUtils.clamp(qteCursorX + e.movementX, 8, innerWidth - 8);
@@ -10450,10 +10495,12 @@ document.addEventListener('mousemove', e => {
     return;
   }
 
+
   yaw -= e.movementX * .00155;
   pitch -= e.movementY * .00145;
   pitch = THREE.MathUtils.clamp(pitch, -FPS_PITCH_LIMIT, FPS_PITCH_LIMIT);
 });
+
 
 function primaryActionDown() {
   if (!started || !locked || shopOpen || resultOpen || dialogueOpen || statsOpen) return;
@@ -10490,13 +10537,16 @@ renderer.domElement.addEventListener('mousedown', e => {
 });
 window.addEventListener('mouseup', e => { if (e.button === 0) primaryActionUp(); });
 
+
 document.addEventListener('keydown', e => {
   keys[e.code] = true;
+
 
   if (settlementCutsceneActive) {
     e.preventDefault();
     return;
   }
+
 
   if (statsOpen) {
     if (e.code === 'Escape' && !e.repeat) {
@@ -10505,6 +10555,7 @@ document.addEventListener('keydown', e => {
     }
     return;
   }
+
 
   if (dialogueOpen) {
     if (e.code === 'Escape' && !e.repeat) {
@@ -10522,11 +10573,13 @@ document.addEventListener('keydown', e => {
     }
   }
 
+
   const handledCodes = [
     'KeyW','KeyA','KeyS','KeyD','ShiftLeft','ShiftRight',
     'Digit1','Digit2','Digit3','Digit4','KeyM','KeyE'
   ];
   if (handledCodes.includes(e.code)) e.preventDefault();
+
 
   if (e.code === 'KeyE' && !e.repeat) interact();
   if (e.code === 'Digit1' && !e.repeat) smokeCigarette();
@@ -10544,6 +10597,7 @@ document.addEventListener('keydown', e => {
 document.addEventListener('keyup', e => { keys[e.code] = false; });
 window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 
+
 // ---------------------------------------------------------------------------
 // MOBILE LANDSCAPE CONTROLS v51.57
 // Right fixed joystick = movement. Camera = direct swipe anywhere on gameplay canvas.
@@ -10554,6 +10608,7 @@ let mobileLookPointer=null, mobileLookLastX=0, mobileLookLastY=0;
 let mobileLookTravel=0;
 const MOBILE_LOOK_SENS_X = 0.00435;
 const MOBILE_LOOK_SENS_Y = 0.00365;
+
 
 function setupMobileStick(el, knob, onValue) {
   if (!el || !knob) return;
@@ -10574,6 +10629,7 @@ function setupMobileStick(el, knob, onValue) {
     const dirX=rawLen>.001?rawDx/rawLen:0;
     const dirY=rawLen>.001?rawDy/rawLen:0;
 
+
     // The input reaches full walking speed on the inner ring, but the knob can
     // keep travelling beyond the base. Sprint only engages on the larger outer
     // boundary, matching the readable over-pull used by mobile shooters.
@@ -10592,6 +10648,7 @@ function setupMobileStick(el, knob, onValue) {
     el.style.setProperty('--stick-pull',String(THREE.MathUtils.clamp(sprintStrength,0,1.35)));
     el.classList.toggle('sprintReady',sprintStrength>=.82 && sprintStrength<1);
     el.classList.toggle('isSprinting',sprintStrength>=1);
+
 
     let nx=dirX*Math.min(rawLen/walkRadius,1);
     let ny=dirY*Math.min(rawLen/walkRadius,1);
@@ -10668,6 +10725,7 @@ function setMobileButtonVisible(btn, visible) {
 function updateMobileContextButtons(it) {
   if (!TOUCH_DEVICE) return;
 
+
   let interactVisible = false;
   if (it) {
     interactVisible = true;
@@ -10680,6 +10738,7 @@ function updateMobileContextButtons(it) {
     if (mobileInteractBtn) mobileInteractBtn.textContent = label;
   }
   setMobileButtonVisible(mobileInteractBtn, interactVisible);
+
 
   let actionVisible = false;
   if (hoseHeld && jobState === 'active') {
@@ -10694,6 +10753,7 @@ function updateMobileContextButtons(it) {
   setMobileButtonVisible(mobileActionBtn, actionVisible);
 }
 
+
 function syncMobileHud() {
   if (!TOUCH_DEVICE || !mobileHudEl) return;
   if (mobileMoneyTextEl) mobileMoneyTextEl.textContent = `${money} ₽`;
@@ -10705,6 +10765,7 @@ function syncMobileHud() {
   if (mobileDrinkCountEl) mobileDrinkCountEl.textContent = String(energyCans);
   if (mobileBeerCountEl) mobileBeerCountEl.textContent = String(beerCans);
   if (mobileRakeStateEl) mobileRakeStateEl.textContent = rakeOwned ? (rakeEquipped ? 'ON' : '✓') : '—';
+
 
   mobileSmokeSlotEl?.classList.toggle('active', specialMode === 'smoke');
   mobileDrinkSlotEl?.classList.toggle('active', specialMode === 'drink');
@@ -10755,6 +10816,7 @@ if (TOUCH_DEVICE) {
   });
 }
 
+
 // Gracefully recover from mobile GPU/context eviction instead of leaving a black canvas.
 renderer.domElement.addEventListener('webglcontextlost',e=>{
   e.preventDefault();
@@ -10768,6 +10830,8 @@ renderer.domElement.addEventListener('webglcontextlost',e=>{
 });
 renderer.domElement.addEventListener('webglcontextrestored',()=>{ if (!sceneRecoveryPending) location.reload(); });
 window.addEventListener('orientationchange',()=>setTimeout(()=>{ try { window.scrollTo(0,1); } catch(_) {} },80));
+
+
 
 
 function refreshMobileOrientationUI(){
@@ -10794,9 +10858,11 @@ window.addEventListener('resize', () => {
   viewportResizeTimer = setTimeout(applyViewportResize, 180);
 });
 
+
 function blocked(x, z) {
   const feetY = groundHeightAt(x, z) + .04;
   const headY = feetY + 1.72;
+
 
   // Stable simple colliders: NPCs and explicit gameplay volumes.
   for (const c of colliders) {
@@ -10814,12 +10880,14 @@ function blocked(x, z) {
     }
   }
 
+
   // Real scene meshes use oriented boxes instead of world AABBs. Three small
   // spheres approximate the player's capsule and don't create invisible
   // rectangular walls around rotated/diagonal meshes.
   collisionSphereLow.center.set(x, feetY + .31, z);
   collisionSphereMid.center.set(x, feetY + .88, z);
   collisionSphereHigh.center.set(x, feetY + 1.38, z);
+
 
   for (const c of meshColliders) {
     if (
@@ -10854,6 +10922,7 @@ function showToast(t, duration = 2.2) {
   toastTimer = duration;
 }
 
+
 let dialogueOpen = false;
 let dialogueNpcKey = null;
 let shopOpen = false;
@@ -10862,6 +10931,7 @@ let statsOpen = false;
 let settlementCutsceneActive = false;
 let dialogueRewardTransitionActive = false;
 let settlementRankRevealTimer = 0;
+
 
 const settlementCameraState = {
   active: false,
@@ -10876,6 +10946,7 @@ const settlementCameraState = {
   lookMatrix: new THREE.Matrix4(),
 };
 
+
 const SETTLEMENT_GRADE_CAPTIONS = {
   S: 'АЛМАЗ · РОВНО 100%',
   A: 'ЗОЛОТО · ДО 105%',
@@ -10886,9 +10957,11 @@ const SETTLEMENT_GRADE_CAPTIONS = {
   F: 'ГОВНО · ПЕРЕЛИВ',
 };
 
+
 const BOOT_TIER_NAMES = ['Обычные', 'Сапоги новичка', 'Сапоги бетонщика', 'Мышеходы'];
 const STAMINA_LEVEL_NAMES = ['Базовая', 'Рабочая I', 'Рабочая II', 'Максимальная'];
 const CONCRETE_GRADE_NAMES = ['М200', 'М250', 'М300', 'М350'];
+
 
 function updateCharacterStatsUI() {
   if (statJobsEl) statJobsEl.textContent = String(jobsCompleted);
@@ -10905,6 +10978,7 @@ function updateCharacterStatsUI() {
   if (statConcreteGradeEl) statConcreteGradeEl.textContent = CONCRETE_GRADE_NAMES[pumpLevel] || CONCRETE_GRADE_NAMES[0];
 }
 
+
 function openCharacterStats() {
   if (!started || statsOpen || shopOpen || resultOpen || dialogueOpen) return;
   statsOpen = true;
@@ -10917,6 +10991,7 @@ function openCharacterStats() {
   if (document.pointerLockElement) document.exitPointerLock();
 }
 
+
 function closeCharacterStats() {
   if (!statsOpen) return;
   statsOpen = false;
@@ -10928,10 +11003,12 @@ function closeCharacterStats() {
   requestMouseLock();
 }
 
+
 function markPourProgressDirty() {
   if (pourProgressLoading) return;
   pourProgressDirty = true;
 }
+
 
 function serialisePourZone(zone) {
   return {
@@ -10948,8 +11025,10 @@ function serialisePourZone(zone) {
   };
 }
 
+
 function savePourProgress(force = false) {
   if ((!pourProgressDirty && !force) || pourProgressLoading) return;
+
 
   try {
     const payload = {
@@ -10989,6 +11068,7 @@ function savePourProgress(force = false) {
         })),
     };
 
+
     localStorage.setItem(POUR_PROGRESS_KEY, JSON.stringify(payload));
     pourProgressDirty = false;
     pourProgressSaveTimer = 0;
@@ -10996,6 +11076,7 @@ function savePourProgress(force = false) {
     console.warn('Pour progress save failed', error);
   }
 }
+
 
 function loadPourProgress() {
   let saved;
@@ -11006,7 +11087,9 @@ function loadPourProgress() {
     return false;
   }
 
+
   if (!saved || saved.version !== 2 || !Array.isArray(saved.zones)) return false;
+
 
   pourProgressLoading = true;
   try {
@@ -11021,6 +11104,7 @@ function loadPourProgress() {
       zone.flowBudget.fill(0);
       zone.rakeTouched.fill(0);
 
+
       if (Array.isArray(source.fill)) {
         const count = Math.min(zone.fill.length, source.fill.length);
         for (let i = 0; i < count; i++) {
@@ -11030,10 +11114,12 @@ function loadPourProgress() {
         }
       }
 
+
       if (Array.isArray(source.rakeTouched)) {
         const count = Math.min(zone.rakeTouched.length, source.rakeTouched.length);
         for (let i = 0; i < count; i++) zone.rakeTouched[i] = source.rakeTouched[i] ? 1 : 0;
       }
+
 
       zone.levelPrompted = Boolean(source.levelPrompted);
       zone.readyNotified = Boolean(source.readyNotified);
@@ -11046,6 +11132,7 @@ function loadPourProgress() {
       zone.piles.length = 0;
       zone.dirty = true;
     }
+
 
     clearSurfaceSpills();
     if (Array.isArray(saved.spills)) {
@@ -11064,6 +11151,7 @@ function loadPourProgress() {
       }
     }
 
+
     jobState = ['active', 'ready', 'accepted', 'failed'].includes(saved.jobState)
       ? saved.jobState
       : 'active';
@@ -11078,6 +11166,7 @@ function loadPourProgress() {
       POUR_ZONES.length
     );
 
+
     // A session may have been closed immediately after the pump was switched
     // off. Recompute the next map from the restored physical surfaces instead
     // of leaving the outline on an already completed bay.
@@ -11091,11 +11180,13 @@ function loadPourProgress() {
       }
     }
 
+
     qteHits = Math.max(0, Math.round(Number(saved.qteHits) || 0));
     qteMisses = Math.max(0, Math.round(Number(saved.qteMisses) || 0));
     qtePerfects = Math.max(0, Math.round(Number(saved.qtePerfects) || 0));
     wastedVolume = Math.max(0, Number(saved.wastedVolume) || 0);
     pumpBroken = Boolean(saved.pumpBroken);
+
 
     pouring = false;
     hoseHeld = false;
@@ -11117,17 +11208,20 @@ function loadPourProgress() {
   }
 }
 
+
 function updatePourProgressPersistence(dt) {
   if (!pourProgressDirty) return;
   pourProgressSaveTimer += dt;
   if (pourProgressSaveTimer >= 1.8) savePourProgress();
 }
 
+
 loadPourProgress();
 window.addEventListener('pagehide', () => savePourProgress(true));
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') savePourProgress(true);
 });
+
 
 characterStatsButtonEl?.addEventListener('click', openCharacterStats);
 mobileCharacterStatsButtonEl?.addEventListener('pointerdown', e => {
@@ -11137,12 +11231,14 @@ mobileCharacterStatsButtonEl?.addEventListener('pointerdown', e => {
 });
 characterStatsCloseEl?.addEventListener('click', closeCharacterStats);
 
+
 const DIALOGUE_NAMES = {
   pavel: 'Павел Петрович',
   mandarin: 'Серёга',
   george: 'Джордж',
   baba: 'Баба Капа',
 };
+
 
 const DIALOGUE_SKINS = {
   pavel: {
@@ -11179,6 +11275,7 @@ const DIALOGUE_SKINS = {
   },
 };
 
+
 function applyDialogueSkin(npcKey) {
   const skin = DIALOGUE_SKINS[npcKey] || DIALOGUE_SKINS.pavel;
   dialogueEl.dataset.npc = npcKey || 'pavel';
@@ -11200,9 +11297,11 @@ function applyDialogueSkin(npcKey) {
   }
 }
 
+
 function dialogueWalletTarget() {
   return TOUCH_DEVICE ? (mobileMoneyEl || economyEl) : (economyEl || mobileMoneyEl);
 }
+
 
 function pulseDialogueWallet(target = dialogueWalletTarget()) {
   if (!target) return;
@@ -11212,13 +11311,16 @@ function pulseDialogueWallet(target = dialogueWalletTarget()) {
   window.setTimeout(() => target.classList.remove('walletRewardPulse'), 520);
 }
 
+
 function animateDialogueRewardToWallet(sourceEl, amount) {
   const targetEl = dialogueWalletTarget();
   if (!sourceEl || !targetEl) return Promise.resolve();
 
+
   const sourceRect = sourceEl.getBoundingClientRect();
   const targetRect = targetEl.getBoundingClientRect();
   if (!sourceRect.width || !targetRect.width) return Promise.resolve();
+
 
   const flyer = sourceEl.cloneNode(true);
   flyer.classList.add('dialogueRewardFlyer');
@@ -11230,6 +11332,7 @@ function animateDialogueRewardToWallet(sourceEl, amount) {
     height: `${sourceRect.height}px`,
   });
   document.body.appendChild(flyer);
+
 
   const dx = targetRect.left + targetRect.width * .5 - (sourceRect.left + sourceRect.width * .5);
   const dy = targetRect.top + targetRect.height * .5 - (sourceRect.top + sourceRect.height * .5);
@@ -11245,10 +11348,12 @@ function animateDialogueRewardToWallet(sourceEl, amount) {
     fill: 'forwards',
   });
 
+
   return animation.finished
     .catch(() => undefined)
     .finally(() => flyer.remove());
 }
+
 
 function setDialogue(name, text, options = []) {
   dialogueNameEl.textContent = DIALOGUE_NAMES[dialogueNpcKey] || name;
@@ -11267,6 +11372,7 @@ function setDialogue(name, text, options = []) {
     label.textContent = opt.label;
     btn.append(key, label);
 
+
     const rewardAmount = Math.max(0, Math.round(Number(opt.reward) || 0));
     let rewardBadge = null;
     if (rewardAmount > 0) {
@@ -11278,9 +11384,11 @@ function setDialogue(name, text, options = []) {
       btn.appendChild(rewardBadge);
     }
 
+
     btn.addEventListener('click', async () => {
       if (btn.dataset.processing === '1') return;
       btn.dataset.processing = '1';
+
 
       if (rewardAmount > 0) {
         dialogueRewardTransitionActive = true;
@@ -11288,6 +11396,7 @@ function setDialogue(name, text, options = []) {
         dialogueOptionsEl.querySelectorAll('button').forEach(button => { button.disabled = true; });
         await animateDialogueRewardToWallet(rewardBadge, rewardAmount);
       }
+
 
       try {
         await Promise.resolve(opt.action?.());
@@ -11320,6 +11429,7 @@ function setDialogue(name, text, options = []) {
   });
 }
 
+
 function openDialogue(npcKey) {
   if (dialogueOpen || shopOpen || resultOpen || statsOpen || settlementCutsceneActive) return;
   dialogueOpen = true;
@@ -11331,6 +11441,7 @@ function openDialogue(npcKey) {
   if (document.pointerLockElement) document.exitPointerLock();
   dialogueEl.classList.remove('hidden');
 
+
   // NPC greeting voice: once per dialogue opening.
   if (npcKey === 'mandarin') playSeryogaGreetingVoice();
   if (npcKey === 'george') playGeorgeGreetingVoice();
@@ -11340,58 +11451,73 @@ function openDialogue(npcKey) {
     pavelFarewellAllowedThisDialogue = jobState !== 'accepted';
   }
 
+
   refreshDialogue();
 }
+
 
 function closeDialogue() {
   if (!dialogueOpen || settlementCutsceneActive || dialogueRewardTransitionActive) return;
 
+
   const closingNpcKey = dialogueNpcKey;
+
 
   dialogueOpen = false;
   dialogueNpcKey = null;
   dialogueEl.classList.add('hidden');
   document.body.classList.remove('dialogueActive');
 
+
   // `mandarin` is Серёга internally.
   if (closingNpcKey === 'mandarin') {
     playSeryogaFarewellVoice();
   }
 
+
   if (closingNpcKey === 'pavel' && pavelFarewellAllowedThisDialogue) {
     playPavelFarewellVoice();
   }
+
 
   if (closingNpcKey === 'baba') {
     playBabaFarewellVoice();
   }
 
+
   pavelFarewellAllowedThisDialogue = false;
+
 
   requestMouseLock();
 }
+
 
 function completedPourZoneCount() {
   return POUR_ZONES.filter(zone => zoneReadyForSequence(zone)).length;
 }
 
+
 function unpaidPourZoneCount() {
   return Math.max(0, completedPourZoneCount() - paidPourZoneCount);
 }
+
 
 function jobReadyForHandover() {
   // Pavel can now settle every completed map, not only the whole six-map object.
   return unpaidPourZoneCount() > 0;
 }
 
+
 function unpaidReadyZones() {
   const completed = completedPourZoneCount();
   return POUR_ZONES.slice(paidPourZoneCount, completed);
 }
 
+
 function settlementBreakdown() {
   return unpaidReadyZones().map(zone => ({ zone, ...gradePourZone(zone) }));
 }
+
 
 function createSettlementStats(breakdown, reward) {
   const entries = Array.isArray(breakdown) ? breakdown : [];
@@ -11419,18 +11545,22 @@ function createSettlementStats(breakdown, reward) {
   };
 }
 
+
 function currentJobReward() {
   return settlementBreakdown().reduce((sum, entry) => sum + entry.reward, 0);
 }
+
 
 async function loadDanceSource(url) {
   if (!npcDanceCache.has(url)) npcDanceCache.set(url, loadFBX(url));
   return npcDanceCache.get(url);
 }
 
+
 function waitForMs(ms) {
   return new Promise(resolve => window.setTimeout(resolve, ms));
 }
+
 
 function getPavelCutsceneTarget(out) {
   const rt = npcRuntime.get('pavel');
@@ -11440,21 +11570,25 @@ function getPavelCutsceneTarget(out) {
   return true;
 }
 
+
 function beginSettlementCamera() {
   syncCameraToPlayer();
   settlementCameraState.position.copy(camera.position);
   settlementCameraState.quaternion.copy(camera.quaternion);
   settlementCameraState.elapsed = 0;
 
+
   if (!getPavelCutsceneTarget(settlementCameraState.target)) {
     settlementCameraState.active = false;
     return;
   }
 
+
   settlementCameraState.viewSide
     .copy(settlementCameraState.position)
     .sub(settlementCameraState.target);
   settlementCameraState.viewSide.y = 0;
+
 
   const currentDistance = settlementCameraState.viewSide.length();
   if (currentDistance < .35) {
@@ -11468,9 +11602,11 @@ function beginSettlementCamera() {
   settlementCameraState.active = true;
 }
 
+
 function updateSettlementCamera(dt) {
   if (!settlementCutsceneActive || !settlementCameraState.active) return;
   if (!getPavelCutsceneTarget(settlementCameraState.target)) return;
+
 
   settlementCameraState.elapsed += dt;
   settlementCameraState.desired
@@ -11478,10 +11614,12 @@ function updateSettlementCamera(dt) {
     .addScaledVector(settlementCameraState.viewSide, settlementCameraState.distance);
   settlementCameraState.desired.y = settlementCameraState.target.y + .32;
 
+
   // A tiny sideways drift keeps the shot alive without fighting Pavel's dance.
   const drift = Math.sin(settlementCameraState.elapsed * .62) * .075;
   settlementCameraState.desired.x += settlementCameraState.viewSide.z * drift;
   settlementCameraState.desired.z -= settlementCameraState.viewSide.x * drift;
+
 
   settlementCameraState.position.x = THREE.MathUtils.damp(
     settlementCameraState.position.x,
@@ -11502,6 +11640,7 @@ function updateSettlementCamera(dt) {
     dt
   );
 
+
   settlementCameraState.lookMatrix.lookAt(
     settlementCameraState.position,
     settlementCameraState.target,
@@ -11513,9 +11652,11 @@ function updateSettlementCamera(dt) {
     1 - Math.exp(-7.5 * dt)
   );
 
+
   camera.position.copy(settlementCameraState.position);
   camera.quaternion.copy(settlementCameraState.quaternion);
 }
+
 
 function revealSettlementRank(grade, reward) {
   const safeGrade = SETTLEMENT_GRADE_CAPTIONS[grade] ? grade : 'F';
@@ -11534,6 +11675,7 @@ function revealSettlementRank(grade, reward) {
   settlementRankCardEl.classList.add('isVisible');
 }
 
+
 function revealSettlementStats(stats, grade, reward) {
   const safeGrade = SETTLEMENT_GRADE_CAPTIONS[grade] ? grade : 'F';
   const data = stats || {};
@@ -11550,6 +11692,7 @@ function revealSettlementStats(stats, grade, reward) {
   settlementStatsCardEl.classList.add('isVisible');
 }
 
+
 async function showSettlementStatsPhase(stats, grade, reward, duration = 3200) {
   settlementRankCardEl.classList.remove('isVisible');
   await waitForMs(140);
@@ -11558,12 +11701,14 @@ async function showSettlementStatsPhase(stats, grade, reward, duration = 3200) {
   await waitForMs(duration);
 }
 
+
 async function startPavelSettlementCutscene(grade, reward, stats, restoreResultDialogue) {
   if (settlementCutsceneActive) return false;
   dialogueRewardTransitionActive = false;
   settlementCutsceneActive = true;
   settlementRankRevealTimer = 0;
   preloadSettlementRankSheet();
+
 
   pouring = false;
   mobileMoveX = 0;
@@ -11572,6 +11717,7 @@ async function startPavelSettlementCutscene(grade, reward, stats, restoreResultD
   for (const key in keys) keys[key] = false;
   if (specialMode) finishSpecial();
   armsRig.visible = false;
+
 
   dialogueOptionsEl.querySelectorAll('button').forEach(button => { button.disabled = true; });
   dialogueEl.classList.add('hidden');
@@ -11582,6 +11728,7 @@ async function startPavelSettlementCutscene(grade, reward, stats, restoreResultD
   settlementStatsCardEl.classList.remove('isVisible');
   beginSettlementCamera();
 
+
   let danceStarted = false;
   try {
     const dancePlayed = await playPavelDance(() => {
@@ -11590,6 +11737,7 @@ async function startPavelSettlementCutscene(grade, reward, stats, restoreResultD
         if (settlementCutsceneActive) revealSettlementRank(grade, reward);
       }, 650);
     });
+
 
     // If an animation file ever fails to load, still show the earned rank and
     // return cleanly to dialogue instead of trapping the player in a cutscene.
@@ -11615,6 +11763,7 @@ async function startPavelSettlementCutscene(grade, reward, stats, restoreResultD
     armsRig.visible = armsReady;
     syncCameraToPlayer();
 
+
     try {
       restoreResultDialogue?.();
     } catch (error) {
@@ -11629,10 +11778,12 @@ async function startPavelSettlementCutscene(grade, reward, stats, restoreResultD
   return true;
 }
 
+
 async function playPavelDance(onStarted = null) {
   const rt = npcRuntime.get('pavel');
   if (!rt?.mixer || !rt.character) return false;
   let action = null;
+
 
   try {
     let danceIndex = Math.floor(Math.random() * PAVEL_DANCES.length);
@@ -11645,8 +11796,10 @@ async function playPavelDance(onStarted = null) {
     const source = await loadDanceSource(url);
     if (!source.animations?.length) return false;
 
+
     const clip = retargetClip(rt.character, source.animations[0], `Pavel_Dance_${Date.now()}`);
     if (!clip.tracks.length) return false;
+
 
     if (rt.busyAction) {
       rt.busyAction.stop();
@@ -11654,11 +11807,13 @@ async function playPavelDance(onStarted = null) {
     }
     rt.idleAction?.fadeOut(.15);
 
+
     action = rt.mixer.clipAction(clip);
     rt.busyAction = action;
     action.reset();
     action.setLoop(THREE.LoopRepeat, Infinity);
     action.clampWhenFinished = false;
+
 
     // Keep the authored Mixamo tempo. setDuration() used to stretch every
     // source clip to six seconds, so short dances looked unnaturally slow and
@@ -11666,15 +11821,19 @@ async function playPavelDance(onStarted = null) {
     // window instead.
     action.setEffectiveTimeScale(1.0);
 
+
     action.fadeIn(.12);
     action.play();
+
 
     // Voice and music belong to this exact success moment.
     playPavelSuccessMusic();
     playPavelSuccessDanceVoice();
 
+
     onStarted?.(action);
     await waitForMs(PAVEL_SUCCESS_DANCE_SECONDS * 1000);
+
 
     if (rt.busyAction === action) {
       action.fadeOut(.18);
@@ -11695,6 +11854,7 @@ async function playPavelDance(onStarted = null) {
     return false;
   }
 }
+
 
 function pavelDialogue() {
   if (jobState === 'accepted') {
@@ -11717,8 +11877,10 @@ function pavelDialogue() {
     return;
   }
 
+
   const handoverReady = jobReadyForHandover();
   const pendingReward = handoverReady ? currentJobReward() : 0;
+
 
   setDialogue(
     'ПАВЕЛ ПЕТРОВИЧ',
@@ -11735,6 +11897,7 @@ function pavelDialogue() {
             const done = POUR_ZONES.filter(z => zoneReadyForSequence(z)).length;
             const spill = surfaceSpillVolume();
 
+
             let worstZone = null;
             let worstScore = 2;
             for (const z of POUR_ZONES) {
@@ -11748,6 +11911,7 @@ function pavelDialogue() {
                 worstZone = z;
               }
             }
+
 
             let note;
             if (spill > .015) {
@@ -11767,9 +11931,11 @@ function pavelDialogue() {
             return;
           }
 
+
           const completed = completedPourZoneCount();
           const breakdown = settlementBreakdown();
           const unpaid = breakdown.length;
+
 
           if (unpaid <= 0) {
             setDialogue('ПАВЕЛ ПЕТРОВИЧ', 'За готовые карты я уже рассчитался. Доделывай следующую.', [
@@ -11777,6 +11943,7 @@ function pavelDialogue() {
             ]);
             return;
           }
+
 
           const reward = breakdown.reduce((sum, entry) => sum + entry.reward, 0);
           const settlementStats = createSettlementStats(breakdown, reward);
@@ -11792,6 +11959,7 @@ function pavelDialogue() {
               .join(' · ')
             : breakdown.map(entry => `№${entry.zone.id} — ${entry.grade}`).join(' · ');
 
+
           for (const entry of breakdown) {
             entry.zone.settledGrade = entry.grade;
             recordCareerStat('floorM2', entry.zone.w * entry.zone.d);
@@ -11803,19 +11971,23 @@ function pavelDialogue() {
           markPourProgressDirty();
           savePourProgress(true);
 
+
           // A successful map settlement should not trigger Pavel's ordinary farewell.
           pavelFarewellAllowedThisDialogue = false;
+
 
           const allSixReady = completed >= POUR_ZONES.length;
           const spillsClean = surfaceSpillVolume() <= .015;
           const finalGrade = worst?.grade || 'F';
           let restoreResultDialogue;
 
+
           if (allSixReady && spillsClean) {
             jobState = 'accepted';
             jobsCompleted++;
             saveProgression();
             savePourProgress(true);
+
 
             restoreResultDialogue = () => {
               setDialogue(
@@ -11848,6 +12020,7 @@ function pavelDialogue() {
             };
           }
 
+
           // Payment is committed once above; dialogue is then suspended while
           // the camera focuses Pavel, his dance plays and the rank flies in.
           // The prepared result dialogue returns only after the cutscene ends.
@@ -11862,6 +12035,7 @@ function pavelDialogue() {
   );
 }
 
+
 function mandarinDialogue() {
   const levels = [
     { cost: 700,  text: 'Чуть легче держать темп.' },
@@ -11869,12 +12043,14 @@ function mandarinDialogue() {
     { cost: 3200, text: 'Будешь почти без остановки работать.' },
   ];
 
+
   if (staminaLevel >= 3) {
     setDialogue('СЕРЁГА', 'Здарова трутень, ну что? По выносливости я тебе уже всё сделал.', [
       { label: 'Выход', action: closeDialogue }
     ]);
     return;
   }
+
 
   const next = levels[staminaLevel];
   setDialogue(
@@ -11898,6 +12074,7 @@ function mandarinDialogue() {
           saveProgression();
           updateEconomyUI();
 
+
           setDialogue('СЕРЁГА', next.text, [
             { label: 'Выход', action: closeDialogue }
           ]);
@@ -11908,14 +12085,13 @@ function mandarinDialogue() {
   );
 }
 
+
 function georgeDialogue() {
   if (pumpBroken) {
     setDialogue('Джордж', 'Насос встал. Предохранитель выбило — могу вернуть подачу.', [
       {
-        label: 'Открыть щиток насоса',
+        label: 'Починить насос',
         action: () => {
-          openPumpWirePuzzle();
-          return;
           pumpBroken = false;
           markPourProgressDirty();
           savePourProgress(true);
@@ -11933,11 +12109,13 @@ function georgeDialogue() {
     return;
   }
 
+
   const levels = [
     { cost: 900,  mult: PUMP_RATE_MULT[1], text: 'Чуть подкрутил насос. Бетон пойдёт бодрее.' },
     { cost: 2200, mult: PUMP_RATE_MULT[2], text: 'Теперь подача уже серьёзная. Следи за переливом.' },
     { cost: 4800, mult: PUMP_RATE_MULT[3], text: 'Это максимум. Шланг теперь льёт очень быстро.' },
   ];
+
 
   if (pumpLevel >= 3) {
     setDialogue('Джордж', 'Насос уже выкручен как надо. Быстрее — только проблемы искать.', [
@@ -11945,6 +12123,7 @@ function georgeDialogue() {
     ]);
     return;
   }
+
 
   const next = levels[pumpLevel];
   const percent = Math.round((next.mult - 1) * 100);
@@ -11955,6 +12134,7 @@ function georgeDialogue() {
         if (money < next.cost) {
           playGeorgeNoMoneyVoice();
 
+
           setDialogue('Джордж', 'Не хватает денег. Подкопи и приходи.', [
             { label: 'Выход', action: closeDialogue }
           ]);
@@ -11963,8 +12143,10 @@ function georgeDialogue() {
         money -= next.cost;
         pumpLevel++;
 
+
         // Resulting level 1/2/3 selects the matching recorded line.
         playGeorgeUpgradeVoice(pumpLevel);
+
 
         saveEconomy();
         saveProgression();
@@ -11978,14 +12160,17 @@ function georgeDialogue() {
   ]);
 }
 
+
 function openShopFromBaba() {
   dialogueOpen = false;
   dialogueNpcKey = null;
   dialogueEl.classList.add('hidden');
   document.body.classList.remove('dialogueActive');
 
+
   openShop(true);
 }
+
 
 function babaDialogue() {
   setDialogue(
@@ -11998,6 +12183,7 @@ function babaDialogue() {
   );
 }
 
+
 function refreshDialogue() {
   if (!dialogueOpen) return;
   if (dialogueNpcKey === 'pavel') pavelDialogue();
@@ -12007,12 +12193,15 @@ function refreshDialogue() {
   else closeDialogue();
 }
 
+
 dialogueCloseEl.addEventListener('click', closeDialogue);
+
 
 function updateEconomyUI() {
   moneyTextEl.textContent = `${money.toLocaleString('ru-RU')} ₽`;
   shopMoneyEl.textContent = `${money.toLocaleString('ru-RU')} ₽`;
 }
+
 
 const SHOP_CATALOG = {
   rewind: {
@@ -12053,10 +12242,12 @@ const SHOP_CATALOG = {
 };
 let selectedShopProduct = 'rewind';
 
+
 function selectShopProduct(productKey) {
   if (!SHOP_CATALOG[productKey]) return;
   selectedShopProduct = productKey;
   const p = SHOP_CATALOG[productKey];
+
 
   shopSelectedNameEl.textContent = p.name;
   shopSelectedDescEl.textContent = p.desc;
@@ -12067,8 +12258,10 @@ function selectShopProduct(productKey) {
   setShopPreviewModel(productKey);
 }
 
+
 function openShop(fromBaba = false) {
   if (shopOpen || resultOpen || dialogueOpen || statsOpen) return;
+
 
   shopOpenedFromBaba = !!fromBaba;
   shopOpen = true;
@@ -12082,15 +12275,19 @@ function openShop(fromBaba = false) {
 function closeShop() {
   if (!shopOpen) return;
 
+
   const wasBabaShop = shopOpenedFromBaba;
+
 
   shopOpen = false;
   shopOpenedFromBaba = false;
   shopEl.classList.add('hidden');
 
+
   if (wasBabaShop) {
     playBabaFarewellVoice();
   }
+
 
   requestMouseLock();
 }
@@ -12113,11 +12310,14 @@ function buyItem(kind, price, amount) {
     saveProgression();
     updateEconomyUI();
 
+
     if (shopOpenedFromBaba) playBabaPurchaseVoice();
+
 
     showToast(['', 'САПОГИ НОВИЧКА', 'САПОГИ БЕТОНЩИКА', 'МЫШЕХОДЫ'][tier]);
     return;
   }
+
 
   if (money < price) {
     shopMoneyEl.textContent = 'НЕ ХВАТАЕТ ДЕНЕГ';
@@ -12131,7 +12331,9 @@ function buyItem(kind, price, amount) {
   saveEconomy();
   updateEconomyUI();
 
+
   if (shopOpenedFromBaba) playBabaPurchaseVoice();
+
 
   showToast('ПОКУПКА');
 }
@@ -12151,6 +12353,7 @@ function closeJobResultAndReset() {
   requestMouseLock();
 }
 
+
 shopCloseEl.addEventListener('click', closeShop);
 shopEl.querySelectorAll('[data-product]').forEach(btn => {
   btn.addEventListener('click', () => selectShopProduct(btn.dataset.product));
@@ -12162,7 +12365,9 @@ shopBuyEl.addEventListener('click', () => {
 jobResultBtnEl.addEventListener('click', closeJobResultAndReset);
 updateEconomyUI();
 
+
 function worldPos(obj, out = interactionWorldPos) { return obj.getWorldPosition(out); }
+
 
 const interactionRaycaster = new THREE.Raycaster();
 const interactionNDC = new THREE.Vector2(0, 0);
@@ -12179,6 +12384,7 @@ const interactionNpcCapsuleTop = new THREE.Vector3();
 const interactionNpcRayPoint = new THREE.Vector3();
 const interactionNpcBodyPoint = new THREE.Vector3();
 
+
 // NPC interaction uses a vertical capsule instead of one tiny point in the
 // chest.  Looking at the torso OR the head now produces the dialogue action,
 // while aiming beside the character still does not.
@@ -12187,6 +12393,7 @@ function npcIsUnderCrosshair(it) {
   camera.getWorldPosition(interactionCamPos);
   camera.getWorldDirection(interactionCamDir).normalize();
   interactionRaycaster.ray.set(interactionCamPos, interactionCamDir);
+
 
   it.obj.getWorldPosition(interactionAimPoint);
   interactionNpcCapsuleBottom.copy(interactionAimPoint).addScaledVector(THREE.Object3D.DEFAULT_UP, -.64);
@@ -12201,6 +12408,7 @@ function npcIsUnderCrosshair(it) {
   if (alongRay > (it.radius || 2.6) + .65) return false;
   return distanceSq <= .50 * .50;
 }
+
 
 function rakePickupAimOK(it) {
   if (!it?.bounds) return false;
@@ -12222,6 +12430,7 @@ function rakePickupAimOK(it) {
   return interactionCamDir.dot(interactionAimVec) >= 0.951;
 }
 
+
 function pickupIsUnderCrosshair(it) {
   if (!it || !it.requiresLook) return true;
   if (it.kind === 'npc') return npcIsUnderCrosshair(it);
@@ -12240,9 +12449,11 @@ function pickupIsUnderCrosshair(it) {
     return interactionCamDir.dot(interactionAimVec) >= (it.kind === 'npc' ? 0.965 : 0.955);
   }
 
+
   interactionRaycaster.setFromCamera(interactionNDC, camera);
   interactionRaycaster.near = 0;
   interactionRaycaster.far = Math.max(0.5, (it.radius || 2.0) + .55);
+
 
   // Thin props (especially the rake handle/head) can be one-sided. A raycast from
   // the back then returns no triangle hit even though the crosshair is visually on
@@ -12258,15 +12469,18 @@ function pickupIsUnderCrosshair(it) {
     if (it.kind === 'rakePickup' && rakePickupAimOK(it)) return true;
   }
 
+
   // Mobile FINAL releases CPU vertex arrays after their first GPU upload. All
   // physical pickups already have accurate cached world bounds, so a second
   // triangle-level raycast is both redundant and incompatible with that release.
   if (TOUCH_DEVICE) return false;
 
+
   const hits = interactionRaycaster.intersectObject(target, true);
   if (hits.some(hit => hit.distance <= interactionRaycaster.far)) return true;
   return it.kind === 'rakePickup' ? rakePickupAimOK(it) : false;
 }
+
 
 function nearestInteractive() {
   let best = null, bd = Infinity;
@@ -12297,6 +12511,7 @@ function nearestInteractive() {
   }
   return best;
 }
+
 
 function smokeCigarette() {
   if (!started || specialMode) return;
@@ -12353,10 +12568,12 @@ function finishSpecial() {
   armsRig.visible = armsReady;
   resumePlayerIdle();
 
+
   restoreRakeAfterSpecial();
 }
 function updateFirstPersonProps(dt) {
   if (armsMixer) armsMixer.update(dt);
+
 
   if (armsReady && !armsRig.visible && !settlementCutsceneActive) {
     armsRig.visible = true;
@@ -12366,14 +12583,18 @@ function updateFirstPersonProps(dt) {
   }
 
 
+
+
   if (!specialMode) return;
   specialTimer -= dt;
   proceduralSpecialElapsed += dt;
   if (specialTimer <= 0) { finishSpecial(); return; }
 
+
   const procT = proceduralSpecialDuration > 0
     ? THREE.MathUtils.clamp(proceduralSpecialElapsed / proceduralSpecialDuration, 0, 1)
     : 0;
+
 
   // Apply the body pose AFTER AnimationMixer.update(). No FBX special Action exists.
   if (specialMode === 'smoke') {
@@ -12383,6 +12604,7 @@ function updateFirstPersonProps(dt) {
   } else if (specialMode === 'beer') {
     applyProceduralDrinkPose(procT, true);
   }
+
 
   // Props follow the procedurally posed hands/fingers.
   if (specialMode === 'smoke' && cigaretteProp) {
@@ -12422,6 +12644,7 @@ function updateFirstPersonProps(dt) {
   }
 }
 
+
 function interact() {
   let it = nearestInteractive();
   if (!it && !rakeOwned) {
@@ -12440,9 +12663,10 @@ function interact() {
   }
   if (!it) return;
 
+
   if (it.kind === 'hose') {
-    if (hoseRecoveryNeeded && !hoseHeld) { if (!hoseControlActive) startHoseControlQTE(); return; }
     if (!hoseHeld && rakeEquipped) setRakeEquipped(false);
+
 
     if (hoseHeld) {
       // Dropping the hose does not touch the pump switch. If it was ON, the
@@ -12471,20 +12695,24 @@ function interact() {
     return;
   }
 
+
   if (it.kind === 'rakePickup') {
     pickupRake(it.rakeSource || null);
     return;
   }
+
 
   if (it.kind === 'worldPickup') {
     pickupWorldItem(it);
     return;
   }
 
+
   if (it.kind === 'shop') {
     openShop();
     return;
   }
+
 
   if (it.kind === 'npc') {
     openDialogue(it.npcKey);
@@ -12495,6 +12723,7 @@ function currentZone() {
   return 'Двор стройплощадки';
 }
 
+
 function drawMap() {
   if (!mapVisible) return;
   const g = mapCtx, W = minimap.width, H = minimap.height;
@@ -12502,9 +12731,11 @@ function drawMap() {
   g.fillStyle = '#151714dd';
   g.fillRect(0, 0, W, H);
 
+
   const minX = -36, maxX = 36, minZ = -53, maxZ = 26;
   const tx = x => (x - minX) / (maxX - minX) * W;
   const tz = z => H - (z - minZ) / (maxZ - minZ) * H;
+
 
   // Site ground
   g.fillStyle = '#686a63';
@@ -12513,6 +12744,7 @@ function drawMap() {
   g.lineWidth = 2;
   g.strokeRect(tx(-32), tz(23.36), tx(32) - tx(-32), tz(-50.45) - tz(23.36));
 
+
   // Pour slab + six recessed bays between column rows.
   g.fillStyle = '#a3a59e';
   g.fillRect(
@@ -12520,6 +12752,7 @@ function drawMap() {
     tx(SLAB.maxX) - tx(SLAB.minX),
     tz(SLAB.minZ) - tz(SLAB.maxZ)
   );
+
 
   for (const zone of POUR_ZONES) {
     const zr = zoneVolume(zone) / zone.targetVolume;
@@ -12538,6 +12771,7 @@ function drawMap() {
     );
   }
 
+
   // Recoverable accidental concrete on the solid slab.
   g.fillStyle = '#69726d';
   for (const p of spillClumps) {
@@ -12552,9 +12786,11 @@ function drawMap() {
     g.fill();
   }
 
+
   // Pump footprint
   g.fillStyle = '#d1b85c';
   g.fillRect(tx(-14), tz(-4.6), tx(4.7) - tx(-14), tz(-38.9) - tz(-4.6));
+
 
   // Hose end
   if (hosePoints.length) {
@@ -12564,6 +12800,7 @@ function drawMap() {
     g.arc(tx(hp.x), tz(hp.z), 3, 0, Math.PI * 2);
     g.fill();
   }
+
 
   // Player
   g.fillStyle = '#e8db68';
@@ -12577,10 +12814,12 @@ function drawMap() {
   g.lineTo(tx(playerPos.x + fx * 3), tz(playerPos.z + fz * 3));
   g.stroke();
 
+
   g.fillStyle = '#d9dbd2';
   g.font = '10px system-ui';
   g.fillText('ОБЪЕКТ №17', 8, 14);
 }
+
 
 const clock = new THREE.Clock();
 let mobilePerfTimer=0, mobileFrameCounter=0, mobileFpsFrames=0, mobileFpsAccum=0;
@@ -12595,6 +12834,7 @@ function updateMobileRenderBudget(dt){
   if(fps<35) mobileLowFpsWindows=2;
   else if(fps<41) mobileLowFpsWindows++;
   else mobileLowFpsWindows=0;
+
 
   // At most three lifetime downshifts, never an upshift. This removes the old
   // DPR oscillation/reallocation loop while retaining a safety valve for weak GPUs.
@@ -12616,6 +12856,7 @@ function loop() {
   const updateUiNow = !TOUCH_DEVICE || mobileUiAccumulator >= .10;
   if (updateUiNow) mobileUiAccumulator = 0;
 
+
   let renderThisFrame = true;
   if (TOUCH_DEVICE) {
     mobileRenderAccumulator = Math.min(
@@ -12630,12 +12871,14 @@ function loop() {
   updateBabaProceduralIdle(dt);
   updateConstructionMachines(dt);
 
+
   if (started) {
     const inputBlocked = shopOpen || resultOpen || dialogueOpen || statsOpen;
     const kbForward = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0);
     const kbStrafe = (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
     const forwardInput = inputBlocked ? 0 : THREE.MathUtils.clamp(kbForward - mobileMoveY, -1, 1);
     const strafeInput = inputBlocked ? 0 : THREE.MathUtils.clamp(kbStrafe + mobileMoveX, -1, 1);
+
 
     // Direct yaw-based vectors. This does not depend on camera interpolation and cannot flip
     // direction as the previous third-person implementation did.
@@ -12646,6 +12889,7 @@ function loop() {
       .addScaledVector(moveForward, forwardInput)
       .addScaledVector(moveRight, strafeInput);
     if (moveWorld.lengthSq() > 1) moveWorld.normalize();
+
 
     const moving = moveWorld.lengthSq() > .0001;
     const sprint = !inputBlocked && (!!(keys.ShiftLeft || keys.ShiftRight) || (TOUCH_DEVICE && mobileSprintIntent));
@@ -12659,14 +12903,17 @@ function loop() {
       stamina = Math.min(staminaMax, stamina + dt * (9.5 + staminaLevel * .75));
     }
 
+
     // Wet concrete grips the boots. Near finished depth movement falls to ~40%;
     // through an over-height mound it can drop to ~28%.
     const concreteSlow = concreteMovementFactor(playerPos.x, playerPos.z);
     speed *= concreteSlow;
 
+
     if (moving) moveAxis(moveWorld.x * speed * dt, moveWorld.z * speed * dt);
     updateFootstepAudio(dt, moving, sprint);
     if (energyBoost > 0) energyBoost = Math.max(0, energyBoost - dt * 9.2);
+
 
     if (moving) {
       const bobSpeed = (sprint ? 12.5 : 9.0) * Math.max(.55, concreteMovementFactor(playerPos.x, playerPos.z));
@@ -12687,6 +12934,7 @@ function loop() {
       walkBobPitch = THREE.MathUtils.damp(walkBobPitch, 0, 12, dt);
     }
 
+
     syncCameraToPlayer();
     syncPlayerBodyToWorld();
     updateFirstPersonProps(dt);
@@ -12696,6 +12944,7 @@ function loop() {
     updateMachineAudio();
     updatePhysicalHose(dt);
     updateActivePourOutline(dt);
+
 
     if (!layoutRoot || !layoutRoot.parent) {
       sceneMissingTimer += dt;
@@ -12726,11 +12975,14 @@ function loop() {
     if (updateUiNow) updateMobileContextButtons(null);
   }
 
+
   // Gameplay systems use the normal FPS transform above. Only the final shot
   // is replaced, so the hose, player collision and world state stay stable.
   updateSettlementCamera(dt);
 
+
   if (!TOUCH_DEVICE) renderHotbar3DPreviews(dt);
+
 
   if (updateUiNow) {
     staminaBar.style.width = `${Math.min(100, stamina / staminaMax * 100)}%`; staminaText.textContent = Math.round(stamina);
@@ -12781,6 +13033,7 @@ function loop() {
     composer?.render(dt);
   }
 
+
   // Dedicated FPS rake pass.
   // World depth is cleared so the tool always stays visible, but the rake has
   // its own depthTest/depthWrite, so its rear faces can no longer overdraw its
@@ -12796,6 +13049,7 @@ function loop() {
     const prevAutoClear = renderer.autoClear;
     const prevBackground = scene.background;
 
+
     // Even with autoClear disabled, Three's scene background can still take
     // part in the second pass. Remove it temporarily so the already-rendered
     // world color buffer can never be replaced by the gray scene background.
@@ -12803,13 +13057,16 @@ function loop() {
     scene.background = null;
     renderer.clearDepth();
 
+
     camera.layers.set(RAKE_VIEWMODEL_LAYER);
     renderer.render(scene, camera);
     camera.layers.set(0);
 
+
     scene.background = prevBackground;
     renderer.autoClear = prevAutoClear;
   }
+
 
   if (shopOpen && renderThisFrame) {
     shopPreviewSpin += dt * .78;
@@ -12819,34 +13076,3 @@ function loop() {
   requestAnimationFrame(loop);
 }
 loop();
-
-// ===== v51.110 POST-GAME HOOKS =====
-// Catch any liquid meshes created before their async v3 maps finished loading.
-liquidTexturesPromise.then(() => { for (const mesh of liquidRuntimeMeshes) applyLiquidConcreteLook(mesh); });
-
-// Add the random-event outcome to the settlement statistics without changing index.html.
-function syncEventSettlementStat() {
-  const grid = document.querySelector('.settlementStatsGrid');
-  if (!grid) return;
-  let row = grid.querySelector('.settlementStatsEvent');
-  if (!row) {
-    row = document.createElement('div');
-    row.className = 'settlementStatsEvent';
-    row.innerHTML = '<span>СОБЫТИЕ</span><b id="settlementStatsEvent">—</b>';
-    grid.appendChild(row);
-  }
-  const value = String(window.__betonEventResult || '—');
-  const out = row.querySelector('b');
-  if (out) { out.textContent = value; out.dataset.state = value; }
-}
-const settlementStatsNode = document.querySelector('#settlementStatsCard');
-if (settlementStatsNode) {
-  new MutationObserver(syncEventSettlementStat).observe(settlementStatsNode, { attributes:true, attributeFilter:['class','data-grade'], subtree:true, childList:true });
-}
-syncEventSettlementStat();
-
-// Observe UI changes and keep a low-frequency fallback scan. No per-frame polling.
-const completionObserver = new MutationObserver(scanPourCompletion);
-completionObserver.observe(document.body, { subtree: true, childList: true, characterData: true });
-setInterval(scanPourCompletion, 500);
-scanPourCompletion();
