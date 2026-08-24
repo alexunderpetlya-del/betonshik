@@ -14,16 +14,16 @@
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png?v=51.41" />
   <title>БЕТОНЩИК</title>
   <link rel="manifest" href="./manifest.webmanifest?v=51.62" />
-  <link rel="stylesheet" href="./style.css?v=51.112" />
+  <link rel="stylesheet" href="./style.css?v=51.120" />
   <script type="importmap">
   {
     "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.min.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/"
+      "three": "./vendor/three/build/three.module.min.js?v=0.185.1",
+      "three/addons/": "./vendor/three/examples/jsm/"
     }
   }
   </script>
-  <style id="mobile-orientation-boot-v51111">
+  <style id="mobile-orientation-boot-v51120">
     html,body{width:100%;height:100%;margin:0;overflow:hidden}
     @media (pointer:coarse) and (orientation:portrait){
       #rotateNotice{
@@ -38,84 +38,36 @@
       #start .menuFrame{width:100vw!important;height:100dvh!important;max-width:none!important;max-height:none!important}
     }
   </style>
-  <script id="mobile-orientation-boot-script-v51111">
+  <script id="mobile-orientation-boot-script-v51120">
   (function(){
-    var coarse = false;
-    try { coarse = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches) || navigator.maxTouchPoints > 0 || ('ontouchstart' in window); } catch(_) {}
+    var coarse=false, raf=0;
+    try { coarse=!!(window.matchMedia&&matchMedia('(pointer: coarse)').matches)||navigator.maxTouchPoints>0||('ontouchstart' in window); } catch(_) {}
+    function size(){
+      var vv=window.visualViewport;
+      return {
+        width:Math.max(1,Math.round((vv&&vv.width)||innerWidth||document.documentElement.clientWidth||1)),
+        height:Math.max(1,Math.round((vv&&vv.height)||innerHeight||document.documentElement.clientHeight||1))
+      };
+    }
     function sync(){
-      var root=document.documentElement;
-      var landscape=innerWidth>innerHeight;
+      raf=0;
+      var v=size(),root=document.documentElement,landscape=v.width>v.height;
       root.classList.toggle('touchDevice',coarse);
-      root.classList.toggle('mobileLandscape',coarse && landscape);
-      root.classList.toggle('mobilePortrait',coarse && !landscape);
-      try { window.scrollTo(0,1); } catch(_) {}
+      root.classList.toggle('mobileLandscape',coarse&&landscape);
+      root.classList.toggle('mobilePortrait',coarse&&!landscape);
+      root.style.setProperty('--app-vw',v.width+'px');
+      root.style.setProperty('--app-vh',v.height+'px');
     }
+    function schedule(){ if(!raf) raf=requestAnimationFrame(sync); }
+    window.__betonViewport={size:size,sync:sync,schedule:schedule};
     sync();
-    addEventListener('resize',sync,{passive:true});
-    addEventListener('orientationchange',function(){sync();setTimeout(sync,60);setTimeout(sync,240);},{passive:true});
-  })();
-  </script>
-\n  <style id="beton-debug-style-v51112">
-    #betonBootDebug{position:fixed;left:max(6px,env(safe-area-inset-left));top:max(6px,env(safe-area-inset-top));z-index:2147483647;width:min(94vw,720px);max-height:min(48vh,430px);display:flex;flex-direction:column;background:rgba(4,7,8,.94);border:1px solid rgba(255,193,53,.72);border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,.65);color:#f4f4e8;font:600 10px/1.28 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;text-align:left;pointer-events:auto;-webkit-user-select:text;user-select:text}
-    #betonBootDebug .dbgHead{display:flex;align-items:center;gap:6px;padding:5px 7px;background:rgba(255,190,35,.13);border-bottom:1px solid rgba(255,193,53,.28)}
-    #betonBootDebug .dbgHead b{color:#ffd35a;font-size:11px;letter-spacing:.05em;margin-right:auto}
-    #betonBootDebug button{appearance:none;border:1px solid rgba(255,255,255,.2);border-radius:5px;background:#1c2224;color:#fff;padding:4px 7px;font:800 9px/1 system-ui;touch-action:manipulation}
-    #betonBootDebug pre{margin:0;padding:6px 7px;overflow:auto;white-space:pre-wrap;word-break:break-word;max-height:calc(min(48vh,430px) - 34px);color:#d9e5e5}
-    #betonBootDebug .fatal{color:#ff8585!important}
-    #betonBootDebug.isCollapsed pre{display:none}
-    #betonBootDebug.isCollapsed{width:auto;max-height:none}
-    @media (orientation:landscape) and (max-height:520px){#betonBootDebug{width:min(58vw,650px);max-height:58vh;font-size:9px}#betonBootDebug pre{max-height:calc(58vh - 32px)}}
-  </style>
-  <script id="beton-debug-bootstrap-v51112">
-  (function(){
-    var KEY='beton_debug_log_v51112';
-    var PREV='beton_debug_prev_v51112';
-    var lines=[];
-    var start=performance.now();
-    var lastStage='H0';
-    function time(){return ((performance.now()-start)/1000).toFixed(2)+'s'}
-    function clean(v){try{return String(v)}catch(_){return '[unprintable]'}}
-    function save(){try{localStorage.setItem(KEY,JSON.stringify({t:Date.now(),stage:lastStage,lines:lines.slice(-140)}))}catch(_){}}
-    function render(){
-      var pre=document.getElementById('betonBootDebugText');
-      if(pre){pre.textContent=lines.slice(-90).join('\\n');pre.scrollTop=pre.scrollHeight}
-      var title=document.getElementById('betonBootDebugTitle');
-      if(title)title.textContent='DEBUG 51.112 · '+lastStage;
-    }
-    function log(msg){var line='['+time()+'] '+clean(msg);lines.push(line);if(lines.length>180)lines.splice(0,lines.length-180);save();render();try{console.log('[BETON DEBUG]',msg)}catch(_){}}
-    function stage(code,msg){lastStage=clean(code);log(lastStage+(msg?' · '+clean(msg):''))}
-    function fatal(code,msg){lastStage=clean(code);log('!!! '+lastStage+' · '+clean(msg));var pre=document.getElementById('betonBootDebugText');if(pre)pre.classList.add('fatal');var st=document.getElementById('loadState');if(st){st.hidden=false;st.style.setProperty('display','block','important');st.style.color='#ff8585';st.textContent='DEBUG '+lastStage+': '+clean(msg)}render()}
-    function snapshot(){
-      var o='vp='+innerWidth+'x'+innerHeight+' dpr='+devicePixelRatio+' orient='+(innerWidth>innerHeight?'land':'port')+' online='+navigator.onLine+' touch='+navigator.maxTouchPoints;
-      log('SNAP '+o);
-      try{if(window.__BETON_RUNTIME_STATE)log('STATE '+JSON.stringify(window.__BETON_RUNTIME_STATE()))}catch(e){log('STATE ERR '+e.message)}
-    }
-    function attach(){render();snapshot();try{var old=localStorage.getItem(PREV);if(old){var parsed=JSON.parse(old);if(parsed&&parsed.lines&&parsed.lines.length){lines.unshift('--- PREVIOUS SESSION ---',...parsed.lines.slice(-28),'--- CURRENT SESSION ---');render()}}}catch(_){}}
-    function copy(){var txt=lines.join('\\n');if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(function(){log('debug copied')},function(){prompt('Скопируй лог:',txt)})}else prompt('Скопируй лог:',txt)}
-    function rotate(){log('ORIENTATION '+innerWidth+'x'+innerHeight+' angle='+(screen.orientation&&screen.orientation.angle));snapshot()}
-    try{var previous=localStorage.getItem(KEY);if(previous)localStorage.setItem(PREV,previous)}catch(_){ }
-    window.__BETON_DEBUG={enabled:true,lines:lines,log:log,stage:stage,fatal:fatal,snapshot:snapshot,attach:attach,copy:copy,get stageCode(){return lastStage}};
-    stage('H0','HTML bootstrap running');
-    addEventListener('error',function(e){
-      var target=e.target;
-      if(target&&target!==window&&(target.src||target.href)){fatal('E-RESOURCE',(target.tagName||'resource')+' '+(target.src||target.href));return}
-      fatal('E-WINDOW',(e.message||e.type)+' @ '+(e.filename||'?')+':'+(e.lineno||'?')+':'+(e.colno||'?'));
-    },true);
-    addEventListener('unhandledrejection',function(e){fatal('E-PROMISE',(e.reason&&e.reason.stack)||(e.reason&&e.reason.message)||e.reason||'rejected')});
-    addEventListener('offline',function(){fatal('E-OFFLINE','navigator offline')});
-    addEventListener('online',function(){log('NETWORK online')});
-    addEventListener('resize',rotate,{passive:true});
-    addEventListener('orientationchange',function(){log('orientationchange event');setTimeout(rotate,80);setTimeout(rotate,350)},{passive:true});
-    if(window.PerformanceObserver){try{new PerformanceObserver(function(list){list.getEntries().forEach(function(e){var n=e.name||'';if(/main\\.js|FINAL|\\.gltf|\\.glb|\\.bin|three\\.module|GLTFLoader|FBXLoader/i.test(n))log('RES '+Math.round(e.duration)+'ms '+Math.round(e.transferSize||0)+'B '+n.split('/').slice(-2).join('/'))})}).observe({type:'resource',buffered:true})}catch(_){}}
-    setInterval(function(){if(document.visibilityState==='visible')snapshot()},5000);
+    addEventListener('resize',schedule,{passive:true});
+    addEventListener('orientationchange',function(){schedule();setTimeout(schedule,80);setTimeout(schedule,280);},{passive:true});
+    if(window.visualViewport) visualViewport.addEventListener('resize',schedule,{passive:true});
   })();
   </script>
 </head>
-<body>\n  <div id="betonBootDebug" aria-live="polite">
-    <div class="dbgHead"><b id="betonBootDebugTitle">DEBUG 51.112</b><button type="button" onclick="__BETON_DEBUG.snapshot()">STATE</button><button type="button" onclick="__BETON_DEBUG.copy()">COPY</button><button type="button" onclick="this.closest('#betonBootDebug').classList.toggle('isCollapsed')">—</button></div>
-    <pre id="betonBootDebugText"></pre>
-  </div>
-  <script>__BETON_DEBUG.attach();__BETON_DEBUG.stage('H1','body parsed · debug panel attached');</script>
+<body>
   <div id="game"></div>
   <div id="cinematicGrade"></div>
   <div id="rotateNotice"><b>ПОВЕРНИ ТЕЛЕФОН</b><span>Мобильное управление работает в панорамном режиме</span></div>
@@ -207,6 +159,7 @@
 
       <div class="menuLoadState" id="loadState">Загрузка...</div>
       <div id="menuLoadingSpinner" class="menuLoadingSpinner" aria-hidden="true"></div>
+      <button id="bootRetryBtn" class="bootRetryBtn" type="button" hidden>ПОВТОРИТЬ ЗАГРУЗКУ</button>
     </div>
   </div>
 
@@ -437,11 +390,10 @@
 
 
 
-  <script>__BETON_DEBUG.stage('H2','starting main.js module');</script>
-  <script id="gameModuleScript" type="module" src="./main.js?v=51.112" onload="__BETON_DEBUG.stage('H3','module script load event')" onerror="__BETON_DEBUG.fatal('E-MODULE','main.js or static import failed')"></script>
+  <script type="module" src="./main.js?v=51.120"></script>
   <script>
   (function(){
-    function showBootError(msg){ try{__BETON_DEBUG.fatal('E-BOOT',msg)}catch(_){}
+    function showBootError(msg){
       var el=document.getElementById('loadState');
       if(!el)return;
       el.textContent='ОШИБКА ЗАПУСКА: '+String(msg||'неизвестная ошибка');

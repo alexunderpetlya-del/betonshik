@@ -8,8 +8,6 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
-window.__BETON_DEBUG?.stage('M1','main.js evaluated after static imports');
-
 
 
 
@@ -18,7 +16,7 @@ const start = document.querySelector('#start');
 const startBtn = document.querySelector('#startBtn');
 const loadState = document.querySelector('#loadState');
 const menuLoadingSpinner = document.querySelector('#menuLoadingSpinner');
-window.__BETON_DEBUG?.stage('M2','core DOM references acquired');
+const bootRetryBtn = document.querySelector('#bootRetryBtn');
 
 
 
@@ -27,7 +25,6 @@ window.__BETON_DEBUG?.stage('M2','core DOM references acquired');
 // on the loading screen instead of leaving the user with an endless "loading".
 function showFatalRuntimeError(message) {
   console.error('[FATAL RUNTIME]', message);
-  window.__BETON_DEBUG?.fatal('E-RUNTIME', message);
   if (!loadState) return;
   loadState.textContent = 'ОШИБКА: ' + String(message);
   menuLoadingSpinner?.classList.add('isError');
@@ -174,38 +171,40 @@ minimap.style.display = 'none';
 // Mobile/browser profile. Desktop loads the exact FINAL export without texture downscaling.
 // Mobile uses a separate memory profile; weak devices automatically retry with SAFE textures.
 const TOUCH_DEVICE = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
-const MOBILE_LANDSCAPE = () => TOUCH_DEVICE && innerWidth > innerHeight;
-const MOBILE_SAFE_KEY = 'beton_mobile_safe_v5161';
-const MOBILE_BOOT_STAGE_KEY = 'beton_mobile_boot_stage_v5161';
-const MOBILE_BOOT_TIME_KEY = 'beton_mobile_boot_time_v5161';
-const MOBILE_DEBUG_LOG_KEY = 'beton_mobile_debug_log_v5161';
+const MOBILE_BOOT_STAGE_KEY = 'beton_mobile_boot_stage_v5120';
+const MOBILE_BOOT_TIME_KEY = 'beton_mobile_boot_time_v5120';
+const MOBILE_DEBUG_LOG_KEY = 'beton_mobile_debug_log_v5120';
 const mobileUrlParams = new URLSearchParams(location.search);
 const forceFullMobile = mobileUrlParams.has('fullmobile');
-const previousMobileStage = TOUCH_DEVICE ? (localStorage.getItem(MOBILE_BOOT_STAGE_KEY) || '') : '';
-const previousMobileStageTime = TOUCH_DEVICE ? Number(localStorage.getItem(MOBILE_BOOT_TIME_KEY) || 0) : 0;
-const previousMobileLikelyCrashed = TOUCH_DEVICE &&
-  ['scene-loading-normal','player-loading','npc-loading'].includes(previousMobileStage) && previousMobileStageTime > 0 &&
-  (Date.now() - previousMobileStageTime) < 10 * 60 * 1000;
-if (previousMobileLikelyCrashed && !forceFullMobile) localStorage.setItem(MOBILE_SAFE_KEY, '1');
-// Phones always start with the 256 px SAFE texture set. The full mobile set can
-// still be tested explicitly with ?fullmobile, but must never be the default:
-// iOS may terminate a WebGL tab before a context-lost event can be delivered.
-const MOBILE_SAFE_MODE = TOUCH_DEVICE && !forceFullMobile;
+// Default phone build is the LITE glTF.  ?fullmobile is kept only as an explicit
+// visual QA switch; recovery strips it so a weak iPhone cannot reload-crash forever.
+const MOBILE_LITE_MODE = TOUCH_DEVICE && !forceFullMobile;
+const MOBILE_SAFE_MODE = MOBILE_LITE_MODE; // compatibility alias for older gameplay branches
 const FINAL_SCENE_URL = TOUCH_DEVICE
-  ? (MOBILE_SAFE_MODE ? './assets/FINAL_MOBILE_SAFE.gltf' : './assets/FINAL_MOBILE.gltf')
-  : './assets/FINAL.gltf';
+  ? (MOBILE_LITE_MODE ? './assets/FINAL_MOBILE_LITE.gltf?v=51.120' : './assets/FINAL_MOBILE.gltf?v=51.120')
+  : './assets/FINAL.gltf?v=51.120';
+function getViewportSize() {
+  const helper = window.__betonViewport;
+  if (helper?.size) return helper.size();
+  const vv = window.visualViewport;
+  const width = Math.max(1, Math.round(vv?.width || innerWidth || document.documentElement.clientWidth || 1));
+  const height = Math.max(1, Math.round(vv?.height || innerHeight || document.documentElement.clientHeight || 1));
+  return { width, height };
+}
+const MOBILE_LANDSCAPE = () => {
+  const v = getViewportSize();
+  return TOUCH_DEVICE && v.width > v.height;
+};
 document.documentElement.classList.toggle('touchDevice', TOUCH_DEVICE);
-document.documentElement.classList.toggle('mobileSafeMode', MOBILE_SAFE_MODE);
+document.documentElement.classList.toggle('mobileSafeMode', MOBILE_LITE_MODE);
 // Do not retain huge .bin/image payloads in the Three.js global file cache on phones.
 THREE.Cache.enabled = !TOUCH_DEVICE;
-window.__BETON_DEBUG?.stage('M3',`profile touch=${TOUCH_DEVICE} safe=${MOBILE_SAFE_MODE} scene=${FINAL_SCENE_URL}`);
 
 
 
 
 const mobileDebugLines = [];
 function mobileDebugLog(message) {
-  window.__BETON_DEBUG?.log('MOBILE '+String(message));
   if (!TOUCH_DEVICE) return;
   const line = `${new Date().toISOString().slice(11,19)} ${String(message)}`;
   mobileDebugLines.push(line);
@@ -215,7 +214,6 @@ function mobileDebugLog(message) {
   if (panel) panel.textContent = mobileDebugLines.join('\n');
 }
 function mobileDebugStage(stage) {
-  window.__BETON_DEBUG?.stage('MOBILE',stage);
   if (!TOUCH_DEVICE) return;
   try {
     localStorage.setItem(MOBILE_BOOT_STAGE_KEY, stage);
@@ -232,7 +230,7 @@ function buildMobileDebugReport() {
     else if (gl) glInfo = `webgl: ${gl.getParameter(gl.VERSION)}`;
   } catch (_) {}
   return [
-    'BETONSHCHIK MOBILE DEBUG v51.97',
+    'BETONSHCHIK MOBILE DEBUG v51.120',
     `safe=${MOBILE_SAFE_MODE} scene=${FINAL_SCENE_URL}`,
     `screen=${innerWidth}x${innerHeight} dpr=${devicePixelRatio}`,
     `staticGeomCPUReleased=${(mobileStaticGeometryReleasedBytes / (1024 * 1024)).toFixed(1)} MiB`,
@@ -276,7 +274,8 @@ scene.fog = null;
 
 
 
-const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.12, 450);
+const initialViewport = getViewportSize();
+const camera = new THREE.PerspectiveCamera(72, initialViewport.width / initialViewport.height, 0.12, 450);
 camera.layers.set(0);
 camera.rotation.order = 'YXZ';
 camera.position.set(0, 1.72, 15.5);
@@ -302,17 +301,16 @@ let mobileRenderScale = TOUCH_DEVICE ? Math.min(devicePixelRatio, MOBILE_DPR_STA
 let appliedMainRendererDpr = TOUCH_DEVICE
   ? Math.min(devicePixelRatio, mobileRenderScale)
   : Math.min(devicePixelRatio, 1.55);
-let appliedMainRendererWidth = Math.max(1, Math.round(innerWidth));
-let appliedMainRendererHeight = Math.max(1, Math.round(innerHeight));
+let appliedMainRendererWidth = initialViewport.width;
+let appliedMainRendererHeight = initialViewport.height;
 renderer.setPixelRatio(appliedMainRendererDpr);
-renderer.setSize(innerWidth, innerHeight);
+renderer.setSize(initialViewport.width, initialViewport.height);
 renderer.shadowMap.enabled = !TOUCH_DEVICE;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.08;
 mount.appendChild(renderer.domElement);
-window.__BETON_DEBUG?.stage('M5',`WebGL renderer created ${renderer.capabilities.isWebGL2 ? 'WebGL2' : 'WebGL1'} · maxTex=${renderer.capabilities.maxTextureSize}`);
 
 
 
@@ -383,10 +381,10 @@ let outputPass = null;
 if (!TOUCH_DEVICE) {
   composer = new EffectComposer(renderer);
   composer.setPixelRatio(Math.min(devicePixelRatio, 1.15));
-  composer.setSize(innerWidth, innerHeight);
+  composer.setSize(initialViewport.width, initialViewport.height);
   renderPass = new RenderPass(scene, camera);
   composer.addPass(renderPass);
-  bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.055, 0.16, 1.12);
+  bloomPass = new UnrealBloomPass(new THREE.Vector2(initialViewport.width, initialViewport.height), 0.055, 0.16, 1.12);
   composer.addPass(bloomPass);
   subtleColorGradePass = new ShaderPass(subtleColorGradeShader);
   composer.addPass(subtleColorGradePass);
@@ -533,6 +531,26 @@ const mats = {
 
 const colliders = [];
 const meshColliders = [];
+const MESH_COLLIDER_CELL = 8;
+const meshColliderGrid = new Map();
+let meshColliderQueryId = 0;
+function meshColliderCellKey(x, z) { return `${x},${z}`; }
+function rebuildMeshColliderGrid() {
+  meshColliderGrid.clear();
+  for (const c of meshColliders) {
+    const b = c.bounds;
+    if (!b) continue;
+    const x0 = Math.floor(b.minX / MESH_COLLIDER_CELL), x1 = Math.floor(b.maxX / MESH_COLLIDER_CELL);
+    const z0 = Math.floor(b.minZ / MESH_COLLIDER_CELL), z1 = Math.floor(b.maxZ / MESH_COLLIDER_CELL);
+    for (let gx=x0; gx<=x1; gx++) for (let gz=z0; gz<=z1; gz++) {
+      const key=meshColliderCellKey(gx,gz);
+      let bucket=meshColliderGrid.get(key);
+      if (!bucket) meshColliderGrid.set(key,bucket=[]);
+      bucket.push(c);
+    }
+  }
+  mobileDebugLog(`collider grid: ${meshColliders.length} OBB -> ${meshColliderGrid.size} cells`);
+}
 const collisionSphereLow = new THREE.Sphere(new THREE.Vector3(), .24);
 const collisionSphereMid = new THREE.Sphere(new THREE.Vector3(), .25);
 const collisionSphereHigh = new THREE.Sphere(new THREE.Vector3(), .23);
@@ -582,7 +600,16 @@ function addMeshOBBCollider(mesh, name) {
 
 
 
-  meshColliders.push({ obb, name: name || mesh.name || 'scene mesh' });
+  const broad = new THREE.Box3().setFromObject(mesh);
+  meshColliders.push({
+    obb,
+    name: name || mesh.name || 'scene mesh',
+    bounds: {
+      minX: broad.min.x, maxX: broad.max.x,
+      minZ: broad.min.z, maxZ: broad.max.z,
+    },
+    _queryId: 0,
+  });
 }
 function addWalkSurface(name, minX, maxX, minZ, maxZ, topY) {
   if (![minX,maxX,minZ,maxZ,topY].every(Number.isFinite)) return;
@@ -1699,11 +1726,52 @@ function labelSprite(text, pos, color = '#e8e3b4') {
 
 
 // GLTF ASSETS
-const loader = new GLTFLoader();
+const sceneLoadingManager = new THREE.LoadingManager();
+let sceneManagerLoaded = 0;
+let sceneManagerTotal = 0;
+sceneLoadingManager.onStart = (url, loaded, total) => {
+  armSceneLoadWatchdog();
+  sceneManagerLoaded = loaded; sceneManagerTotal = total;
+  mobileDebugLog(`asset start ${loaded}/${total}: ${String(url).split('/').pop()}`);
+};
+sceneLoadingManager.onProgress = (url, loaded, total) => {
+  armSceneLoadWatchdog();
+  sceneManagerLoaded = loaded; sceneManagerTotal = total;
+  if (loadState && !sceneReady) loadState.textContent = `ЗАГРУЗКА СЦЕНЫ · ${loaded}/${total}`;
+  if (TOUCH_DEVICE) mobileDebugLog(`asset ${loaded}/${total}: ${String(url).split('/').pop()}`);
+};
+sceneLoadingManager.onError = url => mobileDebugLog(`ASSET ERROR ${url}`);
+const loader = new GLTFLoader(sceneLoadingManager);
+const SCENE_LOAD_TIMEOUT_MS = TOUCH_DEVICE ? 60_000 : 90_000;
+let sceneLoadFinished = false;
+let sceneLoadWatchdog = 0;
+function armSceneLoadWatchdog() {
+  clearTimeout(sceneLoadWatchdog);
+  sceneLoadWatchdog = setTimeout(() => {
+    if (sceneLoadFinished || sceneReady) return;
+    mobileDebugStage('scene-timeout');
+    recoverBrokenScene(`таймаут загрузки ${Math.round(SCENE_LOAD_TIMEOUT_MS / 1000)}с`);
+  }, SCENE_LOAD_TIMEOUT_MS);
+}
+function showBootRetry(reason) {
+  sceneRecoveryPending = false;
+  if (loadState) {
+    loadState.textContent = `СЦЕНА НЕ ЗАГРУЗИЛАСЬ · ${String(reason)}`;
+    loadState.style.color = '#ff8b78';
+  }
+  menuLoadingSpinner?.classList.add('isError');
+  if (bootRetryBtn) bootRetryBtn.hidden = false;
+}
+bootRetryBtn?.addEventListener('click', () => {
+  bootRetryBtn.disabled = true;
+  const u = new URL(location.href);
+  u.searchParams.delete('fullmobile');
+  u.searchParams.set('retry', Date.now().toString());
+  location.replace(u.toString());
+});
 function updateLoadState() {
   const done = assetsLoaded + assetsFailed >= TOTAL_ASSETS;
-  window.__BETON_DEBUG?.log(`LOAD assets=${assetsLoaded}/${TOTAL_ASSETS} failed=${assetsFailed} done=${done}`);
-  loadState.textContent = done
+  if (loadState) loadState.textContent = done
     ? (assetsFailed ? `Сцена готова · ${assetsFailed} ассет(а) не загрузились` : 'Сцена готова')
     : `Загрузка моделей ${assetsLoaded + assetsFailed}/${TOTAL_ASSETS}…`;
   if (!done) menuLoadingSpinner?.classList.remove('isDone','isError');
@@ -1712,44 +1780,21 @@ function recoverBrokenScene(reason = 'scene unavailable') {
   if (sceneRecoveryPending) return;
   sceneRecoveryPending = true;
   console.error('[SCENE RECOVERY]', reason);
-  window.__BETON_DEBUG?.fatal('E-SCENE-RECOVERY', reason);
+  mobileDebugLog(`scene failure: ${reason}`);
   sceneReady = false;
   if (startBtn) { startBtn.disabled = true; startBtn.setAttribute('aria-disabled','true'); }
-  menuLoadingSpinner?.classList.remove('isDone','isError');
-  if (loadState) {
-    loadState.textContent = 'ВОССТАНАВЛИВАЮ СЦЕНУ…';
-    loadState.style.color = '#eee790';
-  }
   if (start) start.classList.remove('hidden');
   document.body.classList.remove('gameStarted');
-  if (TOUCH_DEVICE && !MOBILE_SAFE_MODE) {
-    mobileDebugLog(`normal mobile scene failed: ${reason}; switching to SAFE`);
-    try { localStorage.setItem(MOBILE_SAFE_KEY, '1'); } catch (_) {}
-    mobileDebugStage('switching-safe');
-    setTimeout(() => location.reload(), 250);
+  // Full-mobile is a QA override only. One failure immediately falls back to LITE.
+  if (TOUCH_DEVICE && !MOBILE_LITE_MODE) {
+    mobileDebugStage('switching-lite');
+    const u = new URL(location.href);
+    u.searchParams.delete('fullmobile');
+    u.searchParams.set('liteRecovery', Date.now().toString());
+    setTimeout(() => location.replace(u.toString()), 120);
     return;
   }
-  if (window.__BETON_DEBUG?.enabled) {
-    if (loadState) { loadState.hidden = false; loadState.style.setProperty('display','block','important'); loadState.textContent = 'DEBUG: АВТОПЕРЕЗАГРУЗКА ОТКЛЮЧЕНА · '+reason; }
-    sceneRecoveryPending = false;
-    return;
-  }
-  const retries = Number.parseInt(sessionStorage.getItem(SCENE_RETRY_KEY) || '0', 10) || 0;
-  if (retries < 2) {
-    sessionStorage.setItem(SCENE_RETRY_KEY, String(retries + 1));
-    setTimeout(() => {
-      const u = new URL(location.href);
-      u.searchParams.set('sceneRetry', Date.now().toString());
-      location.replace(u.toString());
-    }, 650);
-  } else {
-    if (loadState) {
-      loadState.textContent = 'СЦЕНА НЕ ЗАГРУЗИЛАСЬ · ОБНОВИ СТРАНИЦУ';
-      menuLoadingSpinner?.classList.add('isError');
-      loadState.style.color = '#ff8b78';
-    }
-    sceneRecoveryPending = false;
-  }
+  showBootRetry(reason);
 }
 function applyVegetationCutout(mat) {
   if (!mat || mat.userData?.vegetationCutoutFix) return;
@@ -1884,19 +1929,6 @@ function placeModel(url, { x = 0, y = 0, z = 0, rotY = 0, targetXZ = 3, onReady 
 // FINAL LAYOUT + PHYSICAL HOSE + POUR JOB v0.19
 // ---------------------------------------------------------------------------
 let layoutRoot = null;
-window.__BETON_RUNTIME_STATE = () => ({
-  started, locked, assetsLoaded, assetsFailed, totalAssets: TOTAL_ASSETS,
-  sceneReady, sceneRecoveryPending,
-  layout: !!layoutRoot,
-  layoutMounted: !!(layoutRoot && layoutRoot.parent),
-  sceneChildren: layoutRoot?.children?.length || 0,
-  viewport: `${innerWidth}x${innerHeight}`,
-  touch: TOUCH_DEVICE,
-  safe: MOBILE_SAFE_MODE,
-  sceneUrl: FINAL_SCENE_URL,
-  visibility: document.visibilityState,
-});
-window.__BETON_DEBUG?.stage('M6','runtime state hook installed · waiting for scene');
 let babaWorldRoot = null;
 let babaLockedY = 0;
 let babaGroundLockEnabled = false;
@@ -2473,13 +2505,12 @@ const rebarLayerMat = new THREE.MeshBasicMaterial({
 
 const rebarTexturePaths = TOUCH_DEVICE
   ? [
-      './assets/final_mobile_textures/rebar_grid_transparent.webp',
       './assets/final_mobile_safe_textures/rebar_grid_transparent.webp',
-      './assets/textures/rebar_grid_transparent.webp',
+      './assets/final_mobile_textures/rebar_grid_transparent.webp',
     ]
   : [
       './assets/final_pc_textures/rebar_grid_transparent.webp',
-      './assets/textures/rebar_grid_transparent.webp',
+      './rebar_grid_transparent.webp',
     ];
 
 
@@ -7730,11 +7761,24 @@ function setupWorldPickup(root, spec) {
   });
   source.updateWorldMatrix(true, true);
 
-
-
-
-  const bb = new THREE.Box3().setFromObject(source);
-  const center = bb.getCenter(new THREE.Vector3());
+  let bb = new THREE.Box3().setFromObject(source);
+  // FINAL_MOBILE_LITE strips two absurdly dense authored drink pickup meshes.
+  // Their named nodes keep the original positions; rebuild the visible can with ~40 tris.
+  if (bb.isEmpty() && MOBILE_LITE_MODE && spec.type === 'rewind') {
+    const canMat = new THREE.MeshStandardMaterial({ color: 0xe2bb24, roughness: .48, metalness: .18 });
+    const topMat = new THREE.MeshStandardMaterial({ color: 0x9ca1a1, roughness: .38, metalness: .72 });
+    const can = new THREE.Mesh(new THREE.CylinderGeometry(.048, .048, .22, 10, 1), canMat);
+    can.position.y = .11;
+    const top = new THREE.Mesh(new THREE.CylinderGeometry(.043, .043, .008, 10, 1), topMat);
+    top.position.y = .222;
+    source.add(can, top);
+    source.updateWorldMatrix(true, true);
+    bb = new THREE.Box3().setFromObject(source);
+    mobileDebugLog(`lite pickup stand-in: ${spec.node}`);
+  }
+  const center = bb.isEmpty()
+    ? source.getWorldPosition(new THREE.Vector3())
+    : bb.getCenter(new THREE.Vector3());
   const proxy = new THREE.Object3D();
   proxy.name = `WORLD_PICKUP_${spec.node}`;
   proxy.position.copy(center);
@@ -7973,28 +8017,52 @@ function findOrCreateBabaKapa(root) {
 
 
 
-mobileDebugStage(TOUCH_DEVICE ? (MOBILE_SAFE_MODE ? 'scene-loading-safe' : 'scene-loading-normal') : 'desktop-scene-loading');
-window.__BETON_DEBUG?.stage('S0',`GLTF request begin · ${FINAL_SCENE_URL}`);
-let __debugSceneLastPct = -1;
-let __debugSceneLastBytes = 0;
-let __debugSceneLastAt = 0;
+mobileDebugStage(TOUCH_DEVICE ? (MOBILE_LITE_MODE ? 'scene-loading-lite' : 'scene-loading-full') : 'desktop-scene-loading');
+armSceneLoadWatchdog();
+function installMobileLiteStandins() {
+  if (!MOBILE_LITE_MODE) return;
+  const g = new THREE.Group();
+  g.name = 'MOBILE_LITE_STANDINS';
+  const concrete = new THREE.MeshStandardMaterial({ color: 0x686b68, roughness: .95, metalness: 0 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x363a36, roughness: .91, metalness: .03 });
+  const yellow = new THREE.MeshStandardMaterial({ color: 0xb89b29, roughness: .74, metalness: .08 });
+  function boxFromBounds(name, min, max, mat, collide = false) {
+    const sx=max[0]-min[0], sy=max[1]-min[1], sz=max[2]-min[2];
+    const m=new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz),mat);
+    m.name=name;
+    m.position.set((min[0]+max[0])*.5,(min[1]+max[1])*.5,(min[2]+max[2])*.5);
+    m.receiveShadow=!TOUCH_DEVICE; m.castShadow=false;
+    g.add(m);
+    if (collide) addColliderXZ(name,min[0],max[0],min[2],max[2],min[1],max[1]);
+  }
+  // Four expensive architectural meshes lived in separate ~80 MiB buffers.
+  // Coarse boxes keep the silhouette/collision on phones while desktop keeps originals.
+  boxFromBounds('LITE_BUILDING_W',[-50.7836,-.4606,16.6819],[-25.3687,18.0502,42.4089],dark,true);
+  boxFromBounds('LITE_PANEL_1',[-47.7034,-.0657,-43.5718],[-37.6018,14.0456,-20.2886],concrete,true);
+  boxFromBounds('LITE_PANEL_2',[-44.5059,-.0657,-68.6756],[-23.4439,14.0456,-47.4757],concrete,true);
+  boxFromBounds('LITE_PANEL_3',[-24.2622,-.0657,27.5393],[-1.1231,14.0456,37.2842],concrete,true);
+  // Dense 500k-triangle shop display cans are replaced by one simple cabinet silhouette.
+  boxFromBounds('LITE_SHOP_DISPLAY',[27.2753,-.0118,-40.1696],[31.5199,2.1314,-39.5194],yellow,false);
+  scene.add(g);
+  mobileDebugLog('lite stand-ins installed: architecture + shop display');
+}
+
 loader.load(FINAL_SCENE_URL, gltf => {
-  window.__BETON_DEBUG?.stage('S3','GLTF parsed · success callback entered');
+  sceneLoadFinished = true;
+  clearTimeout(sceneLoadWatchdog);
+  if (bootRetryBtn) bootRetryBtn.hidden = true;
   layoutRoot = gltf.scene;
   layoutRoot.name = 'BETONSHCHIK_FINAL_LAYOUT';
-  window.__BETON_DEBUG?.stage('S4',`scene root acquired · children=${layoutRoot.children.length}`);
   prepModel(layoutRoot);
-  window.__BETON_DEBUG?.stage('S5','prepModel complete');
   scene.add(layoutRoot);
+  installMobileLiteStandins();
   layoutRoot.updateWorldMatrix(true, true);
-  window.__BETON_DEBUG?.stage('S6','layout added to Three scene');
 
 
 
 
   // Spawn point is authored in Blender. The marker itself is hidden in runtime.
   setupPlayerSpawn(layoutRoot);
-  window.__BETON_DEBUG?.stage('S7','player spawn setup complete');
 
 
 
@@ -8029,7 +8097,6 @@ loader.load(FINAL_SCENE_URL, gltf => {
   // Mobile: remove the authored asphalt cap only under the runtime pour slab.
   // This is the missing piece that makes the physical depressions actually visible.
   cutMobileSiteGroundUnderPourSlab(layoutRoot);
-  window.__BETON_DEBUG?.stage('S8','runtime pit/site-ground cut complete');
   pitGroup.visible = true;
   pitGroup.traverse(o => { if (o.isMesh) { o.visible = true; o.frustumCulled = false; } });
   if (TOUCH_DEVICE) {
@@ -8126,7 +8193,6 @@ loader.load(FINAL_SCENE_URL, gltf => {
 
   // Rake is authored/positioned in Blender now. Use that exact scene model.
   setupSceneRake(layoutRoot);
-  window.__BETON_DEBUG?.stage('S9','rake setup complete');
 
 
 
@@ -8134,7 +8200,6 @@ loader.load(FINAL_SCENE_URL, gltf => {
   // FINAL contains Baba as separated static parts in a T-pose (no skin/armature was exported).
   // Relax the arms directly from their actual mesh bounds, then run a subtle procedural idle.
   relaxBabaKapaTPose(layoutRoot);
-  window.__BETON_DEBUG?.stage('S10','Baba T-pose relax complete');
   const baba = findOrCreateBabaKapa(layoutRoot);
   if (baba) {
     baba.visible = true;
@@ -8192,7 +8257,6 @@ loader.load(FINAL_SCENE_URL, gltf => {
   // Pickups are authored scene meshes. Register them before collision generation so
   // they never leave invisible blockers after being collected.
   setupWorldPickups(layoutRoot);
-  window.__BETON_DEBUG?.stage('S11','world pickups setup complete');
 
 
 
@@ -8201,7 +8265,6 @@ loader.load(FINAL_SCENE_URL, gltf => {
   removeFrontSiteFlower(layoutRoot);
   repaintConstructionVehicles(layoutRoot);
   setupConstructionMachineLife(layoutRoot);
-  window.__BETON_DEBUG?.stage('S12','vehicle/machine life setup complete');
 
 
 
@@ -8224,17 +8287,14 @@ loader.load(FINAL_SCENE_URL, gltf => {
   // Grass/flowers are visual-only and already collision-free, so replacing them with instancing
   // cannot affect gameplay volumes.
   instanceMobileVegetation(layoutRoot);
-  window.__BETON_DEBUG?.stage('S13','mobile vegetation pass complete');
 
 
 
 
-  window.__BETON_DEBUG?.stage('S14','collider extraction begin');
   addFinalLayoutColliders(layoutRoot);
-  window.__BETON_DEBUG?.stage('S15',`collider extraction complete · colliders=${colliders?.length ?? 'n/a'}`);
   carveMonetkaParkingPassage();
+  rebuildMeshColliderGrid();
   freezeMobileStaticMeshes(layoutRoot);
-  window.__BETON_DEBUG?.stage('S16','mobile static freeze complete');
   if (TOUCH_DEVICE) {
     // Cache vehicle bounds while FINAL's CPU vertex arrays are still available.
     resolveMachineAudioWorldPositions();
@@ -8261,34 +8321,39 @@ loader.load(FINAL_SCENE_URL, gltf => {
 
 
 
-  window.__BETON_DEBUG?.stage('S17','scene callback finishing');
   assetsLoaded++;
   sessionStorage.removeItem(SCENE_RETRY_KEY);
   updateLoadState();
-  // Enable PLAY only after the final layout is actually mounted and survives a paint.
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    sceneReady = !!(layoutRoot && layoutRoot.parent && layoutRoot.children.length);
-    if (sceneReady) {
-      mobileDebugStage('scene-ready');
-      menuLoadingSpinner?.classList.add('isDone');
+  // One explicit warm-up frame uploads static geometry and triggers the mobile
+  // CPU-array release callbacks. The normal game loop remains asleep behind the menu.
+  requestAnimationFrame(() => {
+    try {
+      camera.layers.set(0);
+      if (TOUCH_DEVICE) renderer.render(scene, camera);
+      else { renderPass.camera = camera; composer?.render(0); }
+    } catch (error) {
+      recoverBrokenScene(`first render failed: ${error?.message || error}`);
+      return;
     }
-    if (sceneReady && startBtn) { startBtn.disabled = false; startBtn.removeAttribute('aria-disabled'); window.__BETON_DEBUG?.stage('S18','PLAY ENABLED · scene ready'); }
-    else window.__BETON_DEBUG?.fatal('E-SCENE-READY',`double RAF check failed layout=${!!layoutRoot} parent=${!!layoutRoot?.parent} children=${layoutRoot?.children?.length||0}`);
-  }));
+    requestAnimationFrame(() => {
+      sceneReady = !!(layoutRoot && layoutRoot.parent && layoutRoot.children.length);
+      if (sceneReady) {
+        mobileDebugStage('scene-ready');
+        menuLoadingSpinner?.classList.add('isDone');
+        if (loadState) { loadState.textContent = 'ГОТОВО'; loadState.style.color = ''; }
+      }
+      if (sceneReady && startBtn) { startBtn.disabled = false; startBtn.removeAttribute('aria-disabled'); }
+    });
+  });
 }, xhr => {
-  if (xhr) {
-    const now = performance.now();
+  armSceneLoadWatchdog();
+  if (TOUCH_DEVICE && xhr) {
     const pct = xhr.total ? Math.round(xhr.loaded / xhr.total * 100) : 0;
-    const pctBucket = pct ? Math.floor(pct / 5) * 5 : 0;
-    const bytesStep = Math.floor((xhr.loaded || 0) / (1024*1024));
-    if ((pctBucket && pctBucket !== __debugSceneLastPct) || (!pct && bytesStep !== __debugSceneLastBytes) || now - __debugSceneLastAt > 2500) {
-      __debugSceneLastPct = pctBucket; __debugSceneLastBytes = bytesStep; __debugSceneLastAt = now;
-      window.__BETON_DEBUG?.stage('S1',`scene network ${pct ? pct+'%' : ((xhr.loaded||0)/1048576).toFixed(1)+'MiB'} · total=${xhr.total||0}`);
-    }
-    if (TOUCH_DEVICE && pct && pct % 10 === 0) mobileDebugLog(`scene network ${pct}%`);
+    if (pct && pct % 10 === 0) mobileDebugLog(`scene network ${pct}%`);
   }
 }, err => {
-  window.__BETON_DEBUG?.fatal('E-GLTF',`${err?.message || err} · ${FINAL_SCENE_URL}`);
+  sceneLoadFinished = true;
+  clearTimeout(sceneLoadWatchdog);
   mobileDebugLog(`Final layout failed: ${err?.message || err}`);
   console.error('Final layout failed', err);
   assetsFailed++;
@@ -8698,6 +8763,20 @@ async function decodeGameAudio(url) {
   return await gameAudioCtx.decodeAudioData(data.slice(0));
 }
 
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function run() {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await worker(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
+  return results;
+}
+
 
 
 
@@ -8741,35 +8820,35 @@ async function initGameAudio() {
         wetFootstep,
         qteAppear, qteHit, hoseSlip,
         babaGreeting, babaFarewell, babaPurchase
-      ] = await Promise.all([
-        decodeGameAudio('./assets/audio/footsteps/concrete_001.ogg'),
-        decodeGameAudio('./assets/audio/footsteps/concrete_002.ogg'),
-        decodeGameAudio('./assets/audio/pour/concrete_pour_loop.wav'),
-        decodeGameAudio('./assets/audio/machines/pump_loop.wav'),
-        decodeGameAudio('./assets/audio/machines/mixer_loop.wav'),
-        decodeGameAudio('./assets/audio/rake/rake_drag_01.mp3'),
-        decodeGameAudio('./assets/audio/voices/seryoga/greeting_zdarova_truten.wav'),
-        decodeGameAudio('./assets/audio/voices/seryoga/farewell.mp3'),
-        decodeGameAudio('./assets/audio/voices/pavel/greeting.mp3'),
-        decodeGameAudio('./assets/audio/voices/pavel/farewell_non_success.mp3'),
-        decodeGameAudio('./assets/audio/voices/pavel/success_dance.mp3'),
-        decodeGameAudio('./assets/audio/music/pavel_success.mp3'),
-        decodeGameAudio('./assets/audio/voices/george/greeting.mp3'),
-        decodeGameAudio('./assets/audio/voices/george/upgrade_01.mp3'),
-        decodeGameAudio('./assets/audio/voices/george/upgrade_02.mp3'),
-        decodeGameAudio('./assets/audio/voices/george/upgrade_03.mp3'),
-        decodeGameAudio('./assets/audio/voices/george/no_money.mp3'),
-        decodeGameAudio('./assets/audio/smoking/cigarette_puff.mp3'),
-        decodeGameAudio('./assets/audio/drinks/can_open.mp3'),
-        decodeGameAudio('./assets/audio/drinks/drinking_gulps.mp3'),
-        decodeGameAudio('./assets/audio/footsteps/wet_concrete.mp3'),
-        decodeGameAudio('./assets/audio/qte/qte_appear.mp3'),
-        decodeGameAudio('./assets/audio/qte/qte_hit.mp3'),
-        decodeGameAudio('./assets/audio/hose/hose_slip.mp3'),
-        decodeGameAudio('./assets/audio/voices/baba/greeting.mp3'),
-        decodeGameAudio('./assets/audio/voices/baba/farewell.mp3'),
-        decodeGameAudio('./assets/audio/voices/baba/purchase.mp3')
-      ]);
+      ] = await mapWithConcurrency([
+        './assets/audio/footsteps/concrete_001.ogg',
+        './assets/audio/footsteps/concrete_002.ogg',
+        './assets/audio/pour/concrete_pour_loop.wav',
+        './assets/audio/machines/pump_loop.wav',
+        './assets/audio/machines/mixer_loop.wav',
+        './assets/audio/rake/rake_drag_01.mp3',
+        './assets/audio/voices/seryoga/greeting_zdarova_truten.wav',
+        './assets/audio/voices/seryoga/farewell.mp3',
+        './assets/audio/voices/pavel/greeting.mp3',
+        './assets/audio/voices/pavel/farewell_non_success.mp3',
+        './assets/audio/voices/pavel/success_dance.mp3',
+        './assets/audio/music/pavel_success.mp3',
+        './assets/audio/voices/george/greeting.mp3',
+        './assets/audio/voices/george/upgrade_01.mp3',
+        './assets/audio/voices/george/upgrade_02.mp3',
+        './assets/audio/voices/george/upgrade_03.mp3',
+        './assets/audio/voices/george/no_money.mp3',
+        './assets/audio/smoking/cigarette_puff.mp3',
+        './assets/audio/drinks/can_open.mp3',
+        './assets/audio/drinks/drinking_gulps.mp3',
+        './assets/audio/footsteps/wet_concrete.mp3',
+        './assets/audio/qte/qte_appear.mp3',
+        './assets/audio/qte/qte_hit.mp3',
+        './assets/audio/hose/hose_slip.mp3',
+        './assets/audio/voices/baba/greeting.mp3',
+        './assets/audio/voices/baba/farewell.mp3',
+        './assets/audio/voices/baba/purchase.mp3'
+      ], TOUCH_DEVICE ? 3 : 5, decodeGameAudio);;
 
 
 
@@ -12472,24 +12551,26 @@ function applyProceduralRakePose(dt) {
 
 const mainThemeAudio = new Audio('./assets/audio/music/main_theme_v528.wav');
 mainThemeAudio.loop = true;
-mainThemeAudio.preload = 'auto';
+mainThemeAudio.preload = 'none';
 mainThemeAudio.volume = 0.14;
-
-
-
-
+let mainThemeLoadArmed = false;
+function armMainThemeLoad() {
+  if (mainThemeLoadArmed) return;
+  mainThemeLoadArmed = true;
+  try { mainThemeAudio.load(); } catch (_) {}
+}
 function startMainTheme() {
+  // Do not make the 5.7 MiB WAV compete with the initial glTF/buffer download.
+  if (!sceneReady && !started) return;
+  armMainThemeLoad();
   if (!mainThemeAudio.paused) return;
   const p = mainThemeAudio.play();
   if (p && typeof p.catch === 'function') p.catch(err => {
     if (TOUCH_DEVICE) mobileDebugLog(`menu music autoplay blocked: ${err?.name || err}`);
   });
 }
-// Play in the menu as early as browser policy allows. If autoplay is blocked, the very first
-// tap/swipe/key on the menu unlocks the soundtrack — it no longer waits for PLAY.
-startMainTheme();
 const unlockMenuMusic = () => {
-  if (!started && start && !start.classList.contains('hidden')) startMainTheme();
+  if (sceneReady && !started && start && !start.classList.contains('hidden')) startMainTheme();
 };
 document.addEventListener('pointerdown', unlockMenuMusic, { passive:true });
 document.addEventListener('touchstart', unlockMenuMusic, { passive:true });
@@ -12519,14 +12600,12 @@ function requestMouseLock() {
   try { renderer.domElement.requestPointerLock(); } catch (_) {}
 }
 function enterSite() {
-  window.__BETON_DEBUG?.stage('G0',`PLAY tapped · sceneReady=${sceneReady} layout=${!!layoutRoot?.parent}`);
   if (!sceneReady || !layoutRoot || !layoutRoot.parent) { showToast('ДОЖДИСЬ ЗАГРУЗКИ СЦЕНЫ'); return; }
   if (!pumpAudioWorldValid || !mixerAudioWorldValid) resolveMachineAudioWorldPositions();
   if (loadState) loadState.style.opacity = '0';
   startMainTheme();
   initGameAudio();
   started = true;
-  window.__BETON_DEBUG?.stage('G1','game started · start overlay hiding');
   mobileDebugStage('running');
   start.classList.add('hidden');
   document.body.classList.add('gameStarted');
@@ -12932,9 +13011,6 @@ renderer.domElement.addEventListener('webglcontextlost',e=>{
   e.preventDefault();
   mobileDebugLog('WEBGL CONTEXT LOST');
   mobileDebugStage('context-lost');
-  if (TOUCH_DEVICE && !MOBILE_SAFE_MODE) {
-    try { localStorage.setItem(MOBILE_SAFE_KEY, '1'); } catch (_) {}
-  }
   showToast('ВОССТАНАВЛИВАЮ ГРАФИКУ…');
   setTimeout(() => recoverBrokenScene('WebGL context lost'), 250);
 });
@@ -12949,29 +13025,31 @@ window.addEventListener('orientationchange',()=>setTimeout(()=>{ try { window.sc
 
 
 function refreshMobileOrientationUI(){
-  window.__BETON_DEBUG?.log(`ORIENT main ${innerWidth}x${innerHeight} land=${MOBILE_LANDSCAPE()}`);
-  document.documentElement.classList.toggle('mobileLandscape', MOBILE_LANDSCAPE());
-  document.documentElement.classList.toggle('mobilePortrait', TOUCH_DEVICE && !MOBILE_LANDSCAPE());
+  if (window.__betonViewport?.sync) { window.__betonViewport.sync(); return; }
+  const landscape = MOBILE_LANDSCAPE();
+  document.documentElement.classList.toggle('mobileLandscape', landscape);
+  document.documentElement.classList.toggle('mobilePortrait', TOUCH_DEVICE && !landscape);
 }
 refreshMobileOrientationUI();
 let viewportResizeTimer = 0;
 function applyViewportResize() {
-  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
-  applyMainRendererSize(innerWidth, innerHeight);
+  const v = getViewportSize();
+  camera.aspect = v.width / v.height; camera.updateProjectionMatrix();
+  applyMainRendererSize(v.width, v.height);
   if (composer) {
     composer.setPixelRatio(Math.min(devicePixelRatio,1.15));
-    composer.setSize(innerWidth, innerHeight);
-    bloomPass?.setSize(innerWidth,innerHeight);
+    composer.setSize(v.width, v.height);
+    bloomPass?.setSize(v.width, v.height);
   }
   refreshMobileOrientationUI();
 }
-window.addEventListener('resize', () => {
-  // Safari emits a burst of resize events while browser chrome/fullscreen settles.
-  // Collapse that burst into one drawing-buffer allocation.
+function scheduleViewportResize() {
   if (!TOUCH_DEVICE) { applyViewportResize(); return; }
   clearTimeout(viewportResizeTimer);
-  viewportResizeTimer = setTimeout(applyViewportResize, 180);
-});
+  viewportResizeTimer = setTimeout(applyViewportResize, 120);
+}
+window.addEventListener('resize', scheduleViewportResize, { passive:true });
+window.visualViewport?.addEventListener('resize', scheduleViewportResize, { passive:true });
 
 
 
@@ -13012,19 +13090,30 @@ function blocked(x, z) {
 
 
 
-  for (const c of meshColliders) {
-    if (
-      c.obb.intersectsSphere(collisionSphereLow) ||
-      c.obb.intersectsSphere(collisionSphereMid) ||
-      c.obb.intersectsSphere(collisionSphereHigh)
-    ) {
-      const now = performance.now();
-      if (c.name !== lastBlockedBy || now - lastBlockedAt > 1200) {
-        lastBlockedBy = c.name;
-        lastBlockedAt = now;
-        console.debug('[COLLISION:OBB] blocked by:', c.name);
+  const queryId = ++meshColliderQueryId;
+  const minGX = Math.floor((x - PLAYER_R) / MESH_COLLIDER_CELL);
+  const maxGX = Math.floor((x + PLAYER_R) / MESH_COLLIDER_CELL);
+  const minGZ = Math.floor((z - PLAYER_R) / MESH_COLLIDER_CELL);
+  const maxGZ = Math.floor((z + PLAYER_R) / MESH_COLLIDER_CELL);
+  for (let gx=minGX; gx<=maxGX; gx++) for (let gz=minGZ; gz<=maxGZ; gz++) {
+    const bucket = meshColliderGrid.get(meshColliderCellKey(gx,gz));
+    if (!bucket) continue;
+    for (const c of bucket) {
+      if (c._queryId === queryId) continue;
+      c._queryId = queryId;
+      if (
+        c.obb.intersectsSphere(collisionSphereLow) ||
+        c.obb.intersectsSphere(collisionSphereMid) ||
+        c.obb.intersectsSphere(collisionSphereHigh)
+      ) {
+        const now = performance.now();
+        if (c.name !== lastBlockedBy || now - lastBlockedAt > 1200) {
+          lastBlockedBy = c.name;
+          lastBlockedAt = now;
+          console.debug('[COLLISION:OBB] blocked by:', c.name);
+        }
+        return true;
       }
-      return true;
     }
   }
   return false;
@@ -13470,8 +13559,8 @@ function applyDialogueSkin(npcKey) {
     dialoguePortraitEl.style.removeProperty('display');
     dialoguePortraitEl.style.removeProperty('opacity');
     dialoguePortraitEl.onerror = () => {
-      if (npcKey === 'pavel' && !dialoguePortraitEl.src.endsWith('/assets/dialogue_v5/pavel.webp')) {
-        dialoguePortraitEl.src = './assets/dialogue_v5/pavel.webp';
+      if (npcKey === 'pavel' && !dialoguePortraitEl.src.endsWith('/assets/dialogue_v7/pavel_card.webp')) {
+        dialoguePortraitEl.src = './assets/dialogue_v7/pavel_card.webp';
       }
     };
     dialoguePortraitEl.src = skin.portrait;
@@ -15322,6 +15411,12 @@ function updateMobileRenderBudget(dt){
 }
 function loop() {
   const dt = Math.min(clock.getDelta(), .05);
+  // The menu is a static image. Do not burn CPU/GPU or run gameplay systems while
+  // the scene is downloading or while the player is still on the PLAY screen.
+  if (!started) {
+    requestAnimationFrame(loop);
+    return;
+  }
   updateMobileRenderBudget(dt);
   updateCareerStatsPersistence(dt);
   updatePourProgressPersistence(dt);
@@ -15403,7 +15498,7 @@ function loop() {
 
 
     if (moving) {
-      const bobSpeed = (sprint ? 12.5 : 9.0) * Math.max(.55, concreteMovementFactor(playerPos.x, playerPos.z));
+      const bobSpeed = (sprint ? 12.5 : 9.0) * Math.max(.55, concreteSlow);
       walkBobPhase += dt * bobSpeed;
       const bobAmpY = sprint ? 0.042 : 0.028;
       const bobAmpX = sprint ? 0.018 : 0.012;
@@ -15512,10 +15607,9 @@ function loop() {
     if (toastTimer <= 0) toastEl.classList.remove('show'); if (mobileToastEl) mobileToastEl.classList.remove('show');
   }
   if (!TOUCH_DEVICE && minimap.style.display !== 'none') drawMap();
-  updateSunShadowFollow();
-  if (TOUCH_DEVICE) {
-    // Static scene: refresh the shadow atlas at ~20 Hz while moving and much less while idle.
-    // Direct lighting stays continuous; only the expensive depth atlas is throttled.
+  if (!TOUCH_DEVICE || renderer.shadowMap.enabled) updateSunShadowFollow();
+  if (TOUCH_DEVICE && renderer.shadowMap.enabled) {
+    // Only touch the shadow atlas when mobile shadows are actually enabled.
     mobileFrameCounter++;
     renderer.shadowMap.autoUpdate = false;
     const shadowStride = playerMovingNow ? 3 : 10;
@@ -15583,4 +15677,3 @@ function loop() {
   requestAnimationFrame(loop);
 }
 loop();
-window.__BETON_DEBUG?.stage('M9','main module evaluated to EOF');

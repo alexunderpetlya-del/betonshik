@@ -4,11 +4,17 @@
 /index.html
   Cache-Control: no-store, no-cache, must-revalidate
 
-/*.html
-  Cache-Control: no-store, no-cache, must-revalidate
-
 /main.js
   Cache-Control: no-store, no-cache, must-revalidate
 
 /style.css
   Cache-Control: no-store, no-cache, must-revalidate
+
+/assets/FINAL_MOBILE_LITE.gltf
+  Cache-Control: no-store, no-cache, must-revalidate
+
+/vendor/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/assets/FINAL_GEOM_*.bin
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
