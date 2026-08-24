@@ -1,4 +1,4 @@
-﻿:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#f3f1ea;background:#111}
+:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#f3f1ea;background:#111}
 *{box-sizing:border-box}html,body,#game{width:100%;height:100%;width:100vw;height:100dvh;margin:0;overflow:hidden}html,body{position:fixed;inset:0}body{background:#000}#game{position:fixed;inset:0}#game canvas{position:fixed!important;inset:0!important;width:100vw!important;height:100dvh!important;display:block;background:#000}canvas{display:block}.overlay{position:fixed;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 42%,rgba(66,73,70,.28),rgba(12,14,13,.84));backdrop-filter:blur(3px)}
 .overlay.hidden{display:none}.card{width:min(540px,calc(100vw - 36px));padding:34px 34px 30px;background:rgba(20,22,20,.9);border:1px solid rgba(255,255,255,.12);box-shadow:0 24px 80px rgba(0,0,0,.5)}
 .eyebrow{font-size:11px;letter-spacing:.24em;opacity:.55}.card h1{font-size:58px;line-height:.9;margin:12px 0 16px;letter-spacing:-.05em}.card p{font-size:16px;line-height:1.45;color:#c9cbc5;max-width:420px}.card button{margin-top:14px;border:0;background:#d7d069;color:#181914;font-weight:900;letter-spacing:.08em;padding:15px 19px;cursor:pointer}.help{font-size:11px;line-height:1.6;margin-top:20px;color:#8f938d}
@@ -11,6 +11,8 @@
 @media(max-width:700px){#minimap,#legend{display:none}.card h1{font-size:46px}#meters{width:240px}.meterRow{grid-template-columns:88px 1fr 28px}}
 
 
+
+
 #quickActions{position:absolute;right:22px;bottom:68px;display:flex;gap:8px}
 .quickAction{min-width:118px;height:44px;display:grid;grid-template-columns:30px 1fr 24px;align-items:center;gap:7px;padding:6px 8px;background:rgba(16,17,15,.72);border:1px solid rgba(255,255,255,.11);font-size:9px;font-weight:850;letter-spacing:.06em;color:#d7d8d2}
 .quickAction kbd{display:grid;place-items:center;width:28px;height:28px;background:#d7d069;color:#181914;text-shadow:none;border:0;border-radius:2px;font:900 13px/1 system-ui}
@@ -20,10 +22,16 @@
 
 
 
+
+
+
+
 /* v0.19 POUR JOB / ECONOMY */
 #economy{margin-top:10px;display:flex;align-items:baseline;gap:9px;width:max-content;padding:6px 9px;background:rgba(15,16,14,.62);border-left:2px solid #d7d069}
 #economy span{font-size:8px;letter-spacing:.14em;color:#aeb1aa}
 #economy b{font-size:15px;color:#eee790}
+
+
 
 
 #pourHud{position:absolute;right:22px;top:214px;width:270px;padding:11px 12px;background:rgba(13,15,14,.78);border:1px solid rgba(255,255,255,.11);border-top:2px solid #d7d069;opacity:0;transform:translateY(-5px);transition:.15s;pointer-events:none}
@@ -37,6 +45,8 @@
 .pourGrid span{font-size:8px;letter-spacing:.08em;color:#aeb2ac}
 .pourGrid b{font-size:10px;text-align:right;color:#e9e9e2}
 .pourHint{font-size:8px;color:#8e938d;margin-top:8px;border-top:1px solid rgba(255,255,255,.07);padding-top:7px}
+
+
 
 
 /* QTE stays inside pointer-lock: software cursor + osu-style approach ring */
@@ -61,6 +71,8 @@
 #qteLabel small{display:block;margin-top:6px;font-size:10px;letter-spacing:.15em;color:#e7e7d9}
 
 
+
+
 /* Shop + job result */
 .gameModal{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:rgba(7,8,7,.74);backdrop-filter:blur(4px);pointer-events:auto}
 .gameModal.hidden{display:none}
@@ -79,12 +91,22 @@
 .resultCard p{font-size:13px;line-height:1.55;color:#bfc2bb}
 
 
+
+
 @media(max-width:700px){#pourHud{right:10px;top:80px;width:240px}}
 
 
 
 
+
+
+
+
 /* v0.20 manual calibration */
+
+
+
+
 
 
 
@@ -102,6 +124,10 @@
 .dialogueOption:hover{border-color:#d7d069;background:#2d3027}
 .dialogueClose{margin-top:8px;color:#9da199;background:transparent;font-size:10px;letter-spacing:.08em}
 .dialogueClose:hover{color:#e4e6df;border-color:rgba(255,255,255,.25)}
+
+
+
+
 
 
 
@@ -139,6 +165,8 @@
 }
 
 
+
+
 /* v0.45 — restrained indie grade + mobile landscape controls */
 #cinematicGrade{position:fixed;inset:0;z-index:18;pointer-events:none;background:radial-gradient(ellipse at 50% 46%,transparent 58%,rgba(8,12,12,.055) 100%),linear-gradient(to bottom,rgba(255,224,180,.018),transparent 24%,rgba(30,45,55,.012));}
 #mobileControls,#rotateNotice{display:none}
@@ -159,13 +187,19 @@
 @media(pointer:coarse) and (orientation:landscape) and (max-height:520px){.mobileStick{width:132px;height:132px}.mobileButtons{right:168px;grid-template-columns:repeat(3,74px)}.mobileButtons button{min-height:39px;padding:5px}.mobileButtons .mobileMain{min-height:48px}}
 
 
+
+
 /* v0.46 calmer color grade: lower saturation without lowering exposure. */
 #game>canvas{filter:saturate(.84) contrast(1.015);}
+
+
 
 
 /* ===== v0.50.1 SAFE UI: legacy DOM untouched ===== */
 :root{--clean-accent:#ded56a}
 #legend{display:none!important}
+
+
 
 
 /* Start screen */
@@ -177,6 +211,8 @@
 #start .help{font-size:9px;line-height:1.6;color:#858a81}
 
 
+
+
 /* Objective left */
 #topLeft{left:20px!important;top:18px!important;width:auto!important;padding:0!important;background:none!important;border:0!important;box-shadow:none!important;backdrop-filter:none!important}
 #topLeft .tag{display:inline-block!important;padding:4px 7px!important;margin-bottom:5px!important;background:var(--clean-accent)!important;color:#202218!important;border:0!important;font-size:8px!important;font-weight:950!important;letter-spacing:.14em!important;text-shadow:none!important}
@@ -184,10 +220,14 @@
 #topLeft .sub{font-size:9px!important;color:rgba(238,240,234,.65)!important}
 
 
+
+
 /* Money top-right */
 #economy{position:fixed!important;right:20px!important;top:18px!important;left:auto!important;margin:0!important;padding:7px 10px!important;background:rgba(13,15,13,.64)!important;border:1px solid rgba(255,255,255,.08)!important}
 #economy span{display:none!important}
 #economy b{font-size:13px!important;color:#f0edcf!important}
+
+
 
 
 /* Stamina/boost are contextual */
@@ -199,6 +239,8 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
 #meters .bar i{background:var(--clean-accent)!important}
 #meters .meterRow:nth-child(2) .bar i{background:#bcd5e9!important}
 #meters .meterRow>b{font-size:8px!important}
+
+
 
 
 /* Hotbar */
@@ -218,9 +260,13 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
 #quickActions .quickAction.locked{opacity:.34!important}
 
 
+
+
 /* Prompt */
 #prompt{left:50%!important;right:auto!important;top:auto!important;bottom:119px!important;transform:translateX(-50%)!important;font-size:10px!important}
 #toast{top:15%!important;bottom:auto!important;font-size:10px!important}
+
+
 
 
 /* Pour panel: keep old DOM/data, show only useful rows */
@@ -230,14 +276,22 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
 #pourHud .pourHint{display:none!important}
 
 
+
+
 /* Map only by M */
 #minimap{display:none}
+
+
 
 
 @media(max-width:700px){
   #quickActions{bottom:11px!important;gap:4px!important}
   #quickActions .quickAction{width:63px!important;height:61px!important}
 }
+
+
+
+
 
 
 
@@ -256,6 +310,8 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
   font-size:11px!important;
   font-weight:950!important;
 }
+
+
 
 
 /* v0.51.2 — real 3D hotbar */
@@ -278,9 +334,15 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
 
 
 
+
+
+
+
 /* ============================================================
    v0.51.18 — RESPONSIVE 4:3 MAIN MENU
    ============================================================ */
+
+
 
 
 #start.menuSplash{
@@ -298,9 +360,13 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
 }
 
 
+
+
 #start.menuSplash.hidden{
   display:none!important;
 }
+
+
 
 
 /* Background always fills the monitor, but is intentionally blurred/dark.
@@ -318,6 +384,8 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
 }
 
 
+
+
 /* The generated artwork is exactly 4:3.
    This frame is the largest possible 4:3 rectangle that fits the viewport. */
 #start .menuFrame{
@@ -325,8 +393,12 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
   z-index:1;
 
 
+
+
   width:100vw;
   height:100vh;
+
+
 
 
   flex:0 0 auto;
@@ -334,6 +406,8 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
   box-shadow:none;
   background:#0a0c0d;
 }
+
+
 
 
 #start .menuSplashImage{
@@ -349,8 +423,12 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
 }
 
 
+
+
 /* Hitbox is relative to the ARTWORK itself, not the browser viewport.
    Therefore it stays aligned at any resolution/aspect ratio. */
+
+
 
 
 #start .menuPlayButton{
@@ -360,9 +438,13 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
   transform:translateX(-50%)!important;
 
 
+
+
   width:min(48vw, 720px)!important;
   aspect-ratio:1214 / 328;
   height:auto!important;
+
+
 
 
   margin:0!important;
@@ -373,11 +455,15 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
   box-shadow:none!important;
 
 
+
+
   cursor:pointer!important;
   pointer-events:auto!important;
   -webkit-tap-highlight-color:transparent;
   transition:transform .12s ease, filter .12s ease;
 }
+
+
 
 
 #start .menuPlayButtonImage{
@@ -397,15 +483,21 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
 }
 
 
+
+
 #start .menuPlayButton::after{
   content:"";
   display:none!important;
 }
 
 
+
+
 #start .menuPlayButton:hover{
   transform:translateX(-50%) translateY(-1px);
 }
+
+
 
 
 #start .menuPlayButton:hover .menuPlayButtonImage{
@@ -417,14 +509,20 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
 }
 
 
+
+
 #start .menuPlayButton:hover::after{
   display:none!important;
 }
 
 
+
+
 #start .menuPlayButton:active{
   transform:translateX(-50%) translateY(1px) scale(.988);
 }
+
+
 
 
 #start .menuPlayButton:active .menuPlayButtonImage{
@@ -436,6 +534,8 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
 #start .menuPlayButton:disabled .menuPlayButtonImage{filter:grayscale(.12) brightness(.88)!important}
 
 
+
+
 #start .menuLoadState{
   position:absolute;
   left:50%;
@@ -443,6 +543,8 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
   transform:translateX(-50%);
   margin:0!important;
   padding:4px 8px;
+
+
 
 
   border:0;
@@ -456,11 +558,15 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
 }
 
 
+
+
 @media (max-width:700px){
   #start .menuPlayButton{
     width:72%!important;
     bottom:4.8%!important;
   }
+
+
 
 
   #start .menuPlayButton::after{
@@ -469,10 +575,14 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
 }
 
 
+
+
   #start .menuLoadState{
     bottom:0.85%;
   }
 }
+
+
 
 
 /* Old card-based menu remains permanently suppressed. */
@@ -485,6 +595,8 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
 }
 
 
+
+
 /* On extremely narrow mobile screens keep the complete artwork visible.
    The surrounding blurred backdrop fills the rest of the device. */
 @media (max-width:700px){
@@ -493,9 +605,13 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
   }
 
 
+
+
   #start .menuBackdrop{
     filter:blur(12px) saturate(.68);
   }
+
+
 
 
   #start .menuPlayHitbox::after{
@@ -506,10 +622,16 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
 
 
 
+
+
+
+
 /* ============================================================
    v51.21 — FINAL HOTBAR ICONS
    ============================================================ */
 .hotbar3d{display:none!important}
+
+
 
 
 .hotbarIcon{
@@ -523,6 +645,8 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
   opacity:.95;
   filter:brightness(0) invert(1) drop-shadow(0 2px 2px rgba(0,0,0,.40));
 }
+
+
 
 
 /* Independently tuned so every item has similar visual weight. */
@@ -550,6 +674,10 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
 
 
 
+
+
+
+
 /* ============================================================
    v51.21 — WALLET NEXT TO CURRENT BALANCE
    ============================================================ */
@@ -573,12 +701,18 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
 
 
 
+
+
+
+
 /* ============================================================
    v51.21 — ДЫХАЛКА / THICKER STAMINA
    ============================================================ */
 .staminaRow .bar{
   position:relative!important;
 }
+
+
 
 
 /* Centered over the BAR itself, not over the whole meter row/number. */
@@ -598,6 +732,8 @@ body.showStamina #meters .meterRow:first-child,body.showBoost #meters .meterRow:
 }
 
 
+
+
 /* Current position and width stay unchanged; only thickness increases. */
 body.showStamina #meters .staminaRow .bar,
 #meters .staminaRow .bar{
@@ -613,10 +749,16 @@ body.showStamina #meters .staminaRow .bar,
 }
 
 
+
+
 /* The value stays the only text associated with the bar itself. */
 #staminaText{
   font-variant-numeric:tabular-nums;
 }
+
+
+
+
 
 
 
@@ -626,10 +768,14 @@ body.showStamina #meters .staminaRow .bar,
    ============================================================ */
 
 
+
+
 /* Reduce the aggressive saturation of the GLB textures without touching HUD. */
 #game canvas{
   filter:saturate(.68) contrast(.959) brightness(.97);
 }
+
+
 
 
 /* Stronger but still restrained edge depth. */
@@ -654,11 +800,21 @@ body.showStamina #meters .staminaRow .bar,
 
 
 
+
+
+
+
+
+
 #start .menuPlayButton:focus,
 #start .menuPlayButton:focus-visible{
   outline:none!important;
   box-shadow:none!important;
 }
+
+
+
+
 
 
 
@@ -699,10 +855,16 @@ body.showStamina #meters .staminaRow .bar,
 }
 
 
+
+
 .touchDevice.mobileLandscape #economy{position:fixed!important;right:max(10px,env(safe-area-inset-right))!important;left:auto!important;top:max(10px,env(safe-area-inset-top))!important;z-index:46!important}
 .touchDevice.mobileLandscape #topLeft{max-width:46vw!important}
 .touchDevice.mobileLandscape #topLeft #economy{transform:none!important}
 .touchDevice.mobileLandscape #mobileControls{padding:0!important}
+
+
+
+
 
 
 
@@ -753,6 +915,10 @@ body.showStamina #meters .staminaRow .bar,
   .mobileWorldButton{min-width:104px;min-height:43px;padding:7px 10px;font-size:12px}
   .mobileWorldButton span{font-size:7px}
 }
+
+
+
+
 
 
 
@@ -850,6 +1016,8 @@ body.dialogueActive #hud{filter:brightness(.55);transition:filter .16s ease}
 .dialogueLayer[data-npc="baba"] .dialoguePortrait{object-position:center 40%}
 
 
+
+
 @media (pointer:coarse) and (orientation:landscape){
   .dialogueLayer{padding:max(7px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) max(8px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left))!important;background:rgba(4,5,4,.62)!important}
   body.dialogueActive #hud{filter:brightness(.42)}
@@ -872,6 +1040,8 @@ body.dialogueActive #hud{filter:brightness(.55);transition:filter .16s ease}
 }
 
 
+
+
 @media (pointer:coarse) and (orientation:landscape) and (max-height:430px){
   .dialogueCard{height:94dvh!important;grid-template-columns:minmax(150px,28%) minmax(0,72%)!important}
   .dialogueHeader{height:46px!important}
@@ -881,6 +1051,10 @@ body.dialogueActive #hud{filter:brightness(.55);transition:filter .16s ease}
   .dialogueOptionKey{font-size:15px!important}
   .dialogueClose{margin-top:4px!important}
 }
+
+
+
+
 
 
 
@@ -969,6 +1143,8 @@ body.dialogueActive #hud{filter:brightness(.48) saturate(.76)!important;transiti
 .dialogueLayer[data-npc="george"] .dialoguePanel::before{background:linear-gradient(90deg,#234f7c,var(--dialog-accent),#252b2f 72%)}
 
 
+
+
 /* Mobile landscape: same HUD language, compact enough for touch. */
 @media(pointer:coarse) and (orientation:landscape){
   .dialogueLayer{padding:max(6px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left))!important;align-items:center!important;background:rgba(4,5,4,.66)!important}
@@ -1003,6 +1179,8 @@ body.dialogueActive #hud{filter:brightness(.48) saturate(.76)!important;transiti
   .dialogueOptionKey{font-size:14px!important}
   .dialogueClose{margin-top:3px!important}
 }
+
+
 
 
 /* ================================================================
@@ -1112,6 +1290,8 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.84)!important;transiti
 .dialogueClose:hover{color:#f0efe8!important}
 
 
+
+
 @media(pointer:coarse) and (orientation:landscape){
   .dialogueLayer{padding:max(5px,env(safe-area-inset-top)) max(9px,env(safe-area-inset-right)) max(8px,env(safe-area-inset-bottom)) max(9px,env(safe-area-inset-left))!important;align-items:flex-end!important;background:linear-gradient(to top,rgba(4,5,4,.58),rgba(4,5,4,.17) 58%,transparent)!important}
   body.dialogueActive #hud{filter:brightness(.53) saturate(.78)!important}
@@ -1147,6 +1327,8 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.84)!important;transiti
 }
 
 
+
+
 /* ============================================================
    v51.81 — exact authored dialogue backdrops + compact phone card
    ============================================================ */
@@ -1163,6 +1345,8 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.84)!important;transiti
   filter:drop-shadow(0 12px 21px rgba(0,0,0,.28))!important;
 }
 .dialogueLayer[data-npc="pavel"] .dialoguePaint{display:none!important}
+
+
 
 
 @media (pointer:coarse) and (orientation:landscape){
@@ -1236,6 +1420,8 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.84)!important;transiti
 }
 
 
+
+
 /* ============================================================
    v51.81 — PUBG-style over-pull sprint boundary
    ============================================================ */
@@ -1281,6 +1467,10 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.84)!important;transiti
   color:#e7cd99!important;
   text-shadow:0 0 9px rgba(var(--mobile-ui-gold-rgb),.46);
 }
+
+
+
+
 
 
 
@@ -1569,9 +1759,15 @@ body.dialogueActive #hud{
 
 
 
+
+
+
+
 /* v51.51 — approved Pavel portrait already contains its own blue construction paint backdrop. */
 .dialogueLayer[data-npc="pavel"] .dialoguePaint{display:none!important}
 .dialogueLayer[data-npc="pavel"] .dialoguePortrait{height:100%!important;max-width:100%!important;transform:scale(1.04) translateY(1%)!important;object-fit:contain!important}
+
+
 
 
 /* v51.54 — dialogue UI retune: per-character color accents, more transparent / airy frame */
@@ -1649,6 +1845,8 @@ body.dialogueActive #hud{
 .dialogueClose:hover{background:rgba(255,255,255,.08)!important}
 
 
+
+
 @media (pointer:coarse), (max-width: 820px){
   .dialogueLayer{
     background:linear-gradient(to top,rgba(4,5,7,.50),rgba(4,5,7,.22) 54%,transparent)!important;
@@ -1668,6 +1866,8 @@ body.dialogueActive #hud{
     min-height:40px!important;
   }
 }
+
+
 
 
 /* ============================================================
@@ -1723,6 +1923,8 @@ body.dialogueActive #hud{
 @keyframes mobileLookHintFade{0%,60%{opacity:.92}100%{opacity:0;visibility:hidden}}
 
 
+
+
 .touchDevice.mobileLandscape #quickActions{
   bottom:max(14px,calc(env(safe-area-inset-bottom) + 6px))!important;
   gap:7px!important;
@@ -1756,6 +1958,8 @@ body.dialogueActive #hud{
 .touchDevice.mobileLandscape #game>canvas{touch-action:none!important}
 
 
+
+
 @media(pointer:coarse) and (orientation:landscape) and (max-height:520px){
   .touchDevice.mobileLandscape #moveStick{width:136px!important;height:136px!important;right:max(12px,calc(env(safe-area-inset-right) + 6px))!important;bottom:max(15px,calc(env(safe-area-inset-bottom) + 5px))!important}
   .touchDevice.mobileLandscape #moveStick .stickRing{inset:22px!important}
@@ -1765,10 +1969,14 @@ body.dialogueActive #hud{
 }
 
 
+
+
 /* v51.57 — fully separated mobile HUD + fixed context action dock */
 #mobileHud{display:none}
 html:not(.touchDevice) #mobileHud,
 html:not(.touchDevice) #mobileControls{display:none!important}
+
+
 
 
 .touchDevice.mobileLandscape body.gameStarted #mobileHud{
@@ -1782,6 +1990,8 @@ html:not(.touchDevice) #mobileControls{display:none!important}
 }
 /* Desktop HUD is completely absent on touch landscape. Mobile gets its own elements below. */
 .touchDevice.mobileLandscape body.gameStarted #hud{display:none!important}
+
+
 
 
 /* Right-side movement joystick only. */
@@ -1812,6 +2022,8 @@ html:not(.touchDevice) #mobileControls{display:none!important}
   bottom:-14px!important;
   color:rgba(245,241,192,.76)!important;
 }
+
+
 
 
 /* Context buttons no longer float over world objects. They live in a stable left-thumb dock. */
@@ -1861,6 +2073,8 @@ html:not(.touchDevice) #mobileControls{display:none!important}
 .touchDevice.mobileLandscape .mobileWorldButton.isHidden{display:none!important}
 
 
+
+
 /* Dedicated mobile gameplay HUD. */
 #mobileJobMini{
   position:absolute;
@@ -1878,6 +2092,8 @@ html:not(.touchDevice) #mobileControls{display:none!important}
 #mobileJobMini>b{display:block;margin-top:2px;font-size:22px;line-height:1;color:#f5f2e7}
 #mobileJobMini>small{display:block;margin-top:6px;font-size:8px;letter-spacing:.08em;color:#b9bab1}
 #mobileJobMini strong{color:#e3dd79}
+
+
 
 
 #mobileStamina{
@@ -1902,6 +2118,8 @@ html:not(.touchDevice) #mobileControls{display:none!important}
 #mobileStamina>b{min-width:25px;text-align:right;font-size:10px;color:#eceadf}
 
 
+
+
 #mobileMoney{
   position:absolute;
   right:max(14px,env(safe-area-inset-right));
@@ -1917,6 +2135,8 @@ html:not(.touchDevice) #mobileControls{display:none!important}
 }
 #mobileMoney img{width:28px;height:28px;object-fit:contain}
 #mobileMoney b{font-size:13px;white-space:nowrap}
+
+
 
 
 #mobileHotbar{
@@ -1961,6 +2181,8 @@ html:not(.touchDevice) #mobileControls{display:none!important}
 .mobileHotbarSlot:active{transform:scale(.94)}
 
 
+
+
 #mobileToast{
   position:absolute;
   left:50%;
@@ -1981,9 +2203,13 @@ html:not(.touchDevice) #mobileControls{display:none!important}
 #mobileToast.show{opacity:1;transform:translate(-50%,0)}
 
 
+
+
 /* Mobile crosshair is a mobile-specific minimal aim marker, not the desktop HUD crosshair. */
 .touchDevice.mobileLandscape #crosshair{display:none!important}
 .touchDevice.mobileLandscape #prompt{display:none!important}
+
+
 
 
 @media(pointer:coarse) and (orientation:landscape) and (max-height:480px){
@@ -2010,6 +2236,8 @@ html:not(.touchDevice) #mobileControls{display:none!important}
   background:rgba(245,242,214,.82);
   box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 9px rgba(240,226,98,.24);
 }
+
+
 
 
 /* v51.59 — adaptive loading spinner in the lower-right corner of the main menu */
@@ -2051,6 +2279,8 @@ html:not(.touchDevice) #mobileControls{display:none!important}
 @keyframes menuLoadingSpin{to{transform:rotate(360deg)}}
 
 
+
+
 /* Keep it comfortably inside phone safe areas and proportional on short landscape screens. */
 @media (pointer:coarse){
   #start .menuLoadingSpinner{
@@ -2069,6 +2299,8 @@ html:not(.touchDevice) #mobileControls{display:none!important}
 @media (min-width:1800px) and (min-height:900px){
   #start .menuLoadingSpinner{width:50px;right:38px;bottom:32px}
 }
+
+
 
 
 /* ============================================================
@@ -2223,6 +2455,8 @@ html:not(.touchDevice) #mobileControls{display:none!important}
 }
 
 
+
+
 @media (pointer:coarse), (max-width:820px){
   .dialogueLayer{
     padding:max(8px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left))!important;
@@ -2258,6 +2492,8 @@ html:not(.touchDevice) #mobileControls{display:none!important}
 }
 
 
+
+
 /* v51.61 mobile diagnostics — hidden on PC, tiny opt-in control on touch devices. */
 #mobileDebugToggle,#mobileDebugPanel{display:none}
 .touchDevice #mobileDebugToggle{
@@ -2279,6 +2515,8 @@ html:not(.touchDevice) #mobileControls{display:none!important}
   .touchDevice #mobileDebugToggle{top:max(5px,env(safe-area-inset-top));left:max(5px,env(safe-area-inset-left));height:26px;min-width:38px;font-size:8px}
   .touchDevice #mobileDebugPanel{top:max(35px,calc(env(safe-area-inset-top) + 34px));max-height:48dvh;font-size:8px}
 }
+
+
 
 
 /* ============================================================
@@ -2310,6 +2548,8 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.86)!important}
   pointer-events:auto!important;
 }
 .dialogueCard::before,.dialogueCard::after{display:none!important}
+
+
 
 
 /* Portrait is deliberately outside of any card frame, like the reference. */
@@ -2354,6 +2594,8 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.86)!important}
   object-fit:contain!important;
   object-position:left bottom!important;
 }
+
+
 
 
 /* Wide low textbox. The portrait overlaps its left edge. */
@@ -2410,6 +2652,8 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.86)!important}
 .dialoguePanelNoise,.dialogueHazardTop,.dialogueHazardCorner{display:none!important}
 
 
+
+
 /* Compact name tab sits on the top edge of the textbox. */
 .dialogueNameplate{
   position:absolute!important;
@@ -2455,6 +2699,8 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.86)!important}
   text-wrap:pretty!important;
   text-shadow:0 2px 3px rgba(0,0,0,.38)!important;
 }
+
+
 
 
 /* Dialogue choices stay inside the same bottom box instead of becoming a second panel. */
@@ -2535,6 +2781,8 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.86)!important}
 .dialogueClose:hover{color:#fff!important;background:transparent!important}
 
 
+
+
 /* Touch / phone landscape: preserve the same composition, just tighter. */
 @media (pointer:coarse), (max-width:820px){
   .dialogueLayer{
@@ -2583,6 +2831,8 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.86)!important}
 }
 
 
+
+
 @media (pointer:coarse) and (orientation:landscape) and (max-height:430px){
   .dialogueCard{height:66dvh!important;min-height:210px!important}
   .dialoguePortraitStage{width:31%!important;height:112%!important}
@@ -2603,12 +2853,16 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.86)!important}
 }
 
 
+
+
 /* Very wide displays: keep the dialogue visually anchored near the lower third. */
 @media (min-width:1700px){
   .dialogueCard{width:min(1360px,84vw)!important;height:460px!important}
   .dialoguePortraitStage{width:33%!important}
   .dialoguePanel{left:22%!important;padding-left:170px!important}
 }
+
+
 
 
 /* ============================================================
@@ -2644,6 +2898,8 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.86)!important}
 .dialogueLayer[data-npc="pavel"] .dialoguePaint{display:none!important}
 
 
+
+
 @media (pointer:coarse), (max-width:820px){
   .dialogueLayer[data-npc="mandarin"] .dialoguePaint,
   .dialogueLayer[data-npc="george"] .dialoguePaint,
@@ -2655,6 +2911,8 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.86)!important}
     opacity:.94!important;
   }
 }
+
+
 
 
 /* ============================================================
@@ -2675,6 +2933,10 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.86)!important}
   object-position:left bottom!important;
   transform:none!important;
 }
+
+
+
+
 
 
 
@@ -2759,6 +3021,8 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.86)!important}
 }
 
 
+
+
 /* ============================================================
    v51.72 — MOBILE UI / MENU POLISH
    Accent sampled from the authored lung + wallet icons.
@@ -2770,11 +3034,15 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.86)!important}
 }
 
 
+
+
 /* Main-menu PLAY artwork was oversized on phone landscape. */
 .touchDevice.mobileLandscape #start .menuPlayButton{
   width:min(34vw,520px)!important;
   bottom:5.0%!important;
 }
+
+
 
 
 /* Final control placement: movement LEFT, contextual actions RIGHT. */
@@ -2786,6 +3054,8 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.86)!important}
   left:auto!important;
   right:max(18px,calc(env(safe-area-inset-right) + 10px))!important;
 }
+
+
 
 
 /* Beige-gold accent matched to the lung / wallet artwork instead of lemon yellow. */
@@ -2838,6 +3108,8 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.86)!important}
 }
 
 
+
+
 @media(pointer:coarse) and (orientation:landscape) and (max-height:520px){
   .touchDevice.mobileLandscape #moveStick{
     left:max(12px,calc(env(safe-area-inset-left) + 6px))!important;
@@ -2851,6 +3123,8 @@ body.dialogueActive #hud{filter:brightness(.60) saturate(.86)!important}
     width:min(35vw,470px)!important;
   }
 }
+
+
 
 
 /* ============================================================
@@ -3093,6 +3367,8 @@ body.dialogueActive #hud{filter:brightness(.52) saturate(.82)!important}
 .dialogueClose kbd{height:20px!important;min-width:28px!important;border-radius:7px!important}
 
 
+
+
 @media (pointer:coarse), (max-width:820px){
   .dialogueLayer{
     padding:0 max(7px,env(safe-area-inset-right)) max(7px,env(safe-area-inset-bottom)) max(7px,env(safe-area-inset-left))!important;
@@ -3130,6 +3406,8 @@ body.dialogueActive #hud{filter:brightness(.52) saturate(.82)!important}
 }
 
 
+
+
 @media (pointer:coarse) and (orientation:landscape) and (max-height:430px){
   .dialogueCard{height:72dvh!important;min-height:238px!important}
   .dialoguePortraitStage{width:32%!important;height:106%!important}
@@ -3144,6 +3422,8 @@ body.dialogueActive #hud{filter:brightness(.52) saturate(.82)!important}
 }
 
 
+
+
 /* v51.81 FINAL CASCADE — keep these after every historical dialogue rule. */
 .dialoguePaint{
   display:block!important;
@@ -3154,6 +3434,8 @@ body.dialogueActive #hud{filter:brightness(.52) saturate(.82)!important}
   filter:drop-shadow(0 12px 21px rgba(0,0,0,.28))!important;
 }
 .dialogueLayer[data-npc="pavel"] .dialoguePaint{display:none!important}
+
+
 
 
 @media (pointer:coarse) and (orientation:landscape){
@@ -3184,9 +3466,13 @@ body.dialogueActive #hud{filter:brightness(.52) saturate(.82)!important}
 }
 
 
+
+
 /* ============================================================
    v51.83 — final phone dialogue / shop / stick pass
    ============================================================ */
+
+
 
 
 /* Every character uses the same portrait stage and its authored underlay. */
@@ -3205,6 +3491,8 @@ body.dialogueActive #hud{filter:brightness(.52) saturate(.82)!important}
   transform-origin:center bottom!important;
   object-position:center bottom!important;
 }
+
+
 
 
 /* Shop exits immediately from a stable top-right close button. */
@@ -3239,8 +3527,12 @@ body.dialogueActive #hud{filter:brightness(.52) saturate(.82)!important}
 .shopHeader{padding-right:44px!important}
 
 
+
+
 /* The QTE keeps the target/ring only; no blocking instruction card. */
 #qteLabel{display:none!important}
+
+
 
 
 /* Dot trail grows and rotates from the stick centre toward the moving knob. */
@@ -3263,6 +3555,8 @@ body.dialogueActive #hud{filter:brightness(.52) saturate(.82)!important}
 }
 .touchDevice.mobileLandscape #moveStick::before{inset:-27px!important}
 .touchDevice.mobileLandscape #moveStick>span{display:none!important}
+
+
 
 
 @media (pointer:coarse) and (orientation:landscape){
@@ -3371,6 +3665,8 @@ body.dialogueActive #hud{filter:brightness(.52) saturate(.82)!important}
 }
 
 
+
+
 @media (pointer:coarse) and (orientation:landscape) and (max-height:330px){
   .dialogueCard{height:clamp(124px,44vh,148px)!important}
   .dialogueCard{height:clamp(124px,44dvh,148px)!important}
@@ -3382,6 +3678,8 @@ body.dialogueActive #hud{filter:brightness(.52) saturate(.82)!important}
   .dialogueOption{min-height:22px!important;grid-template-columns:24px 1fr!important}
   .dialogueOptionLabel{font-size:8.4px!important}
 }
+
+
 
 
 /* ============================================================
@@ -3411,6 +3709,8 @@ body.dialogueActive #hud{filter:brightness(.52) saturate(.82)!important}
 .characterStatsButton:active{transform:scale(.95)}
 
 
+
+
 .mobileCharacterStatsButton{display:none}
 .touchDevice.mobileLandscape .mobileCharacterStatsButton{
   display:grid;
@@ -3426,6 +3726,8 @@ body.dialogueActive #hud{filter:brightness(.52) saturate(.82)!important}
   touch-action:none;
 }
 .touchDevice.mobileLandscape .mobileCharacterStatsButton img{width:32px;height:32px}
+
+
 
 
 #qtePerfectFeedback{
@@ -3454,6 +3756,8 @@ body.dialogueActive #hud{filter:brightness(.52) saturate(.82)!important}
   12%,72%{opacity:1;transform:translate(-50%,0) scale(1)}
   100%{opacity:0;transform:translate(-50%,-6px) scale(.98)}
 }
+
+
 
 
 #eventAlarm{
@@ -3506,6 +3810,8 @@ body.dialogueActive #hud{filter:brightness(.52) saturate(.82)!important}
 }
 
 
+
+
 #blindnessOverlay{
   position:fixed;
   inset:0;
@@ -3529,6 +3835,8 @@ body.dialogueActive #hud{filter:brightness(.52) saturate(.82)!important}
   8%,72%{opacity:1}
   100%{opacity:0}
 }
+
+
 
 
 #characterStats{z-index:72;overflow:hidden;padding:12px;box-sizing:border-box}
@@ -3593,6 +3901,8 @@ body.dialogueActive #hud{filter:brightness(.52) saturate(.82)!important}
 body.statsActive #hud,body.statsActive #mobileHud{filter:brightness(.46) saturate(.75)}
 
 
+
+
 @media (pointer:coarse),(max-width:820px){
   #qtePerfectFeedback{top:15%;min-width:0;width:68vw;padding:9px 12px;border-radius:10px;font-size:12px}
   #eventAlarm{top:10%;width:68vw;padding:8px 11px;gap:9px;border-radius:10px}
@@ -3610,6 +3920,8 @@ body.statsActive #hud,body.statsActive #mobileHud{filter:brightness(.46) saturat
 }
 
 
+
+
 @media (pointer:coarse) and (orientation:landscape) and (max-height:330px){
   .characterStatsCard{padding:8px 10px}
   .characterStatsHeader{margin-bottom:5px}.characterStatsPortrait{flex-basis:40px;width:40px;height:40px}.characterStatsPortrait img{width:34px;height:34px}
@@ -3617,6 +3929,8 @@ body.statsActive #hud,body.statsActive #mobileHud{filter:brightness(.46) saturat
   .characterStatsGrid b{font-size:9.5px}.characterStatsGrid span,.characterProgression span{font-size:5.8px}
   .characterProgression b{font-size:8.5px}
 }
+
+
 
 
 /* ============================================================
@@ -3743,6 +4057,8 @@ body.dialogueActive #hud{filter:brightness(.48) saturate(.82)!important}
 }
 
 
+
+
 /* ============================================================
    v51.97 — compact objective tracker + settlement statistics
    ============================================================ */
@@ -3792,6 +4108,8 @@ body.settlementCutsceneActive .taskTracker{opacity:0!important;transform:transla
 .taskTrackerBar i{display:block;width:0;height:100%;border-radius:inherit;background:var(--task-accent);box-shadow:0 0 9px color-mix(in srgb,var(--task-accent) 55%,transparent);transition:width .22s ease}
 .taskTracker.taskChanged{animation:taskTrackerChanged .58s ease}
 @keyframes taskTrackerChanged{0%{filter:brightness(1);transform:none}35%{filter:brightness(1.25);transform:translateX(3px)}100%{filter:brightness(1);transform:none}}
+
+
 
 
 .settlementStatsCard{
@@ -3844,6 +4162,8 @@ body.settlementCutsceneActive .taskTracker{opacity:0!important;transform:transla
 .settlementStatsGrid .settlementStatsReward b{color:#91efad}
 
 
+
+
 @media (pointer:coarse), (max-width:820px){
   .taskTracker{
     left:max(12px,env(safe-area-inset-left));
@@ -3861,6 +4181,8 @@ body.settlementCutsceneActive .taskTracker{opacity:0!important;transform:transla
   .taskTrackerBar{margin-top:6px}
 
 
+
+
   .settlementStatsCard{left:72%;top:51%;width:min(49vw,390px);padding:10px;border-radius:12px}
   .settlementStatsHead{padding-bottom:7px}
   .settlementStatsHead span{font-size:6px}
@@ -3871,6 +4193,8 @@ body.settlementCutsceneActive .taskTracker{opacity:0!important;transform:transla
   .settlementStatsGrid span{font-size:5.5px}
   .settlementStatsGrid b{font-size:8.5px}
 }
+
+
 
 
 @media (prefers-reduced-motion:reduce){
@@ -4040,6 +4364,8 @@ body.settlementCutsceneActive .taskTracker{opacity:0!important;transform:transla
 .dialogueClose span::before{content:"×"!important;color:rgba(255,255,255,.88)!important;font:400 23px/1 system-ui,sans-serif!important}
 
 
+
+
 /* Movement base, inner ring and thumb are exactly about one third smaller. */
 .touchDevice.mobileLandscape #moveStick{
   width:94px!important;
@@ -4055,6 +4381,8 @@ body.settlementCutsceneActive .taskTracker{opacity:0!important;transform:transla
   margin:-19px!important;
 }
 .touchDevice.mobileLandscape #moveStick::before{inset:-18px!important}
+
+
 
 
 @media (pointer:coarse), (max-width:820px){
@@ -4085,6 +4413,8 @@ body.settlementCutsceneActive .taskTracker{opacity:0!important;transform:transla
 }
 
 
+
+
 @media (pointer:coarse) and (orientation:landscape) and (max-height:330px){
   .dialogueLayer{--dialogue-card-size:min(204px,calc(100dvh - 12px));padding:6px!important}
   .dialogueCard{width:calc(100vw - 12px)!important;gap:7px!important}
@@ -4097,6 +4427,8 @@ body.settlementCutsceneActive .taskTracker{opacity:0!important;transform:transla
   .dialogueOptionLabel{padding:0 6px!important;font-size:8.7px!important}
   .dialogueClose{top:6px!important;right:6px!important;width:25px!important;min-width:25px!important;height:25px!important}
 }
+
+
 
 
 /* ============================================================
@@ -4131,6 +4463,8 @@ body.settlementCutsceneActive .taskTracker{opacity:0!important;transform:transla
 @keyframes settlementBarBottom{from{transform:translateY(100%)}to{transform:none}}
 
 
+
+
 body.settlementCutsceneActive #hud,
 body.settlementCutsceneActive #mobileHud,
 body.settlementCutsceneActive #mobileControls,
@@ -4139,6 +4473,8 @@ body.settlementCutsceneActive #mobileDebugToggle{
   pointer-events:none!important;
   transition:opacity .16s ease!important;
 }
+
+
 
 
 .settlementRankCard{
@@ -4164,6 +4500,8 @@ body.settlementCutsceneActive #mobileDebugToggle{
   22%,78%{opacity:1;transform:translate(-50%,-50%) scale(1) rotate(0);filter:blur(0) drop-shadow(0 24px 38px rgba(0,0,0,.62))}
   100%{opacity:0;transform:translate(-58%,-54%) scale(.93);filter:blur(2px) drop-shadow(0 18px 26px rgba(0,0,0,.45))}
 }
+
+
 
 
 .settlementRankBadge{
@@ -4196,6 +4534,8 @@ body.settlementCutsceneActive #mobileDebugToggle{
 @keyframes settlementRankShine{to{transform:translateX(135%) rotate(-8deg)}}
 
 
+
+
 .settlementRankOverride:empty{display:none}
 .settlementRankOverride{
   position:absolute;
@@ -4215,6 +4555,8 @@ body.settlementCutsceneActive #mobileDebugToggle{
   paint-order:stroke fill;
   text-shadow:0 5px 0 rgba(0,0,0,.12);
 }
+
+
 
 
 .settlementRankCopy{
@@ -4240,6 +4582,8 @@ body.settlementCutsceneActive #mobileDebugToggle{
 .settlementRankCard[data-grade="F"] .settlementRankCopy em{color:#ffc0a3}
 
 
+
+
 @media (pointer:coarse), (max-width:820px){
   .settlementRankCard{left:72%;top:51%;gap:5px}
   .settlementRankBadge{width:min(43vh,31vw)}
@@ -4252,11 +4596,15 @@ body.settlementCutsceneActive #mobileDebugToggle{
 }
 
 
+
+
 @media (prefers-reduced-motion:reduce){
   .settlementRankCard.isVisible{animation:settlementRankReduced 5.05s ease both}
   .settlementRankBadge::after{display:none}
   @keyframes settlementRankReduced{0%,100%{opacity:0}10%,88%{opacity:1;transform:translate(-50%,-50%) scale(1)}}
 }
+
+
 
 
 /* ============================================================
@@ -4345,6 +4693,8 @@ body.settlementCutsceneActive #mobileDebugToggle{
   filter:none!important;
 }
 .dialogueLayer[data-npc="pavel"] .dialoguePaint{display:none!important}
+
+
 
 
 .dialoguePanel{
@@ -4443,6 +4793,8 @@ body.settlementCutsceneActive #mobileDebugToggle{
 .dialogueOption:disabled:not(.isRewardSelected){opacity:.54!important}
 
 
+
+
 .dialogueRewardBadge{
   position:relative;
   isolation:isolate;
@@ -4504,6 +4856,8 @@ body.settlementCutsceneActive #mobileDebugToggle{
 }
 
 
+
+
 .dialogueClose{
   top:11px!important;
   right:11px!important;
@@ -4517,6 +4871,8 @@ body.settlementCutsceneActive #mobileDebugToggle{
 }
 .dialogueClose:hover,.dialogueClose:focus-visible{opacity:1!important;background:rgba(255,255,255,.08)!important}
 .dialogueClose span::before{color:rgba(255,255,255,.62)!important;font-size:18px!important}
+
+
 
 
 /* Dialogue owns the screen: controls disappear, only a dim wallet remains as
@@ -4568,6 +4924,8 @@ body.dialogueActive #mobileHud>:not(#mobileMoney){
 }
 
 
+
+
 @media (pointer:coarse), (max-width:820px){
   .dialogueLayer{
     --dialogue-card-size:min(272px,calc(100dvh - 36px));
@@ -4604,6 +4962,8 @@ body.dialogueActive #mobileHud>:not(#mobileMoney){
 }
 
 
+
+
 @media (pointer:coarse) and (orientation:landscape) and (max-height:330px){
   .dialogueLayer{--dialogue-card-size:min(218px,calc(100dvh - 16px));padding:6px 8px!important}
   .dialogueCard{width:calc(100vw - 16px)!important;gap:7px!important}
@@ -4621,10 +4981,14 @@ body.dialogueActive #mobileHud>:not(#mobileMoney){
 }
 
 
+
+
 @media (prefers-reduced-motion:reduce){
   .dialogueRewardBadge::after,.dialogueRewardFlyer::after{display:none!important}
   .dialogueOption.isRewardSelected .dialogueRewardBadge{animation:none!important}
 }
+
+
 
 
 /* ============================================================
@@ -4652,3 +5016,4 @@ body.dialogueActive #mobileHud>:not(#mobileMoney){
   transform-origin:center!important;
   filter:none!important;
 }
+/* v51.112 debug build: boot diagnostics are inline in index.html */
