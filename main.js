@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-// v51.104 compatibility/event patch loaded BEFORE the main game module.
+// v51.105 compatibility/event patch loaded BEFORE the main game module.
 // 1) removes the extra mobile pit lip that caused doubled/broken recess borders;
 // 2) keeps pit walls slightly separated in depth to avoid z-fighting;
 // 3) fixes rank badge crop + shine;
@@ -1117,7 +1117,7 @@ const eventResetNeedle = "  pumpBroken = false;\n  pressureSpikePending = false;
 const eventResetReplacement = "  pumpBroken = false;\n  pressureSpikePending = false;\n  hoseRecoveryNeeded = false;\n  hoseControlActive = false;\n  hoseControlHeld = false;\n  hoseControlFailures = 0;\n  window.__betonEventResult = '—';\n  document.querySelector('#betonHoseControl')?.classList.remove('show','pressed');\n  pendingPourEvent = null;";
 if (mainSource.includes(eventResetNeedle)) mainSource = mainSource.replace(eventResetNeedle, eventResetReplacement);
 
-const mainBlob = new Blob([mainSource + '\n//# sourceURL=betonshik-main-v51.104.js'], { type:'text/javascript' });
+const mainBlob = new Blob([mainSource + '\n//# sourceURL=betonshik-main-v51.105.js'], { type:'text/javascript' });
 const mainBlobUrl = URL.createObjectURL(mainBlob);
 try { await import(mainBlobUrl); }
 finally { setTimeout(() => URL.revokeObjectURL(mainBlobUrl), 2000); }
