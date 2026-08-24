@@ -1,0 +1,27 @@
+{
+  "checks": {
+    "syntax_ok": true,
+    "no_runtime_source_download": true,
+    "no_blob_import": true,
+    "hose_qte": true,
+    "pump_wire_puzzle": true,
+    "eye_wipe": true,
+    "event_grade": true,
+    "badge_fix": true,
+    "badge_sheen": true,
+    "lite_scene": true,
+    "collider_grid": true,
+    "loading_watchdog": true,
+    "one_shot_rebar_patch": true,
+    "no_renderer_prototype_patch": true,
+    "local_three_importmap": true,
+    "index_main_51121": true,
+    "index_style_51121": true,
+    "gltf_valid_json": true,
+    "vendor_relative_imports_complete": true
+  },
+  "missing_vendor_imports": [],
+  "version": "51.122",
+  "rebar_texture_repeat": "6x6",
+  "rebar_pattern_size_change": "50% smaller vs v51.121"
+}

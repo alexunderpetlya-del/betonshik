@@ -5017,7 +5017,7 @@ body.dialogueActive #mobileHud>:not(#mobileMoney){
   filter:none!important;
 }
 
-/* v51.120 — canonical mobile viewport + boot retry. Overrides old patch generations. */
+/* v51.122 — canonical mobile viewport + boot retry. Overrides old patch generations. */
 html,body{
   position:static!important;
   inset:auto!important;
