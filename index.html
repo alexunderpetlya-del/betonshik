@@ -23,8 +23,8 @@
     }
   }
   </script>
-  <style id="menu-play-size-fix-v51108">
-    /* v51.108: compact PLAY button on phone landscape without relying on JS classes. */
+  <style id="menu-play-size-fix-v51110">
+    /* v51.110: compact PLAY button on phone landscape without relying on JS classes. */
     @media (orientation: landscape) and (max-height: 700px) {
       #start .menuPlayButton{
         width:min(35vw,470px)!important;
@@ -105,8 +105,8 @@
         >
       </button>
 
-      <div class="menuLoadState" id="menuVersion">v51.108</div>
-      <div id="loadState" hidden style="display:none!important">Загрузка...</div>
+      <div class="menuLoadState" id="menuVersion">v51.110</div>
+      <div id="loadState" hidden>Загрузка...</div>
       <div id="menuLoadingSpinner" class="menuLoadingSpinner" aria-hidden="true"></div>
     </div>
   </div>
@@ -299,15 +299,15 @@
     </div>
   </div>
 
-  <script type="module" src="./main.js?v=51.108"></script>
+  <script type="module" src="./main.js?v=51.110"></script>
   <script>
     window.addEventListener('error', function(e){
       var v=document.getElementById('menuVersion');
-      if(v){v.textContent='v51.108 · ОШИБКА';v.style.color='#ff7777';}
+      if(v){v.textContent='v51.110 · ОШИБКА';v.style.color='#ff7777';}
     });
     window.addEventListener('unhandledrejection', function(){
       var v=document.getElementById('menuVersion');
-      if(v){v.textContent='v51.108 · ОШИБКА';v.style.color='#ff7777';}
+      if(v){v.textContent='v51.110 · ОШИБКА';v.style.color='#ff7777';}
     });
   </script>
 </body>
