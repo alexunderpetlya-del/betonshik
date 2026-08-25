@@ -714,20 +714,11 @@ const forceFullMobile = mobileUrlParams.has('fullmobile');
 const MOBILE_LITE_MODE = TOUCH_DEVICE && !forceFullMobile;
 const MOBILE_SAFE_MODE = MOBILE_LITE_MODE; // compatibility alias for older gameplay branches
 const FINAL_SCENE_URL = TOUCH_DEVICE
-  ? (MOBILE_LITE_MODE ? './assets/FINAL_MOBILE_LITE.gltf?v=51.122' : './assets/FINAL_MOBILE.gltf?v=51.122')
-  : './assets/FINAL.gltf?v=51.122';
-function getViewportSize() {
-  const helper = window.__betonViewport;
-  if (helper?.size) return helper.size();
-  const vv = window.visualViewport;
-  const width = Math.max(1, Math.round(vv?.width || innerWidth || document.documentElement.clientWidth || 1));
-  const height = Math.max(1, Math.round(vv?.height || innerHeight || document.documentElement.clientHeight || 1));
-  return { width, height };
-}
-const MOBILE_LANDSCAPE = () => {
-  const v = getViewportSize();
-  return TOUCH_DEVICE && v.width > v.height;
-};
+  ? (MOBILE_LITE_MODE ? './assets/FINAL_MOBILE_LITE.gltf?v=51.126' : './assets/FINAL_MOBILE.gltf?v=51.126')
+  : './assets/FINAL.gltf?v=51.126';
+// v51.126: viewport/orientation path restored to the last known-good mobile build.
+// Do not route sizing through visualViewport/CSS custom viewport variables on iOS.
+const MOBILE_LANDSCAPE = () => TOUCH_DEVICE && innerWidth > innerHeight;
 document.documentElement.classList.toggle('touchDevice', TOUCH_DEVICE);
 document.documentElement.classList.toggle('mobileSafeMode', MOBILE_LITE_MODE);
 // Do not retain huge .bin/image payloads in the Three.js global file cache on phones.
@@ -795,8 +786,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b0d0e); // dark fallback: grey screen must never masquerade as a loaded scene
 scene.fog = null;
 
-const initialViewport = getViewportSize();
-const camera = new THREE.PerspectiveCamera(72, initialViewport.width / initialViewport.height, 0.12, 450);
+const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.12, 450);
 camera.layers.set(0);
 camera.rotation.order = 'YXZ';
 camera.position.set(0, 1.72, 15.5);
@@ -819,10 +809,10 @@ let mobileRenderScale = TOUCH_DEVICE ? Math.min(devicePixelRatio, MOBILE_DPR_STA
 let appliedMainRendererDpr = TOUCH_DEVICE
   ? Math.min(devicePixelRatio, mobileRenderScale)
   : Math.min(devicePixelRatio, 1.55);
-let appliedMainRendererWidth = initialViewport.width;
-let appliedMainRendererHeight = initialViewport.height;
+let appliedMainRendererWidth = Math.max(1, Math.round(innerWidth));
+let appliedMainRendererHeight = Math.max(1, Math.round(innerHeight));
 renderer.setPixelRatio(appliedMainRendererDpr);
-renderer.setSize(initialViewport.width, initialViewport.height);
+renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = !TOUCH_DEVICE;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -893,10 +883,10 @@ let outputPass = null;
 if (!TOUCH_DEVICE) {
   composer = new EffectComposer(renderer);
   composer.setPixelRatio(Math.min(devicePixelRatio, 1.15));
-  composer.setSize(initialViewport.width, initialViewport.height);
+  composer.setSize(innerWidth, innerHeight);
   renderPass = new RenderPass(scene, camera);
   composer.addPass(renderPass);
-  bloomPass = new UnrealBloomPass(new THREE.Vector2(initialViewport.width, initialViewport.height), 0.055, 0.16, 1.12);
+  bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.055, 0.16, 1.12);
   composer.addPass(bloomPass);
   subtleColorGradePass = new ShaderPass(subtleColorGradeShader);
   composer.addPass(subtleColorGradePass);
@@ -10878,31 +10868,35 @@ renderer.domElement.addEventListener('webglcontextrestored',()=>{ if (!sceneReco
 window.addEventListener('orientationchange',()=>setTimeout(()=>{ try { window.scrollTo(0,1); } catch(_) {} },80));
 
 function refreshMobileOrientationUI(){
-  if (window.__betonViewport?.sync) { window.__betonViewport.sync(); return; }
-  const landscape = MOBILE_LANDSCAPE();
-  document.documentElement.classList.toggle('mobileLandscape', landscape);
-  document.documentElement.classList.toggle('mobilePortrait', TOUCH_DEVICE && !landscape);
+  // v51.125: restore the simple orientation path that worked before the
+  // visualViewport/bootstrap changes. No second source of truth.
+  document.documentElement.classList.toggle('mobileLandscape', MOBILE_LANDSCAPE());
+  document.documentElement.classList.toggle('mobilePortrait', TOUCH_DEVICE && !MOBILE_LANDSCAPE());
 }
 refreshMobileOrientationUI();
 let viewportResizeTimer = 0;
 function applyViewportResize() {
-  const v = getViewportSize();
-  camera.aspect = v.width / v.height; camera.updateProjectionMatrix();
-  applyMainRendererSize(v.width, v.height);
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  applyMainRendererSize(innerWidth, innerHeight);
   if (composer) {
     composer.setPixelRatio(Math.min(devicePixelRatio,1.15));
-    composer.setSize(v.width, v.height);
-    bloomPass?.setSize(v.width, v.height);
+    composer.setSize(innerWidth, innerHeight);
+    bloomPass?.setSize(innerWidth, innerHeight);
   }
   refreshMobileOrientationUI();
 }
-function scheduleViewportResize() {
+window.addEventListener('resize', () => {
+  // Safari emits several resizes while rotating / hiding browser chrome.
+  // Wait until innerWidth/innerHeight settle, then resize once.
   if (!TOUCH_DEVICE) { applyViewportResize(); return; }
   clearTimeout(viewportResizeTimer);
-  viewportResizeTimer = setTimeout(applyViewportResize, 120);
-}
-window.addEventListener('resize', scheduleViewportResize, { passive:true });
-window.visualViewport?.addEventListener('resize', scheduleViewportResize, { passive:true });
+  viewportResizeTimer = setTimeout(applyViewportResize, 180);
+}, { passive:true });
+window.addEventListener('orientationchange', () => {
+  // iOS may update innerWidth/innerHeight after the orientationchange event itself.
+  // Re-read the normal layout viewport a few times; no visualViewport/media-query state.
+  [80, 220, 520, 900].forEach(ms => setTimeout(applyViewportResize, ms));
+}, { passive:true });
 
 function blocked(x, z) {
   const feetY = groundHeightAt(x, z) + .04;
