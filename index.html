@@ -14,7 +14,7 @@
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png?v=51.41" />
   <title>БЕТОНЩИК</title>
   <link rel="manifest" href="./manifest.webmanifest?v=51.62" />
-  <link rel="stylesheet" href="./style.css?v=51.126" />
+  <link rel="stylesheet" href="./style.css?v=51.127" />
   <script type="importmap">
   {
     "imports": {
@@ -23,7 +23,7 @@
     }
   }
   </script>
-  <style id="mobile-orientation-boot-v51126">
+  <style id="mobile-orientation-boot-v51127">
     html,body{width:100%;height:100%;margin:0;overflow:hidden}
     @media (pointer:coarse) and (orientation:portrait){
       #rotateNotice{
@@ -38,21 +38,32 @@
       #start .menuFrame{width:100vw!important;height:100dvh!important;max-width:none!important;max-height:none!important}
     }
   </style>
-  <script id="mobile-orientation-boot-script-v51126">
+  <script id="mobile-orientation-boot-script-v51127">
   (function(){
-    var coarse = false;
-    try { coarse = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches) || navigator.maxTouchPoints > 0 || ('ontouchstart' in window); } catch(_) {}
-    function sync(){
-      var root=document.documentElement;
-      var landscape=innerWidth>innerHeight;
-      root.classList.toggle('touchDevice',coarse);
-      root.classList.toggle('mobileLandscape',coarse && landscape);
-      root.classList.toggle('mobilePortrait',coarse && !landscape);
-      try { window.scrollTo(0,1); } catch(_) {}
+    var coarse=false, raf=0;
+    try { coarse=!!(window.matchMedia&&matchMedia('(pointer: coarse)').matches)||navigator.maxTouchPoints>0||('ontouchstart' in window); } catch(_) {}
+    function size(){
+      var vv=window.visualViewport;
+      return {
+        width:Math.max(1,Math.round((vv&&vv.width)||innerWidth||document.documentElement.clientWidth||1)),
+        height:Math.max(1,Math.round((vv&&vv.height)||innerHeight||document.documentElement.clientHeight||1))
+      };
     }
+    function sync(){
+      raf=0;
+      var v=size(),root=document.documentElement,landscape=v.width>v.height;
+      root.classList.toggle('touchDevice',coarse);
+      root.classList.toggle('mobileLandscape',coarse&&landscape);
+      root.classList.toggle('mobilePortrait',coarse&&!landscape);
+      root.style.setProperty('--app-vw',v.width+'px');
+      root.style.setProperty('--app-vh',v.height+'px');
+    }
+    function schedule(){ if(!raf) raf=requestAnimationFrame(sync); }
+    window.__betonViewport={size:size,sync:sync,schedule:schedule};
     sync();
-    addEventListener('resize',sync,{passive:true});
-    addEventListener('orientationchange',function(){sync();setTimeout(sync,60);setTimeout(sync,240);},{passive:true});
+    addEventListener('resize',schedule,{passive:true});
+    addEventListener('orientationchange',function(){schedule();setTimeout(schedule,80);setTimeout(schedule,280);},{passive:true});
+    if(window.visualViewport) visualViewport.addEventListener('resize',schedule,{passive:true});
   })();
   </script>
 </head>
@@ -379,7 +390,7 @@
 
 
 
-  <script type="module" src="./main.js?v=51.126"></script>
+  <script type="module" src="./main.js?v=51.127"></script>
   <script>
   (function(){
     function showBootError(msg){
