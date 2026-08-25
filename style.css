@@ -5017,7 +5017,7 @@ body.dialogueActive #mobileHud>:not(#mobileMoney){
   filter:none!important;
 }
 
-/* v51.123 — canonical mobile viewport + orientation gate + boot retry. */
+/* v51.122 — canonical mobile viewport + boot retry. Overrides old patch generations. */
 html,body{
   position:static!important;
   inset:auto!important;
@@ -5050,18 +5050,3 @@ body{position:relative!important;background:#000!important}
   pointer-events:auto;touch-action:manipulation
 }
 .bootRetryBtn[hidden]{display:none!important}
-
-
-/* v51.124 — iOS orientation gate: JS classes only, never CSS orientation media state. */
-html.touchDevice.mobileLandscape #rotateNotice,
-body.gameStarted #rotateNotice{
-  display:none!important;visibility:hidden!important;pointer-events:none!important;
-}
-html.touchDevice.mobilePortrait #rotateNotice{
-  display:flex!important;visibility:visible!important;position:fixed!important;inset:0!important;
-  width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;
-  align-items:center!important;justify-content:center!important;flex-direction:column!important;gap:8px!important;
-  transform:none!important;margin:0!important;
-  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)!important;
-  box-sizing:border-box!important;z-index:2147483000!important;pointer-events:none!important;
-}

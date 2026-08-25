@@ -14,7 +14,7 @@
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png?v=51.41" />
   <title>БЕТОНЩИК</title>
   <link rel="manifest" href="./manifest.webmanifest?v=51.62" />
-  <link rel="stylesheet" href="./style.css?v=51.124" />
+  <link rel="stylesheet" href="./style.css?v=51.125" />
   <script type="importmap">
   {
     "imports": {
@@ -22,93 +22,6 @@
       "three/addons/": "./vendor/three/examples/jsm/"
     }
   }
-  </script>
-  <style id="mobile-orientation-boot-v51124">
-    html,body{width:100%;height:100%;margin:0;overflow:hidden}
-    /* v51.124: JS is the single source of truth for iOS orientation.
-       Safari's CSS (orientation:*) media query can stay stale after rotation. */
-    #rotateNotice{display:none!important}
-    html.touchDevice.mobilePortrait #rotateNotice{
-      display:flex!important;position:fixed!important;inset:0!important;z-index:2147483000!important;
-      align-items:center!important;justify-content:center!important;flex-direction:column!important;gap:8px!important;
-      background:#11140f!important;color:#ece9cd!important;text-align:center!important;pointer-events:none!important
-    }
-    html.touchDevice.mobileLandscape #rotateNotice{display:none!important}
-    html.touchDevice.mobileLandscape #start.menuSplash{width:100vw!important;height:100dvh!important;inset:0!important}
-    html.touchDevice.mobileLandscape #start .menuFrame{width:100vw!important;height:100dvh!important;max-width:none!important;max-height:none!important}
-  </style>
-  <script id="mobile-orientation-boot-script-v51124">
-  (function(){
-    var coarse=false, raf=0, timers=[];
-    try { coarse=!!(window.matchMedia&&matchMedia('(pointer: coarse)').matches)||navigator.maxTouchPoints>0||('ontouchstart' in window); } catch(_) {}
-    function size(){
-      var vv=window.visualViewport, de=document.documentElement;
-      var iw=Math.max(1,Number(innerWidth)||0), ih=Math.max(1,Number(innerHeight)||0);
-      var cw=Math.max(1,Number(de&&de.clientWidth)||0), ch=Math.max(1,Number(de&&de.clientHeight)||0);
-      var vw=Math.max(1,Number(vv&&vv.width)||0), vh=Math.max(1,Number(vv&&vv.height)||0);
-      /* On iOS after rotation visualViewport can be stale. Prefer the widest live viewport pair. */
-      var pairs=[[iw,ih],[cw,ch],[vw,vh]].filter(function(p){return p[0]>1&&p[1]>1});
-      var best=pairs[0]||[iw,ih];
-      for(var i=1;i<pairs.length;i++) if(pairs[i][0]*pairs[i][1]>best[0]*best[1]) best=pairs[i];
-      return {width:Math.round(best[0]),height:Math.round(best[1])};
-    }
-    function isLandscape(v){
-      /* Legacy window.orientation is still the most dependable immediate signal on iPhone Safari. */
-      try {
-        var wo=Number(window.orientation);
-        if(Number.isFinite(wo)){
-          wo=((wo%360)+360)%360;
-          if(wo===90||wo===270) return true;
-          if(wo===0||wo===180) return false;
-        }
-      } catch(_) {}
-      try {
-        var so=screen.orientation, a=Number(so&&so.angle);
-        if(Number.isFinite(a)){
-          a=((a%360)+360)%360;
-          if(a===90||a===270) return true;
-          if(a===0||a===180) return false;
-        }
-      } catch(_) {}
-      /* If ANY real viewport has clearly become landscape, trust it over stale media queries. */
-      var de=document.documentElement, vv=window.visualViewport;
-      var pairs=[
-        [Number(innerWidth),Number(innerHeight)],
-        [Number(de&&de.clientWidth),Number(de&&de.clientHeight)],
-        [Number(vv&&vv.width),Number(vv&&vv.height)]
-      ];
-      for(var i=0;i<pairs.length;i++) if(pairs[i][0]>pairs[i][1]+2) return true;
-      for(var j=0;j<pairs.length;j++) if(pairs[j][1]>pairs[j][0]+2) return false;
-      if(v&&v.width!==v.height) return v.width>v.height;
-      try { if(window.matchMedia) return matchMedia('(orientation: landscape)').matches; } catch(_) {}
-      return false;
-    }
-    function sync(){
-      raf=0;
-      var v=size(),root=document.documentElement,landscape=isLandscape(v);
-      root.classList.toggle('touchDevice',coarse);
-      root.classList.toggle('mobileLandscape',coarse&&landscape);
-      root.classList.toggle('mobilePortrait',coarse&&!landscape);
-      root.dataset.betonOrientation=landscape?'landscape':'portrait';
-      root.style.setProperty('--app-vw',v.width+'px');
-      root.style.setProperty('--app-vh',v.height+'px');
-    }
-    function schedule(){ if(!raf) raf=requestAnimationFrame(sync); }
-    function burst(){
-      schedule();
-      timers.forEach(clearTimeout); timers=[];
-      [40,120,260,520,900,1500].forEach(function(ms){timers.push(setTimeout(sync,ms));});
-    }
-    window.__betonViewport={size:size,sync:sync,schedule:schedule,isLandscape:isLandscape};
-    sync();
-    addEventListener('resize',burst,{passive:true});
-    addEventListener('orientationchange',burst,{passive:true});
-    addEventListener('pageshow',burst,{passive:true});
-    addEventListener('focus',burst,{passive:true});
-    document.addEventListener('visibilitychange',function(){if(!document.hidden)burst();},{passive:true});
-    if(window.visualViewport){visualViewport.addEventListener('resize',burst,{passive:true});visualViewport.addEventListener('scroll',schedule,{passive:true});}
-    try { if(screen.orientation&&screen.orientation.addEventListener) screen.orientation.addEventListener('change',burst,{passive:true}); } catch(_) {}
-  })();
   </script>
 </head>
 <body>
@@ -434,7 +347,7 @@
 
 
 
-  <script type="module" src="./main.js?v=51.123"></script>
+  <script type="module" src="./main.js?v=51.125"></script>
   <script>
   (function(){
     function showBootError(msg){
