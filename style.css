@@ -5017,7 +5017,7 @@ body.dialogueActive #mobileHud>:not(#mobileMoney){
   filter:none!important;
 }
 
-/* v51.122 — canonical mobile viewport + boot retry. Overrides old patch generations. */
+/* v51.123 — canonical mobile viewport + orientation gate + boot retry. */
 html,body{
   position:static!important;
   inset:auto!important;
@@ -5050,3 +5050,25 @@ body{position:relative!important;background:#000!important}
   pointer-events:auto;touch-action:manipulation
 }
 .bootRetryBtn[hidden]{display:none!important}
+
+
+/* v51.123 — hard override for iOS rotation gate. */
+.touchDevice.mobileLandscape #rotateNotice{
+  display:none!important;
+  visibility:hidden!important;
+  pointer-events:none!important;
+}
+.touchDevice.mobilePortrait #rotateNotice{
+  display:flex!important;
+  visibility:visible!important;
+  position:fixed!important;
+  left:0!important;top:0!important;right:auto!important;bottom:auto!important;
+  width:100dvw!important;height:100dvh!important;
+  min-width:100dvw!important;min-height:100dvh!important;
+  align-items:center!important;justify-content:center!important;
+  flex-direction:column!important;gap:8px!important;
+  transform:none!important;
+  margin:0!important;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)!important;
+  box-sizing:border-box!important;
+  z-index:2147483000!important;
+}

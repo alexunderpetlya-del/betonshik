@@ -14,7 +14,7 @@
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png?v=51.41" />
   <title>БЕТОНЩИК</title>
   <link rel="manifest" href="./manifest.webmanifest?v=51.62" />
-  <link rel="stylesheet" href="./style.css?v=51.122" />
+  <link rel="stylesheet" href="./style.css?v=51.123" />
   <script type="importmap">
   {
     "imports": {
@@ -23,7 +23,7 @@
     }
   }
   </script>
-  <style id="mobile-orientation-boot-v51120">
+  <style id="mobile-orientation-boot-v51123">
     html,body{width:100%;height:100%;margin:0;overflow:hidden}
     @media (pointer:coarse) and (orientation:portrait){
       #rotateNotice{
@@ -38,7 +38,7 @@
       #start .menuFrame{width:100vw!important;height:100dvh!important;max-width:none!important;max-height:none!important}
     }
   </style>
-  <script id="mobile-orientation-boot-script-v51120">
+  <script id="mobile-orientation-boot-script-v51123">
   (function(){
     var coarse=false, raf=0;
     try { coarse=!!(window.matchMedia&&matchMedia('(pointer: coarse)').matches)||navigator.maxTouchPoints>0||('ontouchstart' in window); } catch(_) {}
@@ -49,9 +49,24 @@
         height:Math.max(1,Math.round((vv&&vv.height)||innerHeight||document.documentElement.clientHeight||1))
       };
     }
+    function isLandscape(v){
+      // iOS Safari can report a stale visualViewport for a few frames after rotation.
+      // CSS orientation / screen orientation is more reliable for the rotate gate.
+      try {
+        if (window.matchMedia) {
+          var mq=matchMedia('(orientation: landscape)');
+          if (typeof mq.matches==='boolean') return mq.matches;
+        }
+      } catch(_) {}
+      try {
+        var so=screen.orientation;
+        if (so && typeof so.type==='string') return so.type.indexOf('landscape')===0;
+      } catch(_) {}
+      return v.width>v.height;
+    }
     function sync(){
       raf=0;
-      var v=size(),root=document.documentElement,landscape=v.width>v.height;
+      var v=size(),root=document.documentElement,landscape=isLandscape(v);
       root.classList.toggle('touchDevice',coarse);
       root.classList.toggle('mobileLandscape',coarse&&landscape);
       root.classList.toggle('mobilePortrait',coarse&&!landscape);
@@ -390,7 +405,7 @@
 
 
 
-  <script type="module" src="./main.js?v=51.122"></script>
+  <script type="module" src="./main.js?v=51.123"></script>
   <script>
   (function(){
     function showBootError(msg){
