@@ -5017,32 +5017,8 @@ body.dialogueActive #mobileHud>:not(#mobileMoney){
   filter:none!important;
 }
 
-/* v51.122 — canonical mobile viewport + boot retry. Overrides old patch generations. */
-html,body{
-  position:static!important;
-  inset:auto!important;
-  width:100%!important;
-  height:100%!important;
-  min-width:0!important;
-  min-height:100dvh!important;
-  margin:0!important;
-  overflow:hidden!important;
-}
-body{position:relative!important;background:#000!important}
-#game,#game canvas{
-  position:fixed!important;
-  inset:0!important;
-  width:var(--app-vw,100dvw)!important;
-  height:var(--app-vh,100dvh)!important;
-  max-width:none!important;
-  max-height:none!important;
-}
-#start.menuSplash,#start .menuFrame{
-  width:var(--app-vw,100dvw)!important;
-  height:var(--app-vh,100dvh)!important;
-  max-width:none!important;
-  max-height:none!important;
-}
+/* v51.126 — iOS viewport rollback.
+   Root/body/game/menu sizing is intentionally left to the original known-good rules at the top of this file. */
 .bootRetryBtn{
   position:absolute;left:50%;bottom:max(4%,env(safe-area-inset-bottom));transform:translateX(-50%);
   z-index:80;padding:10px 16px;border:1px solid rgba(255,218,91,.7);border-radius:8px;
