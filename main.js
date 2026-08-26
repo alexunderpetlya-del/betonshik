@@ -230,7 +230,7 @@ function buildMobileDebugReport() {
     else if (gl) glInfo = `webgl: ${gl.getParameter(gl.VERSION)}`;
   } catch (_) {}
   return [
-    'BETONSHCHIK MOBILE DEBUG v51.127',
+    'BETONSHCHIK MOBILE DEBUG v51.130',
     `safe=${MOBILE_SAFE_MODE} scene=${FINAL_SCENE_URL}`,
     `screen=${innerWidth}x${innerHeight} dpr=${devicePixelRatio}`,
     `staticGeomCPUReleased=${(mobileStaticGeometryReleasedBytes / (1024 * 1024)).toFixed(1)} MiB`,
@@ -3802,8 +3802,44 @@ const POUR_EVENT_COPY = {
   eye: { title: 'БЕТОН В ГЛАЗ', text: 'СМАХНИ БЕТОН' },
 };
 const EVENT_ALARM_SECONDS = 1.00;
+
+// v51.130: event assets are resolved before the first preload call.
+// v51.129 called preloadEventUiAssets() before these helpers existed, which
+// stopped the whole module at boot with ReferenceError on Safari.
+const EVENT_UI_ASSET_CANDIDATES = {
+  pressure: ['./assets/ui/events/alarm_pressure.png'],
+  hose: ['./assets/ui/events/alarm_pump.png'],
+  pump: ['./assets/ui/events/alarm_pump.png'],
+  eye: ['./assets/ui/events/alarm_pump.png'],
+  eyeSplat: ['./assets/ui/events/eye_splat.png'],
+};
+const resolvedEventUiAssets = Object.create(null);
+function resolveExistingImage(candidates = []) {
+  return new Promise(resolve => {
+    const next = (i) => {
+      if (i >= candidates.length) { resolve(''); return; }
+      const src = candidates[i];
+      const img = new Image();
+      img.onload = () => resolve(src);
+      img.onerror = () => next(i + 1);
+      img.src = src;
+    };
+    next(0);
+  });
+}
+async function preloadEventUiAssets() {
+  const keys = Object.keys(EVENT_UI_ASSET_CANDIDATES);
+  await Promise.all(keys.map(async key => {
+    resolvedEventUiAssets[key] = await resolveExistingImage(EVENT_UI_ASSET_CANDIDATES[key]);
+  }));
+}
+function getResolvedEventUiAsset(key) {
+  const list = EVENT_UI_ASSET_CANDIDATES[key] || [];
+  return resolvedEventUiAssets[key] || list[0] || '';
+}
+
 let pendingPourEvent = null;
-preloadEventUiAssets();
+preloadEventUiAssets().catch(() => {});
 let eventAlarmTimer = 0;
 let pumpBroken = false;
 let pressureSpikePending = false;
@@ -13517,7 +13553,7 @@ if (TOUCH_DEVICE) {
       debugPanel.textContent = buildMobileDebugReport();
     });
   }
-  preloadEventUiAssets();
+  preloadEventUiAssets().catch(() => {});
   mobileDebugLog(`boot scene=${FINAL_SCENE_URL} safe=${MOBILE_SAFE_MODE}`);
   const moveStick=document.querySelector('#moveStick'), moveKnob=document.querySelector('#moveKnob');
   setupMobileStick(moveStick,moveKnob,(x,y,sprintStrength=0)=>{
