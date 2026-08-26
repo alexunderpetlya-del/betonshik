@@ -1,0 +1,19 @@
+{
+  "version": "51.127",
+  "base": "known-good v51.120",
+  "event_hose_qte": true,
+  "event_pump_puzzle": true,
+  "event_eye_wipe": true,
+  "event_pressure_counter": true,
+  "event_result": true,
+  "badge_fix_static_css": true,
+  "rebar_6x6": true,
+  "no_object3d_add_patch": true,
+  "no_preboot_duplicate_v3": true,
+  "no_body_observer": true,
+  "no_completion_poll": true,
+  "no_runtime_patch_style": true,
+  "known_good_viewport_helper": true,
+  "lite_scene": true,
+  "lazy_v2": true
+}

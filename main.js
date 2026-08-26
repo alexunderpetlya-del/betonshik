@@ -2082,7 +2082,8 @@ hoseGroup.add(hoseOutline);
 
 
 
-const hoseTip = new THREE.Mesh(new THREE.SphereGeometry(.12, 14, 10), hoseEndMat);
+const hoseTip = new THREE.Mesh(new THREE.CylinderGeometry(.07, .095, .20, 14, 1, false), hoseEndMat);
+hoseTip.geometry.translate(0, .10, 0);
 const hoseCoupler = new THREE.Mesh(new THREE.CylinderGeometry(.125, .125, .32, 16, 1, false), hoseEndMat);
 hoseCoupler.name = 'PHYSICAL_HOSE_COUPLER';
 hoseCoupler.castShadow = true;
@@ -2103,6 +2104,7 @@ const hoseFloorTarget = new THREE.Vector3();
 const hoseHeldForward = new THREE.Vector3();
 const hoseHeldGuide = new THREE.Vector3();
 const hoseHeldDrop = new THREE.Vector3();
+const hoseTipAxis = new THREE.Vector3(0, 1, 0);
 const hoseTubeTangent = new THREE.Vector3();
 const hoseTubeN1 = new THREE.Vector3();
 const hoseTubeN2 = new THREE.Vector3();
@@ -2720,6 +2722,12 @@ function loadDryTexturesLazy() {
 async function applyCuredLook(zoneId) {
   const zone = POUR_ZONES.find(z => z.id === Number(zoneId));
   if (!zone?.surface || zone.surface.userData?.curedConcrete) return;
+  zone.curedConcrete = true;
+  if (zone.mobility?.fill) zone.mobility.fill(0);
+  if (zone.velX?.fill) zone.velX.fill(0);
+  if (zone.velZ?.fill) zone.velZ.fill(0);
+  if (zone.flowDelta?.fill) zone.flowDelta.fill(0);
+  if (zone.flowBudget?.fill) zone.flowBudget.fill(0);
   const textures = await loadDryTexturesLazy();
   const source = zone.surface.material;
   let material = dryMaterials.get(zone.id);
@@ -3795,6 +3803,7 @@ const POUR_EVENT_COPY = {
 };
 const EVENT_ALARM_SECONDS = 1.00;
 let pendingPourEvent = null;
+preloadEventUiAssets();
 let eventAlarmTimer = 0;
 let pumpBroken = false;
 let pressureSpikePending = false;
@@ -4037,7 +4046,7 @@ function ensureEyeWipeUi() {
   root = document.createElement('div');
   root.id = 'betonEyeWipe';
   root.className = 'betonEventQte';
-  root.innerHTML = '<img class="betonEyeBlob" src="./assets/ui/events/eye_splat.png" alt=""><div class="betonEyeTrack"><i></i></div><div class="betonEyeHint">СМАХНИ БЕТОН СЛЕВА НАПРАВО</div>';
+  root.innerHTML = '<img class="betonEyeBlob" alt=""><div class="betonEyeTrack"><i></i></div><div class="betonEyeHint">СМАХНИ БЕТОН СЛЕВА НАПРАВО</div>';
   document.body.appendChild(root);
   const track = root.querySelector('.betonEyeTrack i');
   root.addEventListener('pointerdown', e => {
@@ -4063,11 +4072,11 @@ function ensureEyeWipeUi() {
 function startEyeWipe() {
   eyeWipeActive = true;
   eyeWipeStartedAt = performance.now();
-  blindnessTimer = 2.4;
+  blindnessTimer = 30.0;
   blindnessOverlayEl?.classList.remove('active');
   const root = ensureEyeWipeUi();
   root.classList.add('show');
-  const blob = root.querySelector('.betonEyeBlob'); if (blob) { blob.style.opacity='.98'; blob.style.transform='rotate(-3deg)'; }
+  const blob = root.querySelector('.betonEyeBlob'); if (blob) { blob.src = getResolvedEventUiAsset('eyeSplat'); blob.style.opacity='.98'; blob.style.transform='rotate(-3deg)'; }
   const dot = root.querySelector('.betonEyeTrack i'); if (dot) dot.style.left='0%';
   if (document.pointerLockElement) document.exitPointerLock();
 }
@@ -4082,14 +4091,61 @@ function finishEyeWipe(autoClear = false) {
   requestMouseLock();
 }
 
-const WIRE_COLORS = ['#ff554d','#47a7ff','#f7cb4b','#52d17f'];
+const WIRE_COLORS = ['#ff5c57','#ff9c38','#f3d24e','#59d96d','#4ba6ff'];
 const WIRE_GRID_COLS = 9;
 const WIRE_GRID_ROWS = 9;
-const WIRE_ENDPOINT_ROWS = [1,3,5,7];
-const WIRE_BLOCK_TEMPLATES = [
-  [[4,1],[3,3],[5,3],[4,5],[6,5],[4,7]],
-  [[2,1],[6,1],[4,3],[3,5],[5,5],[4,7]],
-  [[5,1],[3,3],[6,3],[4,5],[2,7],[6,7]],
+const WIRE_PUZZLE_TEMPLATES = [
+  {
+    starts: [
+      { c: 0, r: 1, color: 0 },
+      { c: 0, r: 3, color: 1 },
+      { c: 0, r: 5, color: 2 },
+      { c: 0, r: 7, color: 3 },
+      { c: 2, r: 8, color: 4 },
+    ],
+    targets: [
+      { c: 8, r: 5, color: 0 },
+      { c: 8, r: 1, color: 1 },
+      { c: 8, r: 7, color: 2 },
+      { c: 8, r: 3, color: 3 },
+      { c: 6, r: 0, color: 4 },
+    ],
+    blocked: [[4,2],[4,4],[4,6]]
+  },
+  {
+    starts: [
+      { c: 0, r: 1, color: 0 },
+      { c: 1, r: 8, color: 1 },
+      { c: 0, r: 5, color: 2 },
+      { c: 0, r: 7, color: 3 },
+      { c: 2, r: 0, color: 4 },
+    ],
+    targets: [
+      { c: 8, r: 3, color: 0 },
+      { c: 8, r: 7, color: 1 },
+      { c: 8, r: 1, color: 2 },
+      { c: 6, r: 8, color: 3 },
+      { c: 8, r: 5, color: 4 },
+    ],
+    blocked: [[3,2],[5,2],[4,4],[3,6],[5,6]]
+  },
+  {
+    starts: [
+      { c: 0, r: 1, color: 0 },
+      { c: 0, r: 4, color: 1 },
+      { c: 0, r: 7, color: 2 },
+      { c: 2, r: 8, color: 3 },
+      { c: 2, r: 0, color: 4 },
+    ],
+    targets: [
+      { c: 8, r: 7, color: 0 },
+      { c: 8, r: 1, color: 1 },
+      { c: 8, r: 4, color: 2 },
+      { c: 6, r: 0, color: 3 },
+      { c: 6, r: 8, color: 4 },
+    ],
+    blocked: [[4,1],[4,3],[4,5],[4,7]]
+  },
 ];
 let wirePuzzle = null;
 
@@ -4099,7 +4155,7 @@ function ensurePumpPuzzleUi() {
   root = document.createElement('div');
   root.id='betonPumpPuzzle';
   root.className='betonEventQte';
-  root.innerHTML='<div class="betonPumpPuzzleWrap"><button class="betonEventClose" type="button">×</button><div class="betonPumpPuzzleTitle">ЩИТОК НАСОСА</div><div class="betonPumpPuzzleSub">ПРОЛОЖИ ПРОВОДА ПО СЕТКЕ · НЕ ПЕРЕСЕКАЙ ЛИНИИ</div><div class="betonPumpShell"><canvas class="betonWireCanvas" width="720" height="720"></canvas></div><div class="betonWireStatus">ПРОВОДОВ: 0 / 4</div></div>';
+  root.innerHTML='<div class="betonPumpPuzzleWrap"><button class="betonEventClose" type="button">×</button><div class="betonPumpPuzzleTitle">ЩИТОК НАСОСА</div><div class="betonPumpPuzzleSub">СОЕДИНИ 5 ПАР ПРОВОДОВ · НЕ ПЕРЕСЕКАЙ ЛИНИИ</div><div class="betonPumpShell"><canvas class="betonWireCanvas" width="720" height="720"></canvas></div><div class="betonWireStatus">ПРОВОДОВ: 0 / 5</div></div>';
   document.body.appendChild(root);
   root.querySelector('.betonEventClose')?.addEventListener('click',()=>closePumpWirePuzzle(false));
   const canvas=root.querySelector('canvas');
@@ -4148,10 +4204,10 @@ function openPumpWirePuzzle() {
   if (!pumpBroken || pumpPuzzleOpen) return;
   pumpPuzzleOpen=true; pouring=false;
   const root=ensurePumpPuzzleUi(); root.classList.add('show');
-  const starts=WIRE_ENDPOINT_ROWS.map((r,i)=>({c:0,r,color:i}));
-  const targets=WIRE_ENDPOINT_ROWS.map((r,i)=>({c:WIRE_GRID_COLS-1,r,color:i}));
-  const template=WIRE_BLOCK_TEMPLATES[Math.floor(Math.random()*WIRE_BLOCK_TEMPLATES.length)];
-  wirePuzzle={starts,targets,paths:new Map(),drag:null,count:4,blocked:new Set(template.map(p=>p[0]+','+p[1])),mistakes:0};
+  const template = WIRE_PUZZLE_TEMPLATES[Math.floor(Math.random() * WIRE_PUZZLE_TEMPLATES.length)];
+  const starts = template.starts.map(p => ({ ...p }));
+  const targets = template.targets.map(p => ({ ...p }));
+  wirePuzzle={starts,targets,paths:new Map(),drag:null,count:starts.length,blocked:new Set((template.blocked || []).map(p=>p[0]+','+p[1])),mistakes:0};
   drawPumpPuzzle();
   if (document.pointerLockElement) document.exitPointerLock();
 }
@@ -4171,7 +4227,7 @@ function drawPumpPuzzle(cursor=null) {
   const root=ensurePumpPuzzleUi(),canvas=root.querySelector('canvas'),ctx=canvas.getContext('2d');
   ctx.clearRect(0,0,canvas.width,canvas.height);
   const pad=34,cellW=(canvas.width-pad*2)/(WIRE_GRID_COLS-1),cellH=(canvas.height-pad*2)/(WIRE_GRID_ROWS-1);
-  ctx.strokeStyle='rgba(205,205,184,.23)';ctx.lineWidth=1.2;
+  ctx.strokeStyle='rgba(205,205,184,.10)';ctx.lineWidth=1.0;
   for(let c=0;c<WIRE_GRID_COLS;c++){const x=pad+c*cellW;ctx.beginPath();ctx.moveTo(x,pad);ctx.lineTo(x,canvas.height-pad);ctx.stroke();}
   for(let r=0;r<WIRE_GRID_ROWS;r++){const y=pad+r*cellH;ctx.beginPath();ctx.moveTo(pad,y);ctx.lineTo(canvas.width-pad,y);ctx.stroke();}
   for(const key of wirePuzzle.blocked){const parts=key.split(',').map(Number),pt=wirePointForCell({c:parts[0],r:parts[1]},canvas);ctx.fillStyle='rgba(40,43,42,.96)';ctx.strokeStyle='#807b6e';ctx.lineWidth=2;ctx.beginPath();ctx.roundRect(pt.x-cellW*.31,pt.y-cellH*.31,cellW*.62,cellH*.62,8);ctx.fill();ctx.stroke();ctx.fillStyle='#4d4b45';ctx.beginPath();ctx.arc(pt.x,pt.y,6,0,Math.PI*2);ctx.fill();}
@@ -4185,7 +4241,7 @@ function drawPumpPuzzle(cursor=null) {
   };
   for(const [color,path] of wirePuzzle.paths)drawPath(path,color,1);
   if(wirePuzzle.drag){const temp=[...wirePuzzle.drag.path]; if(cursor){const cell=wireCellFromPoint(cursor,canvas);if(cell&&!(temp[temp.length-1]?.c===cell.c&&temp[temp.length-1]?.r===cell.r))temp.push(cell);}drawPath(temp,wirePuzzle.drag.color,.78);}
-  for(let color=0;color<wirePuzzle.count;color++)for(const cell of [wirePuzzle.starts[color],wirePuzzle.targets[color]]){const p=wirePointForCell(cell,canvas);ctx.fillStyle='#111';ctx.beginPath();ctx.arc(p.x,p.y,19,0,Math.PI*2);ctx.fill();ctx.strokeStyle=WIRE_COLORS[color];ctx.lineWidth=8;ctx.stroke();ctx.fillStyle=WIRE_COLORS[color];ctx.beginPath();ctx.arc(p.x,p.y,7,0,Math.PI*2);ctx.fill();}
+  for(let color=0;color<wirePuzzle.count;color++)for(const cell of [wirePuzzle.starts[color],wirePuzzle.targets[color]]){const p=wirePointForCell(cell,canvas);ctx.fillStyle='#111';ctx.beginPath();ctx.arc(p.x,p.y,22,0,Math.PI*2);ctx.fill();ctx.strokeStyle=WIRE_COLORS[color];ctx.lineWidth=10;ctx.stroke();ctx.fillStyle=WIRE_COLORS[color];ctx.beginPath();ctx.arc(p.x,p.y,8.5,0,Math.PI*2);ctx.fill();}
   const status=root.querySelector('.betonWireStatus'); if(status)status.textContent='ПРОВОДОВ: '+wirePuzzle.paths.size+' / '+wirePuzzle.count+(wirePuzzle.mistakes?' · ОШИБОК: '+wirePuzzle.mistakes:'');
 }
 function pumpWireDown(e){
@@ -4246,7 +4302,7 @@ function showPourEventAlarm(zone) {
   if (!zone || zone.eventTriggered || pendingPourEvent) return;
   zone.eventTriggered=true; pendingPourEvent={zone,type:zone.eventType}; eventAlarmTimer=EVENT_ALARM_SECONDS;
   const copy=POUR_EVENT_COPY[zone.eventType]||POUR_EVENT_COPY.pressure;
-  if(eventAlarmEl){eventAlarmEl.dataset.event=zone.eventType;eventAlarmTitleEl.textContent=copy.title;eventAlarmTextEl.textContent=copy.text;eventAlarmEl.classList.remove('show');void eventAlarmEl.offsetWidth;eventAlarmEl.classList.add('show');}
+  if(eventAlarmEl){eventAlarmEl.dataset.event=zone.eventType;eventAlarmTitleEl.textContent=copy.title;eventAlarmTextEl.textContent=copy.text;eventAlarmEl.style.setProperty('--event-icon-image', getResolvedEventUiAsset(zone.eventType) ? `url("${getResolvedEventUiAsset(zone.eventType)}")` : 'none');eventAlarmEl.classList.remove('show');void eventAlarmEl.offsetWidth;eventAlarmEl.classList.add('show');}
   playQTEAppearAudio(); mobileHaptic(35); markPourProgressDirty();
 }
 
@@ -4281,6 +4337,7 @@ function executePendingPourEvent() {
       eventAlarmEl.dataset.event='pump';
       eventAlarmTitleEl.textContent=POUR_EVENT_COPY.pump.title;
       eventAlarmTextEl.textContent=POUR_EVENT_COPY.pump.text;
+      eventAlarmEl.style.setProperty('--event-icon-image', getResolvedEventUiAsset('pump') ? `url("${getResolvedEventUiAsset('pump')}")` : 'none');
       eventAlarmEl.classList.remove('show'); void eventAlarmEl.offsetWidth; eventAlarmEl.classList.add('show');
       setTimeout(()=>eventAlarmEl?.classList.remove('show'),1450);
     }
@@ -4943,6 +5000,7 @@ function depositDiskTowardLevel(zone, cx, cz, radius, targetLevel, amountM3) {
 
 
 
+  if (zone?.curedConcrete) return 0;
   if (!candidates.length || deficitVolume <= 1e-9) return 0;
 
 
@@ -4974,7 +5032,7 @@ function depositConcreteImpact(
   impactVZ = 0,
   impactSpeed = 0
 ) {
-  if (amountM3 <= 0) return false;
+  if (amountM3 <= 0 || zone?.curedConcrete) return false;
 
 
 
@@ -5465,7 +5523,10 @@ function relaxConcrete(dt) {
 // Falling blobs are short-lived stream visuals. Persistent volume lives either in a bay heightfield or in surface spill clumps.
 const BLOB_MAX = TOUCH_DEVICE ? 48 : 120;
 const blobGeom = new THREE.SphereGeometry(.15, 14, 10);
-const blobMat = new THREE.MeshStandardMaterial({ color: 0x707774, roughness: .40 });
+const blobMat = registerWetConcreteMaterial(new THREE.MeshStandardMaterial({ color: 0x707774, roughness: .30, metalness: 0.0 }), .010, .24);
+blobMat.map = wetConcreteAlbedo || blobMat.map;
+blobMat.normalMap = wetConcreteNormal || blobMat.normalMap;
+blobMat.bumpMap = wetConcreteHeight || blobMat.bumpMap;
 const blobs = [];
 const blobGroup = new THREE.Group();
 blobGroup.name = 'CONCRETE_PHYSICS_BLOBS';
@@ -5498,11 +5559,11 @@ let blobSpawnAccumulator = 0;
 // during gameplay, which keeps repeated pouring safe on iPhone Safari.
 const HOSE_SPLASH_MAX = TOUCH_DEVICE ? 24 : 56;
 const hoseSplashGeom = new THREE.SphereGeometry(.022, 6, 4);
-const hoseSplashMat = new THREE.MeshStandardMaterial({
+const hoseSplashMat = registerWetConcreteMaterial(new THREE.MeshStandardMaterial({
   color: 0x8b918d,
-  roughness: .38,
+  roughness: .30,
   metalness: 0,
-});
+}), .008, .22);
 const hoseSplashGroup = new THREE.Group();
 hoseSplashGroup.name = 'HOSE_SPLASH_PARTICLES';
 scene.add(hoseSplashGroup);
@@ -5530,8 +5591,10 @@ splashSpotGroup.name = 'HOSE_WET_SPOTS';
 scene.add(splashSpotGroup);
 const splashSpots = [];
 for (let i = 0; i < SPLASH_SPOT_MAX; i++) {
-  const material = new THREE.MeshBasicMaterial({
+  const material = registerWetConcreteMaterial(new THREE.MeshStandardMaterial({
     color: 0x424c48,
+    roughness: .34,
+    metalness: 0,
     transparent: true,
     opacity: 0,
     depthWrite: false,
@@ -5539,7 +5602,7 @@ for (let i = 0; i < SPLASH_SPOT_MAX; i++) {
     polygonOffset: true,
     polygonOffsetFactor: -3,
     polygonOffsetUnits: -3,
-  });
+  }), .004, .12);
   const mesh = new THREE.Mesh(splashSpotGeom, material);
   mesh.visible = false;
   mesh.raycast = () => {};
@@ -5917,7 +5980,7 @@ function setCylinderBetween(mesh, a, b) {
 // -----------------------------
 let rakeEquipped = false;
 let rakeHiddenBySpecial = false;
-let rakeOwned = false;
+let rakeOwned = loadRakeOwned();
 let rakeWorld = null;
 let rakePickupProxy = null;
 let rakePickupInteraction = null;
@@ -6270,6 +6333,17 @@ function setupSceneRake(root) {
   buildRakeViewModelFromScene(rakeSceneSource);
   rakeVM.visible = false;
   setHotbar3DModel('rake', rakeSceneSource);
+
+  if (rakeOwned) {
+    for (const source of rakeCandidateRoots) source.visible = false;
+    for (const it of rakePickupInteractions) {
+      const i = interactive.indexOf(it);
+      if (i >= 0) interactive.splice(i, 1);
+      if (it.obj?.parent) it.obj.parent.remove(it.obj);
+    }
+    rakePickupInteractions.length = 0;
+    rakePickupInteraction = null;
+  }
 }
 
 
@@ -6278,6 +6352,7 @@ function setupSceneRake(root) {
 function pickupRake(source = null) {
   if (rakeOwned) return;
   rakeOwned = true;
+  saveRakeOwned();
 
 
 
@@ -6497,7 +6572,7 @@ function levelConcreteAtPoint(px, pz, step, moveDirX, moveDirZ) {
   // B) CONTINUOUS ARCADE LEVELING INSIDE A BAY
   // ------------------------------------------------
   const zone = zoneAt(px, pz) || zoneNearEdge(px, pz, .62, activePourZone());
-  if (!zone) return didSomething;
+  if (!zone || zone.curedConcrete) return didSomething;
 
 
 
@@ -7072,6 +7147,10 @@ function initializeHose(anchorPos) {
   scene.add(hoseProxy);
   hoseProxy.position.copy(hosePoints[hosePoints.length - 1]);
   hoseTip.position.copy(hosePoints[hosePoints.length - 1]);
+  if (hosePoints.length > 1) {
+    hoseTmpDir.copy(hosePoints[hosePoints.length - 1]).sub(hosePoints[hosePoints.length - 2]);
+    if (hoseTmpDir.lengthSq() > 1e-8) hoseTip.quaternion.setFromUnitVectors(hoseTipAxis, hoseTmpDir.normalize());
+  }
 
 
 
@@ -7192,6 +7271,14 @@ function updatePhysicalHose(dt) {
   updateHoseTubeGeometry();
   if (hoseProxy) hoseProxy.position.copy(hosePoints[HOSE_SEGMENTS]);
   hoseTip.position.copy(hosePoints[HOSE_SEGMENTS]);
+  if (hosePoints.length > 1) {
+    hoseTmpDir.copy(hosePoints[HOSE_SEGMENTS]).sub(hosePoints[Math.max(0, HOSE_SEGMENTS - 1)]);
+    if (hoseTmpDir.lengthSq() > 1e-8) hoseTip.quaternion.setFromUnitVectors(hoseTipAxis, hoseTmpDir.normalize());
+  }
+  if (hosePoints.length > 1) {
+    hoseTmpDir.copy(hosePoints[HOSE_SEGMENTS]).sub(hosePoints[Math.max(0, HOSE_SEGMENTS - 1)]);
+    if (hoseTmpDir.lengthSq() > 1e-8) hoseTip.quaternion.setFromUnitVectors(hoseTipAxis, hoseTmpDir.normalize());
+  }
 
 
 
@@ -7521,6 +7608,7 @@ function resetPourJob() {
     zone.rakeTouched.fill(0);
     zone.levelPrompted = false;
     zone.readyNotified = false;
+    zone.curedConcrete = false;
     zone.hosePouredVolume = 0;
     zone.settledGrade = null;
     prepareZoneRandomEvent(zone, zoneIndex);
@@ -8833,6 +8921,13 @@ let money = savedInt('beton_money', 0);
 let cigarettes = savedInt('beton_cigarettes', 3);
 let energyCans = savedInt('beton_energy', 0);
 let beerCans = savedInt('beton_beer', 4);
+const RAKE_OWNED_STORAGE_KEY = 'beton_rake_owned_v5128';
+function loadRakeOwned() {
+  return localStorage.getItem(RAKE_OWNED_STORAGE_KEY) === '1';
+}
+function saveRakeOwned() {
+  try { localStorage.setItem(RAKE_OWNED_STORAGE_KEY, rakeOwned ? '1' : '0'); } catch (_) {}
+}
 
 
 
@@ -12122,7 +12217,7 @@ function followGripBetweenBones(holder, boneA, boneB, offset, rotOffset, orienta
 const PROP_DEFAULTS = {
   // v51.81: the anchor itself is now the physical grip centre.  The old can
   // offsets pushed the models roughly 11 cm away from the palm on the phone.
-  cigarette: { pos:[0,0,0], rot:[0.059999,-1.47,-0.139999] },
+  cigarette: { pos:[0,0,0], rot:[0.059999,1.671593,-0.139999] },
   lighter:   { pos:[-.010,.012,.028], rot:[0,Math.PI/2,-Math.PI/2] },
   energy:    { pos:[0,0,0], rot:[0.58435,-1.925996,0.824049] },
   beer:      { pos:[0,0,0], rot:[-0.516996,1.929938,1.121659] },
@@ -12282,6 +12377,14 @@ if (localStorage.getItem('beton_cigarette_grip_v5180') !== '1') {
   propConfigs.cigarette.euler.set(...d.rot);
   propConfigs.cigarette.quat.setFromEuler(propConfigs.cigarette.euler);
   localStorage.setItem('beton_cigarette_grip_v5180', '1');
+}
+if (localStorage.getItem('beton_cigarette_flip_v5128') !== '1') {
+  localStorage.removeItem('beton_prop_cigarette');
+  const d = PROP_DEFAULTS.cigarette;
+  propConfigs.cigarette.pos.set(...d.pos);
+  propConfigs.cigarette.euler.set(...d.rot);
+  propConfigs.cigarette.quat.setFromEuler(propConfigs.cigarette.euler);
+  localStorage.setItem('beton_cigarette_flip_v5128', '1');
 }
 
 
@@ -13414,6 +13517,7 @@ if (TOUCH_DEVICE) {
       debugPanel.textContent = buildMobileDebugReport();
     });
   }
+  preloadEventUiAssets();
   mobileDebugLog(`boot scene=${FINAL_SCENE_URL} safe=${MOBILE_SAFE_MODE}`);
   const moveStick=document.querySelector('#moveStick'), moveKnob=document.querySelector('#moveKnob');
   setupMobileStick(moveStick,moveKnob,(x,y,sprintStrength=0)=>{
@@ -14466,9 +14570,7 @@ function revealSettlementRank(grade, reward) {
   // The supplied material sheet is ordered A=diamond, B=gold, C=iron.
   // Our gameplay ladder is S/A/B, so replace those baked letters while
   // retaining the correct material artwork underneath.
-  settlementRankOverrideEl.textContent = ['S', 'A', 'B'].includes(safeGrade)
-    ? safeGrade
-    : '';
+  settlementRankOverrideEl.textContent = '';
   settlementRankCardEl.classList.remove('isVisible');
   void settlementRankCardEl.offsetWidth;
   settlementRankCardEl.classList.add('isVisible');
