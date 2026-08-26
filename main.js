@@ -6016,7 +6016,8 @@ function setCylinderBetween(mesh, a, b) {
 // -----------------------------
 let rakeEquipped = false;
 let rakeHiddenBySpecial = false;
-let rakeOwned = loadRakeOwned();
+let rakeOwned = false;
+try { rakeOwned = localStorage.getItem('beton_rake_owned_v5128') === '1'; } catch (_) {}
 let rakeWorld = null;
 let rakePickupProxy = null;
 let rakePickupInteraction = null;
