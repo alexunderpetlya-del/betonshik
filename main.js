@@ -6016,8 +6016,9 @@ function setCylinderBetween(mesh, a, b) {
 // -----------------------------
 let rakeEquipped = false;
 let rakeHiddenBySpecial = false;
+const RAKE_OWNED_STORAGE_KEY = 'beton_rake_owned_v5128';
 let rakeOwned = false;
-try { rakeOwned = localStorage.getItem('beton_rake_owned_v5128') === '1'; } catch (_) {}
+try { rakeOwned = localStorage.getItem(RAKE_OWNED_STORAGE_KEY) === '1'; } catch (_) {}
 let rakeWorld = null;
 let rakePickupProxy = null;
 let rakePickupInteraction = null;
@@ -8958,10 +8959,6 @@ let money = savedInt('beton_money', 0);
 let cigarettes = savedInt('beton_cigarettes', 3);
 let energyCans = savedInt('beton_energy', 0);
 let beerCans = savedInt('beton_beer', 4);
-const RAKE_OWNED_STORAGE_KEY = 'beton_rake_owned_v5128';
-function loadRakeOwned() {
-  return localStorage.getItem(RAKE_OWNED_STORAGE_KEY) === '1';
-}
 function saveRakeOwned() {
   try { localStorage.setItem(RAKE_OWNED_STORAGE_KEY, rakeOwned ? '1' : '0'); } catch (_) {}
 }
