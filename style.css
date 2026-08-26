@@ -5185,3 +5185,26 @@ body{position:relative!important;background:#000!important}
 
 /* v51.129 puzzle/wet concrete visual fixes */
 .betonPumpPuzzleSub{letter-spacing:.06em}
+
+
+/* v51.133 — landscape-safe pump puzzle, longer soft-fade alarms */
+#betonPumpPuzzle{box-sizing:border-box;padding:6px 10px;overflow:hidden}
+.betonPumpPuzzleWrap{width:min(720px,96vw);max-height:calc(100dvh - 12px);display:flex;flex-direction:column;align-items:center;justify-content:center}
+.betonPumpShell{width:min(680px,90vw,calc(100dvh - 108px));max-width:100%;flex:0 0 auto}
+.betonWireStatus{flex:0 0 auto;margin-top:4px}
+#eventAlarm.show{animation:eventAlarmLongFade 2.70s ease both!important}
+@keyframes eventAlarmLongFade{
+  0%{opacity:0;transform:translate(-50%,-22px) scale(.96)}
+  10%{opacity:1;transform:translate(-50%,0) scale(1)}
+  76%{opacity:1;transform:translate(-50%,0) scale(1)}
+  100%{opacity:0;transform:translate(-50%,5px) scale(.99)}
+}
+@media(pointer:coarse) and (orientation:landscape){
+  #betonPumpPuzzle{padding:4px 8px}
+  .betonPumpPuzzleWrap{width:min(96vw,720px);max-height:98dvh}
+  .betonPumpPuzzleTitle{font-size:clamp(14px,3.2vh,19px);margin-bottom:2px}
+  .betonPumpPuzzleSub{font-size:clamp(8px,1.8vh,10px);margin-bottom:4px}
+  .betonPumpShell{width:min(90vw,calc(100dvh - 82px),680px)}
+  .betonWireStatus{font-size:9px;min-height:12px;line-height:12px;margin-top:2px}
+  .betonEventClose{top:2px;right:2px;width:30px;height:30px;font-size:23px}
+}

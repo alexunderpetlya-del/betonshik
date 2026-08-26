@@ -2082,16 +2082,17 @@ hoseGroup.add(hoseOutline);
 
 
 
-const hoseTip = new THREE.Mesh(new THREE.CylinderGeometry(.07, .095, .20, 14, 1, false), hoseEndMat);
-hoseTip.geometry.translate(0, .10, 0);
+// v51.133: no artificial nozzle at the grab end — the physical hose tube itself is the visible end.
+const hoseTip = new THREE.Object3D();
+hoseTip.visible = false;
 const hoseCoupler = new THREE.Mesh(new THREE.CylinderGeometry(.125, .125, .32, 16, 1, false), hoseEndMat);
 hoseCoupler.name = 'PHYSICAL_HOSE_COUPLER';
 hoseCoupler.castShadow = true;
 hoseCoupler.frustumCulled = false;
 hoseGroup.add(hoseCoupler);
 hoseTip.name = 'PHYSICAL_HOSE_TIP';
-hoseTip.castShadow = true;
-hoseTip.frustumCulled = false;
+hoseTip.castShadow = false;
+hoseTip.frustumCulled = true;
 hoseGroup.add(hoseTip);
 
 
@@ -2553,7 +2554,7 @@ loadRebarTexture();
 
 const wetConcreteMat = new THREE.MeshStandardMaterial({
   color: 0xd9dddb,
-  roughness: .20,
+  roughness: .44,
   metalness: 0.0,
   side: THREE.DoubleSide,
   vertexColors: true,
@@ -2579,18 +2580,43 @@ let wetConcreteHeight = null;
 
 
 
+function wetConcreteMapForMaterial(source, material, slot) {
+  if (!source) return null;
+  const repeat = Number(material?.userData?.concreteTextureRepeat ?? 4);
+  if (!Number.isFinite(repeat) || Math.abs(repeat - 4) < 1e-4) return source;
+  const key = `_wetConcrete_${slot}`;
+  let tex = material.userData[key];
+  const stamp = `${source.uuid}:${repeat}`;
+  if (!tex || tex.userData?.wetConcreteStamp !== stamp) {
+    try { tex?.dispose?.(); } catch (_) {}
+    tex = source.clone();
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(repeat, repeat);
+    // For sub-1 repeats sample the centre of the texture instead of its corner.
+    const centredOffset = repeat < 1 ? (1 - repeat) * .5 : 0;
+    tex.offset.set(centredOffset, centredOffset);
+    tex.anisotropy = source.anisotropy;
+    tex.colorSpace = source.colorSpace;
+    tex.userData = { ...(tex.userData || {}), wetConcreteStamp: stamp };
+    tex.needsUpdate = true;
+    material.userData[key] = tex;
+  }
+  return tex;
+}
+
 function applyWetConcreteTexture(material) {
   if (!material) return;
-  if (wetConcreteAlbedo) material.map = wetConcreteAlbedo;
+  if (wetConcreteAlbedo) material.map = wetConcreteMapForMaterial(wetConcreteAlbedo, material, 'albedo');
   if (wetConcreteNormal) {
-    material.normalMap = wetConcreteNormal;
-    material.normalScale.setScalar(material.userData.concreteNormalScale ?? .34);
+    material.normalMap = wetConcreteMapForMaterial(wetConcreteNormal, material, 'normal');
+    material.normalScale.setScalar(material.userData.concreteNormalScale ?? .24);
   }
   if (wetConcreteHeight) {
     // Height drives micro-relief only. Real fill height remains controlled by
     // the gameplay heightfield, so visuals never alter collision or volume.
-    material.bumpMap = wetConcreteHeight;
-    material.bumpScale = material.userData.concreteBumpScale ?? .018;
+    material.bumpMap = wetConcreteMapForMaterial(wetConcreteHeight, material, 'height');
+    material.bumpScale = material.userData.concreteBumpScale ?? .014;
   }
   material.needsUpdate = true;
 }
@@ -2598,9 +2624,10 @@ function applyWetConcreteTexture(material) {
 
 
 
-function registerWetConcreteMaterial(material, bumpScale = .018, normalScale = .34) {
+function registerWetConcreteMaterial(material, bumpScale = .014, normalScale = .24, textureRepeat = 4) {
   material.userData.concreteBumpScale = bumpScale;
   material.userData.concreteNormalScale = normalScale;
+  material.userData.concreteTextureRepeat = textureRepeat;
   wetConcreteMaterials.add(material);
   applyWetConcreteTexture(material);
   return material;
@@ -2722,40 +2749,61 @@ function loadDryTexturesLazy() {
 async function applyCuredLook(zoneId) {
   const zone = POUR_ZONES.find(z => z.id === Number(zoneId));
   if (!zone?.surface || zone.surface.userData?.curedConcrete) return;
+
+  // Gameplay becomes solid immediately when the timer expires; texture IO is never allowed
+  // to postpone the actual curing state.
   zone.curedConcrete = true;
   if (zone.mobility?.fill) zone.mobility.fill(0);
   if (zone.velX?.fill) zone.velX.fill(0);
   if (zone.velZ?.fill) zone.velZ.fill(0);
   if (zone.flowDelta?.fill) zone.flowDelta.fill(0);
   if (zone.flowBudget?.fill) zone.flowBudget.fill(0);
-  const textures = await loadDryTexturesLazy();
+
   const source = zone.surface.material;
   let material = dryMaterials.get(zone.id);
   if (!material) {
     material = source?.clone?.() || new THREE.MeshStandardMaterial();
     material.name = `CURED_CONCRETE_ZONE_${zone.id}_MATERIAL`;
     material.vertexColors = false;
-    material.color?.set?.(0xd3d6d2);
-    material.metalness = 0; material.roughness = .73; material.roughnessMap = null;
-    material.transparent = false; material.opacity = 1; material.side = THREE.DoubleSide;
-    if (textures) {
-      material.map = textures.albedo; material.normalMap = textures.normal;
-      material.normalScale = new THREE.Vector2(.16,.16);
-      material.bumpMap = textures.height; material.bumpScale = .006;
-    } else { material.normalMap = null; material.bumpMap = null; }
+    material.color?.set?.(0xc4c8c3);
+    material.metalness = 0;
+    material.roughness = .90;
+    material.roughnessMap = null;
+    material.normalMap = null;
+    material.bumpMap = null;
+    material.transparent = false;
+    material.opacity = 1;
+    material.side = THREE.DoubleSide;
     material.userData = { ...(material.userData || {}), curedConcrete:true };
-    material.needsUpdate = true; dryMaterials.set(zone.id, material);
+    material.needsUpdate = true;
+    dryMaterials.set(zone.id, material);
   }
+
   zone.surface.material = material;
   zone.surface.userData = { ...(zone.surface.userData || {}), curedConcrete:true };
   for (const skirt of zone.surfaceSkirts || []) {
     if (!skirt?.material) continue;
     const side = skirt.material.clone();
     side.map = null; side.normalMap = null; side.bumpMap = null; side.roughnessMap = null;
-    side.color?.set?.(0x767b76); side.roughness = .86; side.metalness = 0; side.needsUpdate = true;
+    side.color?.set?.(0x707570); side.roughness = .92; side.metalness = 0; side.needsUpdate = true;
     skirt.material = side;
   }
-  dryState[zone.id] = { cured:true, cureAt:Date.now() }; saveDryState();
+
+  // Persist the hard state before any async texture request. Safari may suspend/kill the page.
+  dryState[zone.id] = { cured:true, cureAt:Date.now() };
+  saveDryState();
+  mobileDebugLog(`concrete cured: zone ${zone.id}`);
+
+  // Dry texture is optional visual polish. Matte fallback above is already visibly cured.
+  const textures = await loadDryTexturesLazy();
+  if (!textures || zone.surface?.material !== material) return;
+  material.map = textures.albedo;
+  material.normalMap = textures.normal;
+  material.normalScale = new THREE.Vector2(.10,.10);
+  material.bumpMap = textures.height;
+  material.bumpScale = .0035;
+  material.roughness = .86;
+  material.needsUpdate = true;
 }
 function armCure(zoneId, delay = DRY_AFTER_MS) {
   const id = Number(zoneId); if (!Number.isFinite(id) || id < 1 || dryTimers.has(id)) return;
@@ -2771,11 +2819,22 @@ function armCure(zoneId, delay = DRY_AFTER_MS) {
   dryTimers.set(id, timer);
 }
 function restoreCuredLooksAfterStart() {
+  let migrated = false;
   for (const zone of POUR_ZONES) {
-    const state = dryState[zone.id];
+    let state = dryState[zone.id];
+
+    // Old saves can have readyNotified=true but no cure record at all because curing was
+    // introduced later. Detect the completed physical surface, create a timer now, and
+    // never leave an old finished bay permanently wet.
+    if (!state && (zone.readyNotified || zone.settledGrade || zoneReadyForSequence(zone))) {
+      state = dryState[zone.id] = { cured:false, cureAt:Date.now() + DRY_AFTER_MS };
+      migrated = true;
+    }
+
     if (state?.cured) setTimeout(() => applyCuredLook(zone.id), 200 + zone.id * 80);
     else if (Number(state?.cureAt) > 0) armCure(zone.id);
   }
+  if (migrated) saveDryState();
 }
 
 function addPitBox(name, x, y, z, w, h, d, mat) {
@@ -3802,6 +3861,8 @@ const POUR_EVENT_COPY = {
   eye: { title: 'БЕТОН В ГЛАЗ', text: 'СМАХНИ БЕТОН' },
 };
 const EVENT_ALARM_SECONDS = 1.00;
+const EVENT_ALARM_VISUAL_MS = 2700;
+let eventAlarmHideTimer = 0;
 
 // v51.130: event assets are resolved before the first preload call.
 // v51.129 called preloadEventUiAssets() before these helpers existed, which
@@ -4334,16 +4395,33 @@ POUR_ZONES.forEach((zone,index)=>prepareZoneRandomEvent(zone,index));
 function cancelQTEWithoutPenalty(){if(!qteActive)return;qteActive=false;qteLayerEl.classList.remove('active');qteTargetEl.classList.remove('pulse','perfect','badclick');resetQTECooldown();}
 function dropHoseFromEvent(message){hoseHeld=false;playHoseSlipAudio();if(hoseInteraction)hoseInteraction.text=pouring?'E — взять шланг · БЕТОН ЛЬЁТСЯ!':'E — взять шланг';showToast(message,4.2);}
 
+function showEventAlarmVisual(eventType, copy, durationMs = EVENT_ALARM_VISUAL_MS) {
+  if (!eventAlarmEl) return;
+  if (eventAlarmHideTimer) clearTimeout(eventAlarmHideTimer);
+  eventAlarmEl.dataset.event = eventType;
+  eventAlarmTitleEl.textContent = copy.title;
+  eventAlarmTextEl.textContent = copy.text;
+  eventAlarmEl.style.setProperty('--event-icon-image', getResolvedEventUiAsset(eventType) ? `url("${getResolvedEventUiAsset(eventType)}")` : 'none');
+  eventAlarmEl.classList.remove('show');
+  void eventAlarmEl.offsetWidth;
+  eventAlarmEl.classList.add('show');
+  eventAlarmHideTimer = setTimeout(() => {
+    if (eventAlarmHideTimer) { clearTimeout(eventAlarmHideTimer); eventAlarmHideTimer = 0; }
+  eventAlarmEl?.classList.remove('show');
+    eventAlarmHideTimer = 0;
+  }, durationMs + 80);
+}
+
 function showPourEventAlarm(zone) {
   if (!zone || zone.eventTriggered || pendingPourEvent) return;
   zone.eventTriggered=true; pendingPourEvent={zone,type:zone.eventType}; eventAlarmTimer=EVENT_ALARM_SECONDS;
   const copy=POUR_EVENT_COPY[zone.eventType]||POUR_EVENT_COPY.pressure;
-  if(eventAlarmEl){eventAlarmEl.dataset.event=zone.eventType;eventAlarmTitleEl.textContent=copy.title;eventAlarmTextEl.textContent=copy.text;eventAlarmEl.style.setProperty('--event-icon-image', getResolvedEventUiAsset(zone.eventType) ? `url("${getResolvedEventUiAsset(zone.eventType)}")` : 'none');eventAlarmEl.classList.remove('show');void eventAlarmEl.offsetWidth;eventAlarmEl.classList.add('show');}
+  showEventAlarmVisual(zone.eventType, copy);
   playQTEAppearAudio(); mobileHaptic(35); markPourProgressDirty();
 }
 
 function executePendingPourEvent() {
-  const event=pendingPourEvent; pendingPourEvent=null; eventAlarmTimer=0; eventAlarmEl?.classList.remove('show'); pressurePulseMesh.visible=false;
+  const event=pendingPourEvent; pendingPourEvent=null; eventAlarmTimer=0; pressurePulseMesh.visible=false;
   if(!event)return;
   if(event.type==='pressure'){
     // Turning the pump off during the 1.0 s warning is a full counter.
@@ -4369,14 +4447,7 @@ function executePendingPourEvent() {
     cancelQTEWithoutPenalty(); pumpBroken=true; pouring=false;
     if(hoseInteraction)hoseInteraction.text='НАСОС СЛОМАН · ИДИ К ДЖОРДЖУ';
     // Pump alert is a notification AFTER the failure, not a reaction countdown.
-    if(eventAlarmEl){
-      eventAlarmEl.dataset.event='pump';
-      eventAlarmTitleEl.textContent=POUR_EVENT_COPY.pump.title;
-      eventAlarmTextEl.textContent=POUR_EVENT_COPY.pump.text;
-      eventAlarmEl.style.setProperty('--event-icon-image', getResolvedEventUiAsset('pump') ? `url("${getResolvedEventUiAsset('pump')}")` : 'none');
-      eventAlarmEl.classList.remove('show'); void eventAlarmEl.offsetWidth; eventAlarmEl.classList.add('show');
-      setTimeout(()=>eventAlarmEl?.classList.remove('show'),1450);
-    }
+    showEventAlarmVisual('pump', POUR_EVENT_COPY.pump);
     playQTEAppearAudio(); mobileHaptic(28);
     showToast('НАСОС ВСТАЛ · У ДЖОРДЖА ОТКРОЙ ЩИТОК',4.0); markPourProgressDirty(); return;
   }
@@ -4480,11 +4551,11 @@ const spillGeom = new THREE.SphereGeometry(
   0, Math.PI * .5
 );
 const spillMat = registerWetConcreteMaterial(new THREE.MeshStandardMaterial({
-  color: 0xa0a9a5,
-  roughness: .24,
+  color: 0x8d9691,
+  roughness: .46,
   metalness: 0.0,
   side: THREE.DoubleSide
-}), .022);
+}), .010, .18, .55);
 let spillSerial = 1;
 
 
@@ -5559,7 +5630,7 @@ function relaxConcrete(dt) {
 // Falling blobs are short-lived stream visuals. Persistent volume lives either in a bay heightfield or in surface spill clumps.
 const BLOB_MAX = TOUCH_DEVICE ? 48 : 120;
 const blobGeom = new THREE.SphereGeometry(.15, 14, 10);
-const blobMat = registerWetConcreteMaterial(new THREE.MeshStandardMaterial({ color: 0x707774, roughness: .30, metalness: 0.0 }), .010, .24);
+const blobMat = registerWetConcreteMaterial(new THREE.MeshStandardMaterial({ color: 0x747c78, roughness: .46, metalness: 0.0 }), .006, .16, .34);
 blobMat.map = wetConcreteAlbedo || blobMat.map;
 blobMat.normalMap = wetConcreteNormal || blobMat.normalMap;
 blobMat.bumpMap = wetConcreteHeight || blobMat.bumpMap;
@@ -5596,10 +5667,10 @@ let blobSpawnAccumulator = 0;
 const HOSE_SPLASH_MAX = TOUCH_DEVICE ? 24 : 56;
 const hoseSplashGeom = new THREE.SphereGeometry(.022, 6, 4);
 const hoseSplashMat = registerWetConcreteMaterial(new THREE.MeshStandardMaterial({
-  color: 0x8b918d,
-  roughness: .30,
+  color: 0x7f8783,
+  roughness: .48,
   metalness: 0,
-}), .008, .22);
+}), .004, .12, .16);
 const hoseSplashGroup = new THREE.Group();
 hoseSplashGroup.name = 'HOSE_SPLASH_PARTICLES';
 scene.add(hoseSplashGroup);
@@ -5638,7 +5709,7 @@ for (let i = 0; i < SPLASH_SPOT_MAX; i++) {
     polygonOffset: true,
     polygonOffsetFactor: -3,
     polygonOffsetUnits: -3,
-  }), .004, .12);
+  }), .003, .10, .20);
   const mesh = new THREE.Mesh(splashSpotGeom, material);
   mesh.visible = false;
   mesh.raycast = () => {};
@@ -13831,6 +13902,8 @@ function serialisePourZone(zone) {
     eventType: POUR_EVENT_TYPES.includes(zone.eventType) ? zone.eventType : null,
     eventThreshold: THREE.MathUtils.clamp(Number(zone.eventThreshold) || .4, .12, .88),
     eventTriggered: Boolean(zone.eventTriggered),
+    cureAt: Number(dryState[zone.id]?.cureAt) || 0,
+    cured: Boolean(dryState[zone.id]?.cured),
   };
 }
 
@@ -13954,6 +14027,12 @@ function loadPourProgress() {
       zone.eventType = POUR_EVENT_TYPES.includes(source.eventType) ? source.eventType : null;
       zone.eventThreshold = THREE.MathUtils.clamp(Number(source.eventThreshold) || .4, .12, .88);
       zone.eventTriggered = Boolean(source.eventTriggered);
+      if (!dryState[zone.id] && (source.cured || Number(source.cureAt) > 0)) {
+        dryState[zone.id] = {
+          cured: Boolean(source.cured),
+          cureAt: Number(source.cureAt) || Date.now()
+        };
+      }
       if (!zone.eventType) prepareZoneRandomEvent(zone, zoneIndex);
       zone.hosePouredVolume = zoneVolume(zone);
       zone.piles.length = 0;
@@ -14034,6 +14113,7 @@ function loadPourProgress() {
     outlinedPourZoneId = -1;
     activePourOutline.visible = false;
     refreshConcreteSurfaces();
+    saveDryState();
     return true;
   } catch (error) {
     console.warn('Pour progress restore failed', error);
