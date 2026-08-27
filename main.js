@@ -294,9 +294,9 @@ const renderer = new THREE.WebGLRenderer({
 // Mobile DPR is intentionally conservative and, once gameplay starts, can only move DOWN.
 // The previous governor raised/lowered DPR every 2.5 s. Each change reallocates Safari's
 // drawing buffers; repeated reallocations eventually evicted the WebGL context on iPhone.
-// 1.08 stays visibly sharper than the old emergency profile without building a GPU-memory sawtooth.
-const MOBILE_DPR_MIN = 0.84;
-const MOBILE_DPR_START = 1.08;
+// v51.136 starts at 1.20 DPR to reduce texture shimmer; the existing governor can only downshift, never oscillate upward.
+const MOBILE_DPR_MIN = 0.92;
+const MOBILE_DPR_START = 1.20;
 let mobileRenderScale = TOUCH_DEVICE ? Math.min(devicePixelRatio, MOBILE_DPR_START) : 1.0;
 let appliedMainRendererDpr = TOUCH_DEVICE
   ? Math.min(devicePixelRatio, mobileRenderScale)
@@ -1821,6 +1821,19 @@ function applyVegetationCutout(mat) {
 
 
 
+function stabilizeSceneTexture(tex, anisotropy = 4) {
+  if (!tex || !tex.isTexture) return;
+  tex.anisotropy = Math.min(anisotropy, renderer.capabilities.getMaxAnisotropy());
+  tex.magFilter = THREE.LinearFilter;
+  // Normal GLTF/JPG/PNG textures benefit heavily from trilinear mip filtering at grazing angles.
+  // Avoid forcing generated mipmaps on compressed/data/video textures that own their mip chain.
+  if (!tex.isCompressedTexture && !tex.isDataTexture && !tex.isVideoTexture) {
+    tex.generateMipmaps = true;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+  }
+  tex.needsUpdate = true;
+}
+
 function prepModel(root) {
   root.traverse(o => {
     if (!o.isMesh) return;
@@ -1851,9 +1864,9 @@ function prepModel(root) {
       if (mat.map) mat.map.colorSpace = THREE.SRGBColorSpace;
       // Keep road/floor textures sharp at grazing angles on phones. This costs
       // almost no extra memory and avoids the smeared, low-resolution look.
-      const maxSceneAnisotropy = Math.min(TOUCH_DEVICE ? 4 : 8, renderer.capabilities.getMaxAnisotropy());
+      const maxSceneAnisotropy = TOUCH_DEVICE ? 4 : 8;
       for (const tex of [mat.map, mat.normalMap, mat.roughnessMap, mat.metalnessMap]) {
-        if (tex) tex.anisotropy = maxSceneAnisotropy;
+        stabilizeSceneTexture(tex, maxSceneAnisotropy);
       }
 
 
@@ -1965,6 +1978,9 @@ hoseColorTex.wrapS = THREE.RepeatWrapping;
 hoseColorTex.wrapT = THREE.RepeatWrapping;
 hoseColorTex.repeat.set(1.0, 5.5);
 hoseColorTex.colorSpace = THREE.SRGBColorSpace;
+hoseColorTex.generateMipmaps = true;
+hoseColorTex.minFilter = THREE.LinearMipmapLinearFilter;
+hoseColorTex.magFilter = THREE.LinearFilter;
 hoseColorTex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
 
 
@@ -1974,6 +1990,9 @@ const hoseNormalTex = hoseTextureLoader.load('./assets/hose_rubber_corrugated_no
 hoseNormalTex.wrapS = THREE.RepeatWrapping;
 hoseNormalTex.wrapT = THREE.RepeatWrapping;
 hoseNormalTex.repeat.copy(hoseColorTex.repeat);
+hoseNormalTex.generateMipmaps = true;
+hoseNormalTex.minFilter = THREE.LinearMipmapLinearFilter;
+hoseNormalTex.magFilter = THREE.LinearFilter;
 hoseNormalTex.anisotropy = hoseColorTex.anisotropy;
 
 
@@ -2082,9 +2101,11 @@ hoseGroup.add(hoseOutline);
 
 
 
-// v51.133: no artificial nozzle at the grab end — the physical hose tube itself is the visible end.
+// v51.134: no artificial nozzle at the grab end — the physical hose tube itself is the visible end.
 const hoseTip = new THREE.Object3D();
 hoseTip.visible = false;
+const HOSE_DROP_SETTLE_SEGMENTS = 10;
+let hoseDropRelaxUntil = 0;
 const hoseCoupler = new THREE.Mesh(new THREE.CylinderGeometry(.125, .125, .32, 16, 1, false), hoseEndMat);
 hoseCoupler.name = 'PHYSICAL_HOSE_COUPLER';
 hoseCoupler.castShadow = true;
@@ -2481,7 +2502,11 @@ function createFallbackRebarTexture() {
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(6, 6);
+  texture.repeat.set(5, 5);
+  texture.generateMipmaps = true;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
   return texture;
 }
 
@@ -2533,9 +2558,11 @@ function loadRebarTexture(pathIndex = 0) {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.wrapS = THREE.RepeatWrapping;
     texture.wrapT = THREE.RepeatWrapping;
-    // Three repeats keep the bars readable instead of aliasing into the dark
-    // bottom at mobile resolution.
-    texture.repeat.set(6, 6);
+    // Slightly lower spatial frequency + trilinear mips stops the grid from moiré-shimmering on phones.
+    texture.repeat.set(TOUCH_DEVICE ? 5 : 6, TOUCH_DEVICE ? 5 : 6);
+    texture.generateMipmaps = true;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.magFilter = THREE.LinearFilter;
     texture.anisotropy = Math.min(TOUCH_DEVICE ? 4 : 8, renderer.capabilities.getMaxAnisotropy());
     rebarLayerMat.map = texture;
     rebarLayerMat.opacity = .98;
@@ -2554,7 +2581,7 @@ loadRebarTexture();
 
 const wetConcreteMat = new THREE.MeshStandardMaterial({
   color: 0xd9dddb,
-  roughness: .44,
+  roughness: .60,
   metalness: 0.0,
   side: THREE.DoubleSide,
   vertexColors: true,
@@ -2598,6 +2625,9 @@ function wetConcreteMapForMaterial(source, material, slot) {
     tex.offset.set(centredOffset, centredOffset);
     tex.anisotropy = source.anisotropy;
     tex.colorSpace = source.colorSpace;
+    tex.generateMipmaps = source.generateMipmaps;
+    tex.minFilter = source.minFilter;
+    tex.magFilter = THREE.LinearFilter;
     tex.userData = { ...(tex.userData || {}), wetConcreteStamp: stamp };
     tex.needsUpdate = true;
     material.userData[key] = tex;
@@ -2653,11 +2683,16 @@ function configureConcreteMap(texture, colorSpace) {
   texture.colorSpace = colorSpace;
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(4, 4);
+  const repeat = TOUCH_DEVICE ? 3.25 : 4;
+  texture.repeat.set(repeat, repeat);
+  texture.generateMipmaps = true;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
   texture.anisotropy = Math.min(
     TOUCH_DEVICE ? 4 : 8,
     renderer.capabilities.getMaxAnisotropy()
   );
+  texture.needsUpdate = true;
   return texture;
 }
 
@@ -4065,6 +4100,7 @@ function completeHoseControlQTE() {
   window.__betonEventResult = hoseControlFailures > 0 ? 'ЧАСТИЧНО' : 'ИДЕАЛЬНО';
   ensureHoseControlUi().classList.remove('show','pressed');
   hoseHeld = true;
+  hoseDropRelaxUntil = 0;
   if (hoseInteraction) hoseInteraction.text = pouring ? 'E — бросить шланг · БЕТОН ЛЬЁТСЯ' : 'E — бросить шланг';
   showToast('ШЛАНГ СНОВА ПОД КОНТРОЛЕМ', 1.8);
   mobileHaptic(24);
@@ -4189,62 +4225,89 @@ function finishEyeWipe(autoClear = false) {
 }
 
 const WIRE_COLORS = ['#ff5c57','#ff9c38','#f3d24e','#59d96d','#4ba6ff'];
-const WIRE_GRID_COLS = 9;
-const WIRE_GRID_ROWS = 9;
-const WIRE_PUZZLE_TEMPLATES = [
-  {
-    starts: [
-      { c: 0, r: 1, color: 0 },
-      { c: 0, r: 3, color: 1 },
-      { c: 0, r: 5, color: 2 },
-      { c: 0, r: 7, color: 3 },
-      { c: 2, r: 8, color: 4 },
-    ],
-    targets: [
-      { c: 8, r: 5, color: 0 },
-      { c: 8, r: 1, color: 1 },
-      { c: 8, r: 7, color: 2 },
-      { c: 8, r: 3, color: 3 },
-      { c: 6, r: 0, color: 4 },
-    ],
-    blocked: [[4,2],[4,4],[4,6]]
-  },
-  {
-    starts: [
-      { c: 0, r: 1, color: 0 },
-      { c: 1, r: 8, color: 1 },
-      { c: 0, r: 5, color: 2 },
-      { c: 0, r: 7, color: 3 },
-      { c: 2, r: 0, color: 4 },
-    ],
-    targets: [
-      { c: 8, r: 3, color: 0 },
-      { c: 8, r: 7, color: 1 },
-      { c: 8, r: 1, color: 2 },
-      { c: 6, r: 8, color: 3 },
-      { c: 8, r: 5, color: 4 },
-    ],
-    blocked: [[3,2],[5,2],[4,4],[3,6],[5,6]]
-  },
-  {
-    starts: [
-      { c: 0, r: 1, color: 0 },
-      { c: 0, r: 4, color: 1 },
-      { c: 0, r: 7, color: 2 },
-      { c: 2, r: 8, color: 3 },
-      { c: 2, r: 0, color: 4 },
-    ],
-    targets: [
-      { c: 8, r: 7, color: 0 },
-      { c: 8, r: 1, color: 1 },
-      { c: 8, r: 4, color: 2 },
-      { c: 6, r: 0, color: 3 },
-      { c: 6, r: 8, color: 4 },
-    ],
-    blocked: [[4,1],[4,3],[4,5],[4,7]]
-  },
-];
+const WIRE_GRID_COLS = 8;
+const WIRE_GRID_ROWS = 8;
+const WIRE_CELL_COUNT = WIRE_GRID_COLS * WIRE_GRID_ROWS;
 let wirePuzzle = null;
+let wirePuzzleSerial = 0;
+
+// Flow/Numberlink-style rules: pair equal terminals, do not overlap, and fill the
+// board. Boards are generated from a hidden Hamiltonian snake split into five
+// disjoint routes, so every generated puzzle is solvable. Only endpoints are
+// shown to the player; the hidden routes are not enforced.
+function makeWireSnake(horizontal = true) {
+  const cells = [];
+  if (horizontal) {
+    for (let r = 0; r < WIRE_GRID_ROWS; r++) {
+      if ((r & 1) === 0) for (let c = 0; c < WIRE_GRID_COLS; c++) cells.push({c,r});
+      else for (let c = WIRE_GRID_COLS - 1; c >= 0; c--) cells.push({c,r});
+    }
+  } else {
+    for (let c = 0; c < WIRE_GRID_COLS; c++) {
+      if ((c & 1) === 0) for (let r = 0; r < WIRE_GRID_ROWS; r++) cells.push({c,r});
+      else for (let r = WIRE_GRID_ROWS - 1; r >= 0; r--) cells.push({c,r});
+    }
+  }
+  return cells;
+}
+function wireRand(seed) {
+  let t = (seed >>> 0) || 1;
+  return () => {
+    t += 0x6D2B79F5;
+    let x = t;
+    x = Math.imul(x ^ (x >>> 15), x | 1);
+    x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function transformWireCell(p, flipX, flipY, transpose) {
+  let c = p.c, r = p.r;
+  if (transpose) [c,r] = [r,c];
+  if (flipX) c = WIRE_GRID_COLS - 1 - c;
+  if (flipY) r = WIRE_GRID_ROWS - 1 - r;
+  return {c,r};
+}
+function randomWireCuts(rand) {
+  // 64 cells split into five substantial routes. This keeps the puzzle quick
+  // enough for an event while still forcing several turns.
+  const min = 9;
+  const lengths = [min,min,min,min,min];
+  let left = WIRE_CELL_COUNT - min * lengths.length;
+  while (left-- > 0) {
+    const choices = lengths.map((v,i)=>({v,i})).filter(x=>x.v < 16);
+    const pick = choices[Math.floor(rand() * choices.length)] || {i:Math.floor(rand()*lengths.length)};
+    lengths[pick.i]++;
+  }
+  // Shuffle lengths to prevent the long route always occupying the same area.
+  for (let i = lengths.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [lengths[i], lengths[j]] = [lengths[j], lengths[i]];
+  }
+  return lengths;
+}
+function generateWirePuzzleBoard() {
+  const seed = (Date.now() ^ (++wirePuzzleSerial * 0x9e3779b1)) >>> 0;
+  const rand = wireRand(seed);
+  let snake = makeWireSnake(rand() < .5);
+  const flipX = rand() < .5, flipY = rand() < .5, transpose = rand() < .5;
+  snake = snake.map(p => transformWireCell(p, flipX, flipY, transpose));
+  if (rand() < .5) snake.reverse();
+  const lengths = randomWireCuts(rand);
+  const starts = [], targets = [], hiddenSolution = [];
+  let cursor = 0;
+  for (let color = 0; color < 5; color++) {
+    const path = snake.slice(cursor, cursor + lengths[color]);
+    cursor += lengths[color];
+    starts.push({...path[0], color});
+    targets.push({...path[path.length - 1], color});
+    hiddenSolution.push(path);
+  }
+  // Shuffle visible colour assignment while keeping each pair intact.
+  const perm = [0,1,2,3,4];
+  for (let i=perm.length-1;i>0;i--) { const j=Math.floor(rand()*(i+1)); [perm[i],perm[j]]=[perm[j],perm[i]]; }
+  const remap = arr => arr.map((p,i)=>({...p,color:perm[i]})).sort((a,b)=>a.color-b.color);
+  return { seed, starts:remap(starts), targets:remap(targets), hiddenSolution, lengths };
+}
 
 function ensurePumpPuzzleUi() {
   let root = document.querySelector('#betonPumpPuzzle');
@@ -4252,7 +4315,7 @@ function ensurePumpPuzzleUi() {
   root = document.createElement('div');
   root.id='betonPumpPuzzle';
   root.className='betonEventQte';
-  root.innerHTML='<div class="betonPumpPuzzleWrap"><button class="betonEventClose" type="button">×</button><div class="betonPumpPuzzleTitle">ЩИТОК НАСОСА</div><div class="betonPumpPuzzleSub">СОЕДИНИ 5 ПАР ПРОВОДОВ · НЕ ПЕРЕСЕКАЙ ЛИНИИ</div><div class="betonPumpShell"><canvas class="betonWireCanvas" width="720" height="720"></canvas></div><div class="betonWireStatus">ПРОВОДОВ: 0 / 5</div></div>';
+  root.innerHTML='<div class="betonPumpPuzzleWrap"><button class="betonEventClose" type="button">×</button><div class="betonPumpPuzzleTitle">ЩИТОК НАСОСА</div><div class="betonPumpPuzzleSub">СОЕДИНИ 5 ПАР · ПРОВОДА НЕ ПЕРЕСЕКАЮТСЯ · ЗАПОЛНИ ЩИТОК</div><div class="betonPumpShell"><canvas class="betonWireCanvas" width="720" height="720"></canvas></div><div class="betonWireStatus">ПРОВОДОВ: 0 / 5</div></div>';
   document.body.appendChild(root);
   root.querySelector('.betonEventClose')?.addEventListener('click',()=>closePumpWirePuzzle(false));
   const canvas=root.querySelector('canvas');
@@ -4266,15 +4329,27 @@ function wireCanvasPoint(e, canvas) {
   const r=canvas.getBoundingClientRect();
   return {x:(e.clientX-r.left)*canvas.width/r.width,y:(e.clientY-r.top)*canvas.height/r.height};
 }
-function wireCellFromPoint(p, canvas) {
-  const pad=34, cellW=(canvas.width-pad*2)/(WIRE_GRID_COLS-1), cellH=(canvas.height-pad*2)/(WIRE_GRID_ROWS-1);
-  const c=Math.round((p.x-pad)/cellW), r=Math.round((p.y-pad)/cellH);
+function resizePumpPuzzleCanvas() {
+  const root=document.querySelector('#betonPumpPuzzle'); if(!root)return;
+  const canvas=root.querySelector('canvas'), shell=root.querySelector('.betonPumpShell'); if(!canvas||!shell)return;
+  const rect=shell.getBoundingClientRect();
+  const cssSize=Math.max(280,Math.floor(Math.min(rect.width*.714,rect.height*.708)));
+  const dpr=Math.min(window.devicePixelRatio||1,2);
+  const px=Math.max(512,Math.floor(cssSize*dpr));
+  if(canvas.width!==px||canvas.height!==px){canvas.width=px;canvas.height=px;}
+}
+window.addEventListener('resize',resizePumpPuzzleCanvas,{passive:true});
+window.addEventListener('orientationchange',()=>setTimeout(resizePumpPuzzleCanvas,120),{passive:true});
+function wirePad(canvas){return Math.round(canvas.width*.052);}
+function wireCellFromPoint(p,canvas){
+  const pad=wirePad(canvas),cw=(canvas.width-pad*2)/(WIRE_GRID_COLS-1),ch=(canvas.height-pad*2)/(WIRE_GRID_ROWS-1);
+  const c=Math.round((p.x-pad)/cw),r=Math.round((p.y-pad)/ch);
   if(c<0||c>=WIRE_GRID_COLS||r<0||r>=WIRE_GRID_ROWS)return null;
   return {c,r};
 }
-function wirePointForCell(cell, canvas) {
-  const pad=34, cellW=(canvas.width-pad*2)/(WIRE_GRID_COLS-1), cellH=(canvas.height-pad*2)/(WIRE_GRID_ROWS-1);
-  return {x:pad+cell.c*cellW,y:pad+cell.r*cellH};
+function wirePointForCell(cell,canvas){
+  const pad=wirePad(canvas),cw=(canvas.width-pad*2)/(WIRE_GRID_COLS-1),ch=(canvas.height-pad*2)/(WIRE_GRID_ROWS-1);
+  return {x:pad+cell.c*cw,y:pad+cell.r*ch,cellW:cw,cellH:ch};
 }
 function wireKey(cell){return cell.c+','+cell.r;}
 function isWireEndpoint(cell){
@@ -4286,100 +4361,145 @@ function isWireEndpoint(cell){
   }
   return null;
 }
-function isWireCellBlocked(cell,color,path){
-  if(!wirePuzzle)return true;
-  if(wirePuzzle.blocked.has(wireKey(cell)))return true;
+function wireOppositeEndpoint(color,side){return side==='start'?wirePuzzle.targets[color]:wirePuzzle.starts[color];}
+function rebuildWireOccupancy(){
+  wirePuzzle.occupancy.clear();
+  for(const [color,path] of wirePuzzle.paths) for(const p of path) wirePuzzle.occupancy.set(wireKey(p),color);
+  if(wirePuzzle.drag) for(const p of wirePuzzle.drag.path) wirePuzzle.occupancy.set(wireKey(p),wirePuzzle.drag.color);
+}
+function breakWireAtCell(color,key){
+  const path=wirePuzzle.paths.get(color); if(!path)return false;
+  const idx=path.findIndex(p=>wireKey(p)===key); if(idx<0)return false;
+  wirePuzzle.paths.delete(color);
+  wirePuzzle.mistakes++;
+  mobileHaptic(5);
+  return true;
+}
+function canEnterWireCell(cell,color){
   const endpoint=isWireEndpoint(cell);
-  if(endpoint&&endpoint.color!==color)return true;
-  for(const [otherColor,otherPath] of wirePuzzle.paths){
-    if(otherColor===color)continue;
-    if(otherPath.some(p=>p.c===cell.c&&p.r===cell.r))return true;
-  }
-  return false;
+  if(endpoint&&endpoint.color!==color)return false;
+  const key=wireKey(cell);
+  const occupied=wirePuzzle.occupancy.get(key);
+  if(occupied==null||occupied===color)return true;
+  // Flow Free-like behaviour: dragging through an old pipe breaks that pipe
+  // instead of making the touch input feel dead.
+  breakWireAtCell(occupied,key);
+  rebuildWireOccupancy();
+  return true;
 }
-function openPumpWirePuzzle() {
-  if (!pumpBroken || pumpPuzzleOpen) return;
-  pumpPuzzleOpen=true; pouring=false;
-  const root=ensurePumpPuzzleUi(); root.classList.add('show');
-  const template = WIRE_PUZZLE_TEMPLATES[Math.floor(Math.random() * WIRE_PUZZLE_TEMPLATES.length)];
-  const starts = template.starts.map(p => ({ ...p }));
-  const targets = template.targets.map(p => ({ ...p }));
-  wirePuzzle={starts,targets,paths:new Map(),drag:null,count:starts.length,blocked:new Set((template.blocked || []).map(p=>p[0]+','+p[1])),mistakes:0};
-  drawPumpPuzzle();
-  if (document.pointerLockElement) document.exitPointerLock();
+function openPumpWirePuzzle(){
+  if(!pumpBroken||pumpPuzzleOpen)return;
+  pumpPuzzleOpen=true;pouring=false;
+  const root=ensurePumpPuzzleUi();root.classList.add('show');
+  const board=generateWirePuzzleBoard();
+  wirePuzzle={...board,paths:new Map(),drag:null,count:5,mistakes:0,occupancy:new Map()};
+  resizePumpPuzzleCanvas();drawPumpPuzzle();
+  if(document.pointerLockElement)document.exitPointerLock();
 }
-function closePumpWirePuzzle(success) {
-  if(success && wirePuzzle) window.__betonEventResult = wirePuzzle.mistakes===0 ? 'ИДЕАЛЬНО' : 'ЧАСТИЧНО';
-  pumpPuzzleOpen=false; wirePuzzle=null; ensurePumpPuzzleUi().classList.remove('show');
-  if (success) {
-    pumpBroken=false; markPourProgressDirty(); savePourProgress(true);
-    if (hoseInteraction) hoseInteraction.text=hoseHeld?'E — бросить шланг · ЛКМ — включить бетон':'E — взять шланг';
-    showToast('НАСОС ЗАПУЩЕН · ПОДАЧА ВОССТАНОВЛЕНА',3.0);
-    dialogueCloseEl?.click();
+function closePumpWirePuzzle(success){
+  if(success&&wirePuzzle)window.__betonEventResult=wirePuzzle.mistakes===0?'ИДЕАЛЬНО':'ЧАСТИЧНО';
+  pumpPuzzleOpen=false;wirePuzzle=null;ensurePumpPuzzleUi().classList.remove('show');
+  if(success){
+    pumpBroken=false;markPourProgressDirty();savePourProgress(true);
+    if(hoseInteraction)hoseInteraction.text=hoseHeld?'E — бросить шланг · ЛКМ — включить бетон':'E — взять шланг';
+    showToast('НАСОС ЗАПУЩЕН · ПОДАЧА ВОССТАНОВЛЕНА',3.0);dialogueCloseEl?.click();
   }
   requestMouseLock();
 }
-function drawPumpPuzzle(cursor=null) {
+function drawWireJoint(ctx,p,color,radius){
+  ctx.save();ctx.fillStyle='#090a0b';ctx.beginPath();ctx.arc(p.x,p.y,radius*1.23,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle=WIRE_COLORS[color];ctx.beginPath();ctx.arc(p.x,p.y,radius,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle='rgba(0,0,0,.25)';ctx.lineWidth=Math.max(2,radius*.34);ctx.beginPath();ctx.arc(p.x,p.y,radius*.78,0,Math.PI*2);ctx.stroke();
+  ctx.fillStyle='rgba(255,255,255,.22)';ctx.beginPath();ctx.arc(p.x-radius*.20,p.y-radius*.24,radius*.28,0,Math.PI*2);ctx.fill();ctx.restore();
+}
+function drawTexturedWirePath(ctx,path,color,alpha,canvas){
+  if(!path||path.length<2)return;
+  const pts=path.map(c=>wirePointForCell(c,canvas));
+  const outer=Math.max(13,canvas.width*.025),inner=outer*.62;
+  ctx.save();ctx.globalAlpha=alpha;ctx.lineJoin='round';ctx.lineCap='round';
+  // rubber shadow / metal grime edge
+  ctx.strokeStyle='rgba(5,6,7,.92)';ctx.lineWidth=outer;ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.stroke();
+  // coloured rubber body
+  ctx.strokeStyle=WIRE_COLORS[color];ctx.lineWidth=inner;ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.stroke();
+  // repeating dark ribbing gives the cable texture instead of a flat vector line
+  ctx.strokeStyle='rgba(15,13,12,.20)';ctx.lineWidth=inner*.92;ctx.setLineDash([Math.max(4,canvas.width*.006),Math.max(5,canvas.width*.008)]);ctx.lineDashOffset=-performance.now()*.008;
+  ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.stroke();ctx.setLineDash([]);
+  // wet/painted highlight
+  ctx.strokeStyle='rgba(255,255,255,.27)';ctx.lineWidth=Math.max(2,inner*.16);ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y-inner*.13):ctx.moveTo(p.x,p.y-inner*.13));ctx.stroke();
+  for(let i=1;i<pts.length-1;i++){
+    const a=path[i-1],b=path[i],c=path[i+1];
+    if(a.c!==c.c&&a.r!==c.r)drawWireJoint(ctx,pts[i],color,inner*.41);
+  }
+  ctx.restore();
+}
+function wireCoverage(){
+  const occupied=new Set();for(const path of wirePuzzle.paths.values())for(const p of path)occupied.add(wireKey(p));
+  return occupied.size/WIRE_CELL_COUNT;
+}
+function drawPumpPuzzle(cursor=null){
   if(!wirePuzzle)return;
-  const root=ensurePumpPuzzleUi(),canvas=root.querySelector('canvas'),ctx=canvas.getContext('2d');
+  const root=ensurePumpPuzzleUi(),canvas=root.querySelector('canvas');resizePumpPuzzleCanvas();const ctx=canvas.getContext('2d');
   ctx.clearRect(0,0,canvas.width,canvas.height);
-  const pad=34,cellW=(canvas.width-pad*2)/(WIRE_GRID_COLS-1),cellH=(canvas.height-pad*2)/(WIRE_GRID_ROWS-1);
-  ctx.strokeStyle='rgba(205,205,184,.10)';ctx.lineWidth=1.0;
-  for(let c=0;c<WIRE_GRID_COLS;c++){const x=pad+c*cellW;ctx.beginPath();ctx.moveTo(x,pad);ctx.lineTo(x,canvas.height-pad);ctx.stroke();}
-  for(let r=0;r<WIRE_GRID_ROWS;r++){const y=pad+r*cellH;ctx.beginPath();ctx.moveTo(pad,y);ctx.lineTo(canvas.width-pad,y);ctx.stroke();}
-  for(const key of wirePuzzle.blocked){const parts=key.split(',').map(Number),pt=wirePointForCell({c:parts[0],r:parts[1]},canvas);ctx.fillStyle='rgba(40,43,42,.96)';ctx.strokeStyle='#807b6e';ctx.lineWidth=2;ctx.beginPath();ctx.roundRect(pt.x-cellW*.31,pt.y-cellH*.31,cellW*.62,cellH*.62,8);ctx.fill();ctx.stroke();ctx.fillStyle='#4d4b45';ctx.beginPath();ctx.arc(pt.x,pt.y,6,0,Math.PI*2);ctx.fill();}
-  const drawPath=(path,color,alpha=1)=>{
-    if(!path||path.length<1)return;
-    const pts=path.map(c=>wirePointForCell(c,canvas));
-    ctx.globalAlpha=alpha;ctx.lineJoin='round';ctx.lineCap='round';
-    ctx.strokeStyle='rgba(0,0,0,.82)';ctx.lineWidth=16;ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.stroke();
-    ctx.strokeStyle=WIRE_COLORS[color];ctx.lineWidth=10;ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.stroke();
-    ctx.strokeStyle='rgba(255,255,255,.28)';ctx.lineWidth=2;ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y-2):ctx.moveTo(p.x,p.y-2));ctx.stroke();ctx.globalAlpha=1;
-  };
-  for(const [color,path] of wirePuzzle.paths)drawPath(path,color,1);
-  if(wirePuzzle.drag){const temp=[...wirePuzzle.drag.path]; if(cursor){const cell=wireCellFromPoint(cursor,canvas);if(cell&&!(temp[temp.length-1]?.c===cell.c&&temp[temp.length-1]?.r===cell.r))temp.push(cell);}drawPath(temp,wirePuzzle.drag.color,.78);}
-  for(let color=0;color<wirePuzzle.count;color++)for(const cell of [wirePuzzle.starts[color],wirePuzzle.targets[color]]){const p=wirePointForCell(cell,canvas);ctx.fillStyle='#111';ctx.beginPath();ctx.arc(p.x,p.y,22,0,Math.PI*2);ctx.fill();ctx.strokeStyle=WIRE_COLORS[color];ctx.lineWidth=10;ctx.stroke();ctx.fillStyle=WIRE_COLORS[color];ctx.beginPath();ctx.arc(p.x,p.y,8.5,0,Math.PI*2);ctx.fill();}
-  const status=root.querySelector('.betonWireStatus'); if(status)status.textContent='ПРОВОДОВ: '+wirePuzzle.paths.size+' / '+wirePuzzle.count+(wirePuzzle.mistakes?' · ОШИБОК: '+wirePuzzle.mistakes:'');
+  const pad=wirePad(canvas),cw=(canvas.width-pad*2)/(WIRE_GRID_COLS-1),ch=(canvas.height-pad*2)/(WIRE_GRID_ROWS-1);
+  ctx.strokeStyle='rgba(205,205,184,.075)';ctx.lineWidth=Math.max(1,canvas.width*.0017);
+  for(let c=0;c<WIRE_GRID_COLS;c++){const x=pad+c*cw;ctx.beginPath();ctx.moveTo(x,pad);ctx.lineTo(x,canvas.height-pad);ctx.stroke();}
+  for(let r=0;r<WIRE_GRID_ROWS;r++){const y=pad+r*ch;ctx.beginPath();ctx.moveTo(pad,y);ctx.lineTo(canvas.width-pad,y);ctx.stroke();}
+  for(const [color,path] of wirePuzzle.paths)drawTexturedWirePath(ctx,path,color,1,canvas);
+  if(wirePuzzle.drag){
+    const temp=wirePuzzle.drag.path.map(p=>({c:p.c,r:p.r}));
+    if(cursor){const cell=wireCellFromPoint(cursor,canvas);if(cell&&wireKey(temp[temp.length-1])!==wireKey(cell))temp.push(cell);}
+    drawTexturedWirePath(ctx,temp,wirePuzzle.drag.color,.82,canvas);
+  }
+  for(let color=0;color<wirePuzzle.count;color++)for(const cell of [wirePuzzle.starts[color],wirePuzzle.targets[color]]){
+    const p=wirePointForCell(cell,canvas),outer=Math.max(20,canvas.width*.030);
+    ctx.fillStyle='#111';ctx.beginPath();ctx.arc(p.x,p.y,outer,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle=WIRE_COLORS[color];ctx.lineWidth=Math.max(9,canvas.width*.013);ctx.stroke();
+    ctx.fillStyle=WIRE_COLORS[color];ctx.beginPath();ctx.arc(p.x,p.y,Math.max(8,canvas.width*.011),0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,.25)';ctx.beginPath();ctx.arc(p.x-outer*.18,p.y-outer*.22,outer*.18,0,Math.PI*2);ctx.fill();
+  }
+  const coverage=Math.round(wireCoverage()*100);
+  const status=root.querySelector('.betonWireStatus');if(status)status.textContent=`ПРОВОДОВ: ${wirePuzzle.paths.size}/5 · ЩИТОК: ${coverage}%`+(wirePuzzle.mistakes?` · ПЕРЕДЕЛОК: ${wirePuzzle.mistakes}`:'');
+}
+function pumpWireStartDrag(endpoint,cell,canvas){
+  if(wirePuzzle.paths.has(endpoint.color))wirePuzzle.paths.delete(endpoint.color);
+  wirePuzzle.drag={color:endpoint.color,startSide:endpoint.side,path:[{c:cell.c,r:cell.r}]};rebuildWireOccupancy();
+}
+function pumpWireApplyStep(drag,cell){
+  const path=drag.path,last=path[path.length-1];if(cell.c===last.c&&cell.r===last.r)return false;
+  const prior=path.findIndex(p=>p.c===cell.c&&p.r===cell.r);
+  if(prior>=0){path.length=prior+1;rebuildWireOccupancy();return true;}
+  if(Math.abs(cell.c-last.c)+Math.abs(cell.r-last.r)!==1)return false;
+  const endpoint=isWireEndpoint(cell),target=wireOppositeEndpoint(drag.color,drag.startSide);
+  if(endpoint&&endpoint.color===drag.color&&!(cell.c===target.c&&cell.r===target.r))return false;
+  if(!canEnterWireCell(cell,drag.color))return false;
+  path.push({c:cell.c,r:cell.r});rebuildWireOccupancy();return true;
 }
 function pumpWireDown(e){
-  if(!wirePuzzle)return;
-  const c=e.currentTarget,cell=wireCellFromPoint(wireCanvasPoint(e,c),c);
-  if(!cell)return;
-  const endpoint=isWireEndpoint(cell);
-  if(!endpoint||endpoint.side!=='start')return;
-  if(wirePuzzle.paths.has(endpoint.color))wirePuzzle.paths.delete(endpoint.color);
-  wirePuzzle.drag={color:endpoint.color,path:[{c:cell.c,r:cell.r}]};
-  try{c.setPointerCapture(e.pointerId)}catch(_){}
-  drawPumpPuzzle();e.preventDefault();
+  if(!wirePuzzle)return;const canvas=e.currentTarget,cell=wireCellFromPoint(wireCanvasPoint(e,canvas),canvas);if(!cell)return;
+  const endpoint=isWireEndpoint(cell);if(!endpoint)return;pumpWireStartDrag(endpoint,cell,canvas);
+  try{canvas.setPointerCapture(e.pointerId)}catch(_){}drawPumpPuzzle();e.preventDefault();
 }
 function pumpWireMove(e){
-  if(!wirePuzzle?.drag)return;
-  const c=e.currentTarget,cell=wireCellFromPoint(wireCanvasPoint(e,c),c);
-  if(!cell)return;
-  const path=wirePuzzle.drag.path,last=path[path.length-1];
-  if(cell.c===last.c&&cell.r===last.r)return;
-  const prev=path[path.length-2];
-  if(prev&&cell.c===prev.c&&cell.r===prev.r){path.pop();drawPumpPuzzle();e.preventDefault();return;}
-  if(Math.abs(cell.c-last.c)+Math.abs(cell.r-last.r)!==1)return;
-  if(path.some(p=>p.c===cell.c&&p.r===cell.r))return;
-  if(isWireCellBlocked(cell,wirePuzzle.drag.color,path))return;
-  path.push({c:cell.c,r:cell.r});drawPumpPuzzle();e.preventDefault();
+  if(!wirePuzzle?.drag)return;const canvas=e.currentTarget,point=wireCanvasPoint(e,canvas),cell=wireCellFromPoint(point,canvas);if(!cell){drawPumpPuzzle(point);return;}
+  let current=wirePuzzle.drag.path[wirePuzzle.drag.path.length-1],guard=0;
+  while((current.c!==cell.c||current.r!==cell.r)&&guard++<24){
+    const dc=cell.c-current.c,dr=cell.r-current.r;
+    const options=[];
+    if(Math.abs(dc)>=Math.abs(dr)&&dc!==0)options.push({c:current.c+Math.sign(dc),r:current.r});
+    if(dr!==0)options.push({c:current.c,r:current.r+Math.sign(dr)});
+    if(dc!==0&&!options.some(o=>o.c===current.c+Math.sign(dc)&&o.r===current.r))options.push({c:current.c+Math.sign(dc),r:current.r});
+    let progressed=false;for(const next of options){if(pumpWireApplyStep(wirePuzzle.drag,next)){progressed=true;break;}}
+    if(!progressed)break;current=wirePuzzle.drag.path[wirePuzzle.drag.path.length-1];
+  }
+  drawPumpPuzzle(point);e.preventDefault();
 }
 function pumpWireUp(e){
-  if(!wirePuzzle?.drag)return;
-  const c=e.currentTarget,drag=wirePuzzle.drag,cell=wireCellFromPoint(wireCanvasPoint(e,c),c);
-  const target=wirePuzzle.targets[drag.color];
-  const ok=cell&&cell.c===target.c&&cell.r===target.r&&drag.path.length>1;
-  if(ok){
-    if(!(drag.path[drag.path.length-1].c===target.c&&drag.path[drag.path.length-1].r===target.r)){
-      const last=drag.path[drag.path.length-1];
-      if(Math.abs(target.c-last.c)+Math.abs(target.r-last.r)===1)drag.path.push({c:target.c,r:target.r});
-      else { wirePuzzle.mistakes++; wirePuzzle.drag=null; drawPumpPuzzle(); e.preventDefault(); return; }
-    }
-    wirePuzzle.paths.set(drag.color,drag.path.map(p=>({c:p.c,r:p.r})));mobileHaptic(12);
-  }else wirePuzzle.mistakes++;
-  wirePuzzle.drag=null;drawPumpPuzzle();
-  if(wirePuzzle.paths.size>=wirePuzzle.count)setTimeout(()=>closePumpWirePuzzle(true),320);
+  if(!wirePuzzle?.drag)return;const canvas=e.currentTarget,drag=wirePuzzle.drag,target=wireOppositeEndpoint(drag.color,drag.startSide),last=drag.path[drag.path.length-1];
+  if((last.c!==target.c||last.r!==target.r)&&Math.abs(target.c-last.c)+Math.abs(target.r-last.r)===1)pumpWireApplyStep(drag,{c:target.c,r:target.r});
+  const final=drag.path[drag.path.length-1],ok=final.c===target.c&&final.r===target.r&&drag.path.length>1;
+  if(ok){wirePuzzle.paths.set(drag.color,drag.path.map(p=>({c:p.c,r:p.r})));mobileHaptic(16);}else if(drag.path.length>2){wirePuzzle.mistakes++;}
+  wirePuzzle.drag=null;rebuildWireOccupancy();drawPumpPuzzle();
+  if(wirePuzzle.paths.size===wirePuzzle.count&&wireCoverage()>=.999)setTimeout(()=>closePumpWirePuzzle(true),260);
   e.preventDefault();
 }
 function prepareZoneRandomEvent(zone, index = 0) {
@@ -4393,7 +4513,7 @@ function prepareZoneRandomEvent(zone, index = 0) {
 POUR_ZONES.forEach((zone,index)=>prepareZoneRandomEvent(zone,index));
 
 function cancelQTEWithoutPenalty(){if(!qteActive)return;qteActive=false;qteLayerEl.classList.remove('active');qteTargetEl.classList.remove('pulse','perfect','badclick');resetQTECooldown();}
-function dropHoseFromEvent(message){hoseHeld=false;playHoseSlipAudio();if(hoseInteraction)hoseInteraction.text=pouring?'E — взять шланг · БЕТОН ЛЬЁТСЯ!':'E — взять шланг';showToast(message,4.2);}
+function dropHoseFromEvent(message){hoseHeld=false;hoseDropRelaxUntil=performance.now()+1800;playHoseSlipAudio();if(hoseInteraction)hoseInteraction.text=pouring?'E — взять шланг · БЕТОН ЛЬЁТСЯ!':'E — взять шланг';showToast(message,4.2);}
 
 function showEventAlarmVisual(eventType, copy, durationMs = EVENT_ALARM_VISUAL_MS) {
   if (!eventAlarmEl) return;
@@ -4555,7 +4675,7 @@ const spillMat = registerWetConcreteMaterial(new THREE.MeshStandardMaterial({
   roughness: .46,
   metalness: 0.0,
   side: THREE.DoubleSide
-}), .010, .18, .55);
+}), .008, .13, 1.10);
 let spillSerial = 1;
 
 
@@ -5630,7 +5750,7 @@ function relaxConcrete(dt) {
 // Falling blobs are short-lived stream visuals. Persistent volume lives either in a bay heightfield or in surface spill clumps.
 const BLOB_MAX = TOUCH_DEVICE ? 48 : 120;
 const blobGeom = new THREE.SphereGeometry(.15, 14, 10);
-const blobMat = registerWetConcreteMaterial(new THREE.MeshStandardMaterial({ color: 0x747c78, roughness: .46, metalness: 0.0 }), .006, .16, .34);
+const blobMat = registerWetConcreteMaterial(new THREE.MeshStandardMaterial({ color: 0x747c78, roughness: .68, metalness: 0.0 }), .004, .10, 1.15);
 blobMat.map = wetConcreteAlbedo || blobMat.map;
 blobMat.normalMap = wetConcreteNormal || blobMat.normalMap;
 blobMat.bumpMap = wetConcreteHeight || blobMat.bumpMap;
@@ -5668,9 +5788,9 @@ const HOSE_SPLASH_MAX = TOUCH_DEVICE ? 24 : 56;
 const hoseSplashGeom = new THREE.SphereGeometry(.022, 6, 4);
 const hoseSplashMat = registerWetConcreteMaterial(new THREE.MeshStandardMaterial({
   color: 0x7f8783,
-  roughness: .48,
+  roughness: .72,
   metalness: 0,
-}), .004, .12, .16);
+}), .003, .08, 1.85);
 const hoseSplashGroup = new THREE.Group();
 hoseSplashGroup.name = 'HOSE_SPLASH_PARTICLES';
 scene.add(hoseSplashGroup);
@@ -5709,7 +5829,7 @@ for (let i = 0; i < SPLASH_SPOT_MAX; i++) {
     polygonOffset: true,
     polygonOffsetFactor: -3,
     polygonOffsetUnits: -3,
-  }), .003, .10, .20);
+  }), .0025, .07, 1.25);
   const mesh = new THREE.Mesh(splashSpotGeom, material);
   mesh.visible = false;
   mesh.raycast = () => {};
@@ -6552,6 +6672,7 @@ function setRakeEquipped(on) {
     rakeProximityScaleBlend = 0;
     if (hoseHeld) {
       hoseHeld = false;
+      hoseDropRelaxUntil = performance.now() + 1500;
       pouring = false;
       if (hoseInteraction) hoseInteraction.text = 'E — взять шланг';
       evaluateJob();
@@ -7344,6 +7465,28 @@ function constrainHose() {
     const p = hosePoints[i];
     const gy = hoseGroundY(p.x, p.z);
     if (p.y < gy) p.y = gy;
+  }
+
+  if (!hoseHeld) {
+    const dropBlend = performance.now() < hoseDropRelaxUntil ? 1 : .34;
+    for (let k = 0; k < HOSE_DROP_SETTLE_SEGMENTS; k++) {
+      const idx = HOSE_SEGMENTS - k;
+      if (idx <= 0) break;
+      const p = hosePoints[idx];
+      const prev = hosePoints[idx - 1];
+      const groundY = hoseGroundY(p.x, p.z);
+      p.y = THREE.MathUtils.lerp(p.y, groundY + 0.010 + k * 0.0025, (k === 0 ? .88 : .64) * dropBlend);
+      hosePrev[idx].lerp(p, 0.30);
+      if (k > 0) {
+        hoseTmpDir.copy(p).sub(prev);
+        hoseTmpDir.y = 0;
+        if (hoseTmpDir.lengthSq() > 1e-6) {
+          hoseTmpDir.normalize();
+          p.x = prev.x + hoseTmpDir.x * HOSE_REST;
+          p.z = prev.z + hoseTmpDir.z * HOSE_REST;
+        }
+      }
+    }
   }
 }
 function updatePhysicalHose(dt) {
@@ -8660,28 +8803,51 @@ function installMobileLiteStandins() {
   if (!MOBILE_LITE_MODE) return;
   const g = new THREE.Group();
   g.name = 'MOBILE_LITE_STANDINS';
-  const concrete = new THREE.MeshStandardMaterial({ color: 0x686b68, roughness: .95, metalness: 0 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x363a36, roughness: .91, metalness: .03 });
-  const yellow = new THREE.MeshStandardMaterial({ color: 0xb89b29, roughness: .74, metalness: .08 });
-  function boxFromBounds(name, min, max, mat, collide = false) {
-    const sx=max[0]-min[0], sy=max[1]-min[1], sz=max[2]-min[2];
-    const m=new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz),mat);
-    m.name=name;
-    m.position.set((min[0]+max[0])*.5,(min[1]+max[1])*.5,(min[2]+max[2])*.5);
-    m.receiveShadow=!TOUCH_DEVICE; m.castShadow=false;
-    g.add(m);
-    if (collide) addColliderXZ(name,min[0],max[0],min[2],max[2],min[1],max[1]);
+  const yellow = new THREE.MeshStandardMaterial({ color: 0xb89b29, roughness: .78, metalness: .04 });
+  function seeded01(seed) {
+    let x = seed | 0;
+    return () => { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; return ((x >>> 0) % 10000) / 10000; };
   }
-  // Four expensive architectural meshes lived in separate ~80 MiB buffers.
-  // Coarse boxes keep the silhouette/collision on phones while desktop keeps originals.
-  boxFromBounds('LITE_BUILDING_W',[-50.7836,-.4606,16.6819],[-25.3687,18.0502,42.4089],dark,true);
-  boxFromBounds('LITE_PANEL_1',[-47.7034,-.0657,-43.5718],[-37.6018,14.0456,-20.2886],concrete,true);
-  boxFromBounds('LITE_PANEL_2',[-44.5059,-.0657,-68.6756],[-23.4439,14.0456,-47.4757],concrete,true);
-  boxFromBounds('LITE_PANEL_3',[-24.2622,-.0657,27.5393],[-1.1231,14.0456,37.2842],concrete,true);
-  // Dense 500k-triangle shop display cans are replaced by one simple cabinet silhouette.
-  boxFromBounds('LITE_SHOP_DISPLAY',[27.2753,-.0118,-40.1696],[31.5199,2.1314,-39.5194],yellow,false);
+  function facadeTexture(seed, base='#777b78', accent='#9ca39f') {
+    const cv=document.createElement('canvas');cv.width=256;cv.height=256;const c=cv.getContext('2d');const rnd=seeded01(seed);
+    c.fillStyle=base;c.fillRect(0,0,256,256);
+    // concrete panel seams
+    c.strokeStyle='rgba(30,32,31,.28)';c.lineWidth=2;
+    for(let y=0;y<=256;y+=21){c.beginPath();c.moveTo(0,y);c.lineTo(256,y);c.stroke();}
+    for(let x=0;x<=256;x+=64){c.beginPath();c.moveTo(x,0);c.lineTo(x,256);c.stroke();}
+    // windows / balconies
+    for(let row=0;row<11;row++)for(let col=0;col<8;col++){
+      const x=8+col*31,y=6+row*22;
+      c.fillStyle=rnd()>.18?'#26353c':'#525851';c.fillRect(x,y,18,11);
+      c.fillStyle=rnd()>.80?'rgba(222,196,128,.50)':'rgba(151,177,187,.16)';c.fillRect(x+2,y+2,14,7);
+      c.fillStyle=accent;c.fillRect(x-2,y+12,22,2);
+    }
+    const tx=new THREE.CanvasTexture(cv);tx.colorSpace=THREE.SRGBColorSpace;tx.wrapS=THREE.RepeatWrapping;tx.wrapT=THREE.RepeatWrapping;tx.generateMipmaps=true;tx.minFilter=THREE.LinearMipmapLinearFilter;tx.magFilter=THREE.LinearFilter;tx.anisotropy=Math.min(4,renderer.capabilities.getMaxAnisotropy());return tx;
+  }
+  function buildingFromBounds(name,min,max,seed,opt={}){
+    const sx=max[0]-min[0],sy=max[1]-min[1],sz=max[2]-min[2];
+    const tex=facadeTexture(seed,opt.base||'#737875',opt.accent||'#8a918d');
+    tex.repeat.set(Math.max(1,sx/15),Math.max(1,sy/17));
+    const facade=new THREE.MeshStandardMaterial({map:tex,color:0xffffff,roughness:.96,metalness:0});
+    const side=new THREE.MeshStandardMaterial({color:opt.side||0x626663,roughness:.98,metalness:0});
+    const roof=new THREE.MeshStandardMaterial({color:0x414542,roughness:1,metalness:0});
+    // BoxGeometry material groups are ±X, ±Y, ±Z. Put façade texture on all vertical faces;
+    // repeated panel/window pattern reads as a real low-poly apartment block from distance.
+    const mats=[facade,facade,roof,side,facade,facade];
+    const mesh=new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz),mats);mesh.name=name;
+    mesh.position.set((min[0]+max[0])*.5,(min[1]+max[1])*.5,(min[2]+max[2])*.5);mesh.receiveShadow=false;mesh.castShadow=false;g.add(mesh);
+    addColliderXZ(name,min[0],max[0],min[2],max[2],min[1],max[1]);
+    // cheap roof lip breaks the unmistakable grey-box silhouette
+    const lip=new THREE.Mesh(new THREE.BoxGeometry(sx+.18,.14,sz+.18),roof);lip.position.set(mesh.position.x,max[1]+.06,mesh.position.z);g.add(lip);
+  }
+  buildingFromBounds('LITE_BUILDING_W',[-50.7836,-.4606,16.6819],[-25.3687,18.0502,42.4089],114,{base:'#555b59',side:0x444947});
+  buildingFromBounds('LITE_PANEL_1',[-47.7034,-.0657,-43.5718],[-37.6018,14.0456,-20.2886],211,{base:'#7c827f'});
+  buildingFromBounds('LITE_PANEL_2',[-44.5059,-.0657,-68.6756],[-23.4439,14.0456,-47.4757],337,{base:'#757b78'});
+  buildingFromBounds('LITE_PANEL_3',[-24.2622,-.0657,27.5393],[-1.1231,14.0456,37.2842],451,{base:'#777d7a'});
+  // Dense shop cans remain a cheap silhouette; they are not architecture.
+  const shop=new THREE.Mesh(new THREE.BoxGeometry(4.2446,2.1432,.6502),yellow);shop.name='LITE_SHOP_DISPLAY';shop.position.set(29.3976,1.0598,-39.8445);g.add(shop);
   scene.add(g);
-  mobileDebugLog('lite stand-ins installed: architecture + shop display');
+  mobileDebugLog('lite stand-ins installed: textured low-poly architecture + shop display');
 }
 
 loader.load(FINAL_SCENE_URL, gltf => {
@@ -12483,13 +12649,13 @@ if (localStorage.getItem('beton_cigarette_grip_v5180') !== '1') {
   propConfigs.cigarette.quat.setFromEuler(propConfigs.cigarette.euler);
   localStorage.setItem('beton_cigarette_grip_v5180', '1');
 }
-if (localStorage.getItem('beton_cigarette_flip_v5128') !== '1') {
+if (localStorage.getItem('beton_cigarette_flip_v5135') !== '1') {
   localStorage.removeItem('beton_prop_cigarette');
   const d = PROP_DEFAULTS.cigarette;
   propConfigs.cigarette.pos.set(...d.pos);
-  propConfigs.cigarette.euler.set(...d.rot);
+  propConfigs.cigarette.euler.set(d.rot[0], d.rot[1] + Math.PI, d.rot[2]);
   propConfigs.cigarette.quat.setFromEuler(propConfigs.cigarette.euler);
-  localStorage.setItem('beton_cigarette_flip_v5128', '1');
+  localStorage.setItem('beton_cigarette_flip_v5135', '1');
 }
 
 
@@ -15854,6 +16020,7 @@ function interact() {
       // Dropping the hose does not touch the pump switch. If it was ON, the
       // hose keeps pouring on the ground until recovered.
       hoseHeld = false;
+      hoseDropRelaxUntil = performance.now() + 1800;
       if (hoseInteraction) hoseInteraction.text = pouring
         ? 'E — взять шланг · БЕТОН ЛЬЁТСЯ!'
         : 'E — взять шланг';
@@ -15862,6 +16029,7 @@ function interact() {
         : 'Шланг отпущен.');
     } else {
       hoseHeld = true;
+      hoseDropRelaxUntil = 0;
       if (!hoseHeldAtLeastOnce) {
         hoseHeldAtLeastOnce = true;
         localStorage.setItem(HOSE_FIRST_PICKUP_KEY, '1');

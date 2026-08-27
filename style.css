@@ -5208,3 +5208,16 @@ body{position:relative!important;background:#000!important}
   .betonWireStatus{font-size:9px;min-height:12px;line-height:12px;margin-top:2px}
   .betonEventClose{top:2px;right:2px;width:30px;height:30px;font-size:23px}
 }
+
+
+/* v51.134 pump puzzle mobile fit */
+@media (max-width: 900px) {
+  #betonPumpPuzzle{padding: max(6px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom));}
+  .betonPumpPuzzleWrap{width:min(96vw, 760px);max-height:calc(100dvh - 12px);}
+  .betonPumpShell{width:min(94vw, calc(100dvh - 90px), 760px);}
+  .betonWireCanvas{left:14.05%;top:13.82%;width:71.45%;height:70.95%;}
+}
+
+/* v51.135 Flow-style pump routing */
+.betonWireStatus{font-variant-numeric:tabular-nums}
+@media(pointer:coarse){.betonPumpPuzzleSub{max-width:90vw;white-space:normal;line-height:1.15}}
