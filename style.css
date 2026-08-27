@@ -5221,3 +5221,17 @@ body{position:relative!important;background:#000!important}
 /* v51.135 Flow-style pump routing */
 .betonWireStatus{font-variant-numeric:tabular-nums}
 @media(pointer:coarse){.betonPumpPuzzleSub{max-width:90vw;white-space:normal;line-height:1.15}}
+
+
+/* v51.138 guaranteed cable-harness puzzle */
+.betonWireCanvas{cursor:crosshair}
+.betonWireStatus{font-variant-numeric:tabular-nums}
+@media(pointer:coarse){.betonPumpPuzzleSub{max-width:94vw;white-space:normal;line-height:1.12}}
+
+
+/* v51.139 — grid cable routing */
+.betonWireStatus{font-variant-numeric:tabular-nums;text-shadow:0 1px 10px rgba(0,0,0,.65)}
+.betonWireCanvas{touch-action:none;user-select:none;-webkit-user-select:none}
+
+
+/* v51.141: generated PNG wire textures wired into pump puzzle */

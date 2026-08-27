@@ -4231,21 +4231,40 @@ const WIRE_CELL_COUNT = WIRE_GRID_COLS * WIRE_GRID_ROWS;
 let wirePuzzle = null;
 let wirePuzzleSerial = 0;
 
-// Flow/Numberlink-style rules: pair equal terminals, do not overlap, and fill the
-// board. Boards are generated from a hidden Hamiltonian snake split into five
-// disjoint routes, so every generated puzzle is solvable. Only endpoints are
-// shown to the player; the hidden routes are not enforced.
+// v51.139 — grid cable-routing puzzle.
+// The grid is the constraint, not a hidden railroad: players may route any valid
+// orthogonal path they want. Generation happens from a solved set of five
+// node-disjoint routes, so every board is guaranteed to have at least one solution.
 function makeWireSnake(horizontal = true) {
   const cells = [];
   if (horizontal) {
     for (let r = 0; r < WIRE_GRID_ROWS; r++) {
-      if ((r & 1) === 0) for (let c = 0; c < WIRE_GRID_COLS; c++) cells.push({c,r});
-      else for (let c = WIRE_GRID_COLS - 1; c >= 0; c--) cells.push({c,r});
+      if ((r & 1) === 0) for (let c = 0; c < WIRE_GRID_COLS; c++) cells.push({ c, r });
+      else for (let c = WIRE_GRID_COLS - 1; c >= 0; c--) cells.push({ c, r });
     }
   } else {
     for (let c = 0; c < WIRE_GRID_COLS; c++) {
-      if ((c & 1) === 0) for (let r = 0; r < WIRE_GRID_ROWS; r++) cells.push({c,r});
-      else for (let r = WIRE_GRID_ROWS - 1; r >= 0; r--) cells.push({c,r});
+      if ((c & 1) === 0) for (let r = 0; r < WIRE_GRID_ROWS; r++) cells.push({ c, r });
+      else for (let r = WIRE_GRID_ROWS - 1; r >= 0; r--) cells.push({ c, r });
+    }
+  }
+  return cells;
+}
+function makeWireSpiral() {
+  const cells = [];
+  let left = 0, right = WIRE_GRID_COLS - 1, top = 0, bottom = WIRE_GRID_ROWS - 1;
+  while (left <= right && top <= bottom) {
+    for (let c = left; c <= right; c++) cells.push({ c, r: top });
+    top++;
+    for (let r = top; r <= bottom; r++) cells.push({ c: right, r });
+    right--;
+    if (top <= bottom) {
+      for (let c = right; c >= left; c--) cells.push({ c, r: bottom });
+      bottom--;
+    }
+    if (left <= right) {
+      for (let r = bottom; r >= top; r--) cells.push({ c: left, r });
+      left++;
     }
   }
   return cells;
@@ -4262,23 +4281,22 @@ function wireRand(seed) {
 }
 function transformWireCell(p, flipX, flipY, transpose) {
   let c = p.c, r = p.r;
-  if (transpose) [c,r] = [r,c];
+  if (transpose) [c, r] = [r, c];
   if (flipX) c = WIRE_GRID_COLS - 1 - c;
   if (flipY) r = WIRE_GRID_ROWS - 1 - r;
-  return {c,r};
+  return { c, r };
 }
 function randomWireCuts(rand) {
-  // 64 cells split into five substantial routes. This keeps the puzzle quick
-  // enough for an event while still forcing several turns.
+  // Keep every guaranteed route long enough to require decisions, but short
+  // enough that the event remains a 10–25 second interruption rather than a level.
   const min = 9;
-  const lengths = [min,min,min,min,min];
+  const lengths = [min, min, min, min, min];
   let left = WIRE_CELL_COUNT - min * lengths.length;
   while (left-- > 0) {
-    const choices = lengths.map((v,i)=>({v,i})).filter(x=>x.v < 16);
-    const pick = choices[Math.floor(rand() * choices.length)] || {i:Math.floor(rand()*lengths.length)};
+    const choices = lengths.map((v, i) => ({ v, i })).filter(x => x.v < 16);
+    const pick = choices[Math.floor(rand() * choices.length)] || { i: Math.floor(rand() * lengths.length) };
     lengths[pick.i]++;
   }
-  // Shuffle lengths to prevent the long route always occupying the same area.
   for (let i = lengths.length - 1; i > 0; i--) {
     const j = Math.floor(rand() * (i + 1));
     [lengths[i], lengths[j]] = [lengths[j], lengths[i]];
@@ -4288,218 +4306,435 @@ function randomWireCuts(rand) {
 function generateWirePuzzleBoard() {
   const seed = (Date.now() ^ (++wirePuzzleSerial * 0x9e3779b1)) >>> 0;
   const rand = wireRand(seed);
-  let snake = makeWireSnake(rand() < .5);
+  let solved = rand() < .45 ? makeWireSpiral() : makeWireSnake(rand() < .5);
   const flipX = rand() < .5, flipY = rand() < .5, transpose = rand() < .5;
-  snake = snake.map(p => transformWireCell(p, flipX, flipY, transpose));
-  if (rand() < .5) snake.reverse();
+  solved = solved.map(p => transformWireCell(p, flipX, flipY, transpose));
+  if (rand() < .5) solved.reverse();
+
   const lengths = randomWireCuts(rand);
-  const starts = [], targets = [], hiddenSolution = [];
+  const raw = [];
   let cursor = 0;
-  for (let color = 0; color < 5; color++) {
-    const path = snake.slice(cursor, cursor + lengths[color]);
-    cursor += lengths[color];
-    starts.push({...path[0], color});
-    targets.push({...path[path.length - 1], color});
-    hiddenSolution.push(path);
+  for (let i = 0; i < 5; i++) {
+    const path = solved.slice(cursor, cursor + lengths[i]).map(p => ({ c: p.c, r: p.r }));
+    cursor += lengths[i];
+    raw.push(path);
   }
-  // Shuffle visible colour assignment while keeping each pair intact.
+
   const perm = [0,1,2,3,4];
-  for (let i=perm.length-1;i>0;i--) { const j=Math.floor(rand()*(i+1)); [perm[i],perm[j]]=[perm[j],perm[i]]; }
-  const remap = arr => arr.map((p,i)=>({...p,color:perm[i]})).sort((a,b)=>a.color-b.color);
-  return { seed, starts:remap(starts), targets:remap(targets), hiddenSolution, lengths };
+  for (let i = perm.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [perm[i], perm[j]] = [perm[j], perm[i]];
+  }
+  const starts = new Array(5), targets = new Array(5), hiddenSolution = new Array(5);
+  for (let i = 0; i < 5; i++) {
+    const color = perm[i], path = raw[i];
+    starts[color] = { ...path[0], color };
+    targets[color] = { ...path[path.length - 1], color };
+    hiddenSolution[color] = path;
+  }
+  return { seed, starts, targets, hiddenSolution };
 }
 
 function ensurePumpPuzzleUi() {
   let root = document.querySelector('#betonPumpPuzzle');
   if (root) return root;
   root = document.createElement('div');
-  root.id='betonPumpPuzzle';
-  root.className='betonEventQte';
-  root.innerHTML='<div class="betonPumpPuzzleWrap"><button class="betonEventClose" type="button">×</button><div class="betonPumpPuzzleTitle">ЩИТОК НАСОСА</div><div class="betonPumpPuzzleSub">СОЕДИНИ 5 ПАР · ПРОВОДА НЕ ПЕРЕСЕКАЮТСЯ · ЗАПОЛНИ ЩИТОК</div><div class="betonPumpShell"><canvas class="betonWireCanvas" width="720" height="720"></canvas></div><div class="betonWireStatus">ПРОВОДОВ: 0 / 5</div></div>';
+  root.id = 'betonPumpPuzzle';
+  root.className = 'betonEventQte';
+  root.innerHTML = '<div class="betonPumpPuzzleWrap"><button class="betonEventClose" type="button">×</button><div class="betonPumpPuzzleTitle">ЩИТОК НАСОСА</div><div class="betonPumpPuzzleSub">СОЕДИНИ 5 ПАР ПО СЕТКЕ · ПРОВОДА НЕ ПЕРЕСЕКАЮТСЯ</div><div class="betonPumpShell"><canvas class="betonWireCanvas" width="720" height="720"></canvas></div><div class="betonWireStatus">ПРОВОДОВ: 0 / 5</div></div>';
   document.body.appendChild(root);
-  root.querySelector('.betonEventClose')?.addEventListener('click',()=>closePumpWirePuzzle(false));
-  const canvas=root.querySelector('canvas');
-  canvas.addEventListener('pointerdown',pumpWireDown,{passive:false});
-  canvas.addEventListener('pointermove',pumpWireMove,{passive:false});
-  canvas.addEventListener('pointerup',pumpWireUp,{passive:false});
-  canvas.addEventListener('pointercancel',pumpWireUp,{passive:false});
+  root.querySelector('.betonEventClose')?.addEventListener('click', () => closePumpWirePuzzle(false));
+  const canvas = root.querySelector('canvas');
+  canvas.addEventListener('pointerdown', pumpWireDown, { passive:false });
+  canvas.addEventListener('pointermove', pumpWireMove, { passive:false });
+  canvas.addEventListener('pointerup', pumpWireUp, { passive:false });
+  canvas.addEventListener('pointercancel', pumpWireUp, { passive:false });
   return root;
 }
 function wireCanvasPoint(e, canvas) {
-  const r=canvas.getBoundingClientRect();
-  return {x:(e.clientX-r.left)*canvas.width/r.width,y:(e.clientY-r.top)*canvas.height/r.height};
+  const r = canvas.getBoundingClientRect();
+  return { x:(e.clientX-r.left)*canvas.width/r.width, y:(e.clientY-r.top)*canvas.height/r.height };
 }
 function resizePumpPuzzleCanvas() {
-  const root=document.querySelector('#betonPumpPuzzle'); if(!root)return;
-  const canvas=root.querySelector('canvas'), shell=root.querySelector('.betonPumpShell'); if(!canvas||!shell)return;
-  const rect=shell.getBoundingClientRect();
-  const cssSize=Math.max(280,Math.floor(Math.min(rect.width*.714,rect.height*.708)));
-  const dpr=Math.min(window.devicePixelRatio||1,2);
-  const px=Math.max(512,Math.floor(cssSize*dpr));
-  if(canvas.width!==px||canvas.height!==px){canvas.width=px;canvas.height=px;}
+  const root = document.querySelector('#betonPumpPuzzle'); if (!root) return;
+  const canvas = root.querySelector('canvas'), shell = root.querySelector('.betonPumpShell'); if (!canvas || !shell) return;
+  const rect = shell.getBoundingClientRect();
+  const cssSize = Math.max(280, Math.floor(Math.min(rect.width * .714, rect.height * .708)));
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const px = Math.max(512, Math.floor(cssSize * dpr));
+  if (canvas.width !== px || canvas.height !== px) { canvas.width = px; canvas.height = px; }
 }
-window.addEventListener('resize',resizePumpPuzzleCanvas,{passive:true});
-window.addEventListener('orientationchange',()=>setTimeout(resizePumpPuzzleCanvas,120),{passive:true});
-function wirePad(canvas){return Math.round(canvas.width*.052);}
-function wireCellFromPoint(p,canvas){
-  const pad=wirePad(canvas),cw=(canvas.width-pad*2)/(WIRE_GRID_COLS-1),ch=(canvas.height-pad*2)/(WIRE_GRID_ROWS-1);
-  const c=Math.round((p.x-pad)/cw),r=Math.round((p.y-pad)/ch);
-  if(c<0||c>=WIRE_GRID_COLS||r<0||r>=WIRE_GRID_ROWS)return null;
-  return {c,r};
+window.addEventListener('resize', resizePumpPuzzleCanvas, { passive:true });
+window.addEventListener('orientationchange', () => setTimeout(resizePumpPuzzleCanvas, 120), { passive:true });
+function wirePad(canvas) { return Math.round(canvas.width * .052); }
+function wireCellFromPoint(p, canvas) {
+  const pad = wirePad(canvas), cw = (canvas.width-pad*2)/(WIRE_GRID_COLS-1), ch = (canvas.height-pad*2)/(WIRE_GRID_ROWS-1);
+  const c = Math.round((p.x-pad)/cw), r = Math.round((p.y-pad)/ch);
+  if (c < 0 || c >= WIRE_GRID_COLS || r < 0 || r >= WIRE_GRID_ROWS) return null;
+  return { c, r };
 }
-function wirePointForCell(cell,canvas){
-  const pad=wirePad(canvas),cw=(canvas.width-pad*2)/(WIRE_GRID_COLS-1),ch=(canvas.height-pad*2)/(WIRE_GRID_ROWS-1);
-  return {x:pad+cell.c*cw,y:pad+cell.r*ch,cellW:cw,cellH:ch};
+function wirePointForCell(cell, canvas) {
+  const pad = wirePad(canvas), cw = (canvas.width-pad*2)/(WIRE_GRID_COLS-1), ch = (canvas.height-pad*2)/(WIRE_GRID_ROWS-1);
+  return { x:pad+cell.c*cw, y:pad+cell.r*ch, cellW:cw, cellH:ch };
 }
-function wireKey(cell){return cell.c+','+cell.r;}
-function isWireEndpoint(cell){
-  if(!wirePuzzle)return null;
-  for(let color=0;color<wirePuzzle.count;color++){
-    const s=wirePuzzle.starts[color],t=wirePuzzle.targets[color];
-    if(cell.c===s.c&&cell.r===s.r)return {color,side:'start'};
-    if(cell.c===t.c&&cell.r===t.r)return {color,side:'target'};
+function wireCellHitRadius(canvas) {
+  const a = wirePointForCell({ c:0, r:0 }, canvas), b = wirePointForCell({ c:1, r:0 }, canvas);
+  return Math.max(24, Math.abs(b.x-a.x) * .54);
+}
+function wireKey(cell) { return `${cell.c},${cell.r}`; }
+function sameWireCell(a,b) { return !!a && !!b && a.c === b.c && a.r === b.r; }
+function wireManhattan(a,b) { return Math.abs(a.c-b.c) + Math.abs(a.r-b.r); }
+function isWireEndpoint(cell) {
+  if (!wirePuzzle || !cell) return null;
+  for (let color = 0; color < wirePuzzle.count; color++) {
+    const s = wirePuzzle.starts[color], t = wirePuzzle.targets[color];
+    if (sameWireCell(cell,s)) return { color, side:'start' };
+    if (sameWireCell(cell,t)) return { color, side:'target' };
   }
   return null;
 }
-function wireOppositeEndpoint(color,side){return side==='start'?wirePuzzle.targets[color]:wirePuzzle.starts[color];}
-function rebuildWireOccupancy(){
+function wireOppositeEndpoint(color, side) { return side === 'start' ? wirePuzzle.targets[color] : wirePuzzle.starts[color]; }
+function wireCable(color) { return wirePuzzle?.cables?.[color] || null; }
+function rebuildWireOccupancy(ignoreColor = -1) {
   wirePuzzle.occupancy.clear();
-  for(const [color,path] of wirePuzzle.paths) for(const p of path) wirePuzzle.occupancy.set(wireKey(p),color);
-  if(wirePuzzle.drag) for(const p of wirePuzzle.drag.path) wirePuzzle.occupancy.set(wireKey(p),wirePuzzle.drag.color);
+  for (const cable of wirePuzzle.cables) {
+    if (!cable || cable.color === ignoreColor) continue;
+    for (const p of cable.path) wirePuzzle.occupancy.set(wireKey(p), cable.color);
+  }
 }
-function breakWireAtCell(color,key){
-  const path=wirePuzzle.paths.get(color); if(!path)return false;
-  const idx=path.findIndex(p=>wireKey(p)===key); if(idx<0)return false;
-  wirePuzzle.paths.delete(color);
-  wirePuzzle.mistakes++;
-  mobileHaptic(5);
-  return true;
+function wireCellBlockedForColor(cell, color) {
+  if (!wirePuzzle || !cell) return true;
+  const endpoint = isWireEndpoint(cell);
+  if (endpoint && endpoint.color !== color) return true;
+  const occupied = wirePuzzle.occupancy.get(wireKey(cell));
+  return occupied != null && occupied !== color;
 }
-function canEnterWireCell(cell,color){
-  const endpoint=isWireEndpoint(cell);
-  if(endpoint&&endpoint.color!==color)return false;
-  const key=wireKey(cell);
-  const occupied=wirePuzzle.occupancy.get(key);
-  if(occupied==null||occupied===color)return true;
-  // Flow Free-like behaviour: dragging through an old pipe breaks that pipe
-  // instead of making the touch input feel dead.
-  breakWireAtCell(occupied,key);
+function wireSetBlockedPulse(cell) {
+  if (!wirePuzzle || !cell) return;
+  wirePuzzle.blockedPulse = { cell:{ c:cell.c, r:cell.r }, until:performance.now()+260 };
+  if (performance.now() - (wirePuzzle.lastBlockedHapticAt || 0) > 180) {
+    wirePuzzle.lastBlockedHapticAt = performance.now();
+    mobileHaptic(6);
+  }
+}
+function wireHiddenRouteForDrag(drag) {
+  let route = wirePuzzle?.hiddenSolution?.[drag.color];
+  if (!route) return [];
+  route = route.map(p => ({ c:p.c, r:p.r }));
+  const first = route[0], anchor = drag.path[0];
+  if (!sameWireCell(first, anchor)) route.reverse();
+  return route;
+}
+function openPumpWirePuzzle() {
+  if (!pumpBroken || pumpPuzzleOpen) return;
+  pumpPuzzleOpen = true; pouring = false;
+  const root = ensurePumpPuzzleUi(); root.classList.add('show');
+  const board = generateWirePuzzleBoard();
+  wirePuzzle = {
+    ...board,
+    count:5,
+    cables:Array.from({ length:5 }, (_,color) => ({ color, path:[], startSide:null, complete:false })),
+    occupancy:new Map(), drag:null, mistakes:0, blockedPulse:null,
+    openedAt:performance.now(), lastInputAt:performance.now(), lastProgressAt:performance.now(), lastBlockedHapticAt:0
+  };
   rebuildWireOccupancy();
-  return true;
+  resizePumpPuzzleCanvas();
+  drawPumpPuzzle();
+  if (document.pointerLockElement) document.exitPointerLock();
 }
-function openPumpWirePuzzle(){
-  if(!pumpBroken||pumpPuzzleOpen)return;
-  pumpPuzzleOpen=true;pouring=false;
-  const root=ensurePumpPuzzleUi();root.classList.add('show');
-  const board=generateWirePuzzleBoard();
-  wirePuzzle={...board,paths:new Map(),drag:null,count:5,mistakes:0,occupancy:new Map()};
-  resizePumpPuzzleCanvas();drawPumpPuzzle();
-  if(document.pointerLockElement)document.exitPointerLock();
-}
-function closePumpWirePuzzle(success){
-  if(success&&wirePuzzle)window.__betonEventResult=wirePuzzle.mistakes===0?'ИДЕАЛЬНО':'ЧАСТИЧНО';
-  pumpPuzzleOpen=false;wirePuzzle=null;ensurePumpPuzzleUi().classList.remove('show');
-  if(success){
-    pumpBroken=false;markPourProgressDirty();savePourProgress(true);
-    if(hoseInteraction)hoseInteraction.text=hoseHeld?'E — бросить шланг · ЛКМ — включить бетон':'E — взять шланг';
-    showToast('НАСОС ЗАПУЩЕН · ПОДАЧА ВОССТАНОВЛЕНА',3.0);dialogueCloseEl?.click();
+function closePumpWirePuzzle(success) {
+  if (success && wirePuzzle) window.__betonEventResult = wirePuzzle.mistakes === 0 ? 'ИДЕАЛЬНО' : 'ЧАСТИЧНО';
+  pumpPuzzleOpen = false; wirePuzzle = null; ensurePumpPuzzleUi().classList.remove('show');
+  if (success) {
+    pumpBroken = false; markPourProgressDirty(); savePourProgress(true);
+    if (hoseInteraction) hoseInteraction.text = hoseHeld ? 'E — бросить шланг · ЛКМ — включить бетон' : 'E — взять шланг';
+    showToast('НАСОС ЗАПУЩЕН · ПОДАЧА ВОССТАНОВЛЕНА', 3.0); dialogueCloseEl?.click();
   }
   requestMouseLock();
 }
-function drawWireJoint(ctx,p,color,radius){
-  ctx.save();ctx.fillStyle='#090a0b';ctx.beginPath();ctx.arc(p.x,p.y,radius*1.23,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle=WIRE_COLORS[color];ctx.beginPath();ctx.arc(p.x,p.y,radius,0,Math.PI*2);ctx.fill();
-  ctx.strokeStyle='rgba(0,0,0,.25)';ctx.lineWidth=Math.max(2,radius*.34);ctx.beginPath();ctx.arc(p.x,p.y,radius*.78,0,Math.PI*2);ctx.stroke();
-  ctx.fillStyle='rgba(255,255,255,.22)';ctx.beginPath();ctx.arc(p.x-radius*.20,p.y-radius*.24,radius*.28,0,Math.PI*2);ctx.fill();ctx.restore();
+const WIRE_STRAIGHT_TEXTURE_SRC = './assets/ui/events/wire_straight.png?v=51.141';
+const WIRE_CORNER_TEXTURE_SRC = './assets/ui/events/wire_corner.png?v=51.141';
+const wireStraightTextureImage = new Image();
+const wireCornerTextureImage = new Image();
+const wireTintedTextureCache = new Map();
+wireStraightTextureImage.src = WIRE_STRAIGHT_TEXTURE_SRC;
+wireCornerTextureImage.src = WIRE_CORNER_TEXTURE_SRC;
+for (const image of [wireStraightTextureImage, wireCornerTextureImage]) {
+  image.addEventListener('load', () => {
+    wireTintedTextureCache.clear();
+    if (wirePuzzle) drawPumpPuzzle();
+  });
 }
-function drawTexturedWirePath(ctx,path,color,alpha,canvas){
-  if(!path||path.length<2)return;
-  const pts=path.map(c=>wirePointForCell(c,canvas));
-  const outer=Math.max(13,canvas.width*.025),inner=outer*.62;
-  ctx.save();ctx.globalAlpha=alpha;ctx.lineJoin='round';ctx.lineCap='round';
-  // rubber shadow / metal grime edge
-  ctx.strokeStyle='rgba(5,6,7,.92)';ctx.lineWidth=outer;ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.stroke();
-  // coloured rubber body
-  ctx.strokeStyle=WIRE_COLORS[color];ctx.lineWidth=inner;ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.stroke();
-  // repeating dark ribbing gives the cable texture instead of a flat vector line
-  ctx.strokeStyle='rgba(15,13,12,.20)';ctx.lineWidth=inner*.92;ctx.setLineDash([Math.max(4,canvas.width*.006),Math.max(5,canvas.width*.008)]);ctx.lineDashOffset=-performance.now()*.008;
-  ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.stroke();ctx.setLineDash([]);
-  // wet/painted highlight
-  ctx.strokeStyle='rgba(255,255,255,.27)';ctx.lineWidth=Math.max(2,inner*.16);ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y-inner*.13):ctx.moveTo(p.x,p.y-inner*.13));ctx.stroke();
-  for(let i=1;i<pts.length-1;i++){
-    const a=path[i-1],b=path[i],c=path[i+1];
-    if(a.c!==c.c&&a.r!==c.r)drawWireJoint(ctx,pts[i],color,inner*.41);
+function makeTintedWireTexture(image, colorIndex, kind) {
+  if (!image?.complete || !image.naturalWidth || !image.naturalHeight) return null;
+  const key = `${kind}:${colorIndex}:${image.naturalWidth}x${image.naturalHeight}`;
+  if (wireTintedTextureCache.has(key)) return wireTintedTextureCache.get(key);
+  const c = document.createElement('canvas');
+  c.width = image.naturalWidth;
+  c.height = image.naturalHeight;
+  const g = c.getContext('2d');
+  g.clearRect(0, 0, c.width, c.height);
+  g.drawImage(image, 0, 0);
+  // Multiply keeps the generated material/shading while tinting the pale core.
+  g.globalCompositeOperation = 'multiply';
+  g.fillStyle = WIRE_COLORS[colorIndex] || '#ffffff';
+  g.fillRect(0, 0, c.width, c.height);
+  // Restore original transparency exactly; multiply itself would otherwise fill the alpha background.
+  g.globalCompositeOperation = 'destination-in';
+  g.drawImage(image, 0, 0);
+  g.globalCompositeOperation = 'source-over';
+  wireTintedTextureCache.set(key, c);
+  return c;
+}
+function drawWireSegmentTexture(ctx, a, b, color, width) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 2) return;
+  const texture = makeTintedWireTexture(wireStraightTextureImage, color, 'straight');
+  if (!texture) {
+    ctx.save();
+    ctx.strokeStyle = WIRE_COLORS[color];
+    ctx.lineWidth = width * .72;
+    ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    ctx.restore();
+    return;
   }
+  const angle = Math.atan2(dy, dx);
+  // overlap hides seams under corner pieces and between grid sections.
+  const overlap = width * .38;
+  ctx.save();
+  ctx.translate(a.x, a.y);
+  ctx.rotate(angle);
+  ctx.drawImage(texture, -overlap, -width * .5, len + overlap * 2, width);
   ctx.restore();
 }
-function wireCoverage(){
-  const occupied=new Set();for(const path of wirePuzzle.paths.values())for(const p of path)occupied.add(wireKey(p));
-  return occupied.size/WIRE_CELL_COUNT;
+function wireCornerRotation(prev, cur, next) {
+  const d1 = `${Math.sign(prev.x-cur.x)},${Math.sign(prev.y-cur.y)}`;
+  const d2 = `${Math.sign(next.x-cur.x)},${Math.sign(next.y-cur.y)}`;
+  const dirs = new Set([d1,d2]);
+  // Source corner asset connects RIGHT + DOWN.
+  if (dirs.has('1,0') && dirs.has('0,1')) return 0;
+  if (dirs.has('0,1') && dirs.has('-1,0')) return Math.PI * .5;
+  if (dirs.has('-1,0') && dirs.has('0,-1')) return Math.PI;
+  if (dirs.has('0,-1') && dirs.has('1,0')) return Math.PI * 1.5;
+  return null;
 }
-function drawPumpPuzzle(cursor=null){
-  if(!wirePuzzle)return;
-  const root=ensurePumpPuzzleUi(),canvas=root.querySelector('canvas');resizePumpPuzzleCanvas();const ctx=canvas.getContext('2d');
+function drawWireCornerTexture(ctx, prev, cur, next, color, width) {
+  const rotation = wireCornerRotation(prev, cur, next);
+  if (rotation == null) return;
+  const texture = makeTintedWireTexture(wireCornerTextureImage, color, 'corner');
+  if (!texture) return;
+  // Native body thickness in the generated corner asset is roughly 180 px.
+  const scale = width / 180;
+  const drawW = texture.width * scale;
+  const drawH = texture.height * scale;
+  // The bend center in the cropped texture. Both straight legs pass through this grid node.
+  const anchorX = .285;
+  const anchorY = .265;
+  ctx.save();
+  ctx.translate(cur.x, cur.y);
+  ctx.rotate(rotation);
+  ctx.drawImage(texture, -drawW * anchorX, -drawH * anchorY, drawW, drawH);
+  ctx.restore();
+}
+function drawTexturedWirePath(ctx, path, color, alpha, canvas) {
+  if (!path || path.length < 2) return;
+  const pts = path.map(c => wirePointForCell(c,canvas));
+  const width = Math.max(19, canvas.width * .034);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  // Actual generated PNG texture is used for every straight grid section.
+  for (let i = 0; i < pts.length - 1; i++) drawWireSegmentTexture(ctx, pts[i], pts[i + 1], color, width);
+  // A separate matched generated elbow PNG is stamped on each 90-degree turn.
+  for (let i = 1; i < pts.length - 1; i++) drawWireCornerTexture(ctx, pts[i - 1], pts[i], pts[i + 1], color, width);
+  ctx.restore();
+}
+function drawWireEndpoint(ctx, cell, color, canvas, active=false, complete=false) {
+  const p = wirePointForCell(cell,canvas), outer = Math.max(20,canvas.width*.030);
+  if (active) {
+    const pulse = outer*(1.35+(Math.sin(performance.now()*.011)*.5+.5)*.20);
+    ctx.strokeStyle='rgba(255,255,255,.66)'; ctx.lineWidth=Math.max(3,canvas.width*.0045); ctx.beginPath(); ctx.arc(p.x,p.y,pulse,0,Math.PI*2); ctx.stroke();
+  }
+  if (complete) {
+    ctx.strokeStyle='rgba(201,238,184,.42)'; ctx.lineWidth=Math.max(3,canvas.width*.004); ctx.beginPath(); ctx.arc(p.x,p.y,outer*1.25,0,Math.PI*2); ctx.stroke();
+  }
+  ctx.fillStyle='#101112'; ctx.beginPath(); ctx.arc(p.x,p.y,outer,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle=WIRE_COLORS[color]; ctx.lineWidth=Math.max(9,canvas.width*.013); ctx.stroke();
+  ctx.fillStyle=WIRE_COLORS[color]; ctx.beginPath(); ctx.arc(p.x,p.y,Math.max(8,canvas.width*.011),0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,.25)'; ctx.beginPath(); ctx.arc(p.x-outer*.18,p.y-outer*.22,outer*.18,0,Math.PI*2); ctx.fill();
+}
+function drawWireHint(ctx, canvas) {
+  if (!wirePuzzle || wirePuzzle.drag) return;
+  if (performance.now() - wirePuzzle.lastProgressAt < 7000) return;
+  const cable = wirePuzzle.cables.find(c => !c.complete);
+  if (!cable) return;
+  const route = wirePuzzle.hiddenSolution[cable.color]; if (!route?.length) return;
+  let startAt = 0;
+  if (cable.path.length) {
+    const tip = cable.path[cable.path.length-1];
+    const idx = route.findIndex(p=>sameWireCell(p,tip));
+    const ridx = [...route].reverse().findIndex(p=>sameWireCell(p,tip));
+    if (idx >= 0) startAt = idx;
+    else if (ridx >= 0) startAt = Math.max(0, route.length-1-ridx);
+  }
+  const hint = route.slice(startAt,Math.min(route.length,startAt+3));
+  if (hint.length<2) return;
+  const pts = hint.map(c=>wirePointForCell(c,canvas));
+  ctx.save(); ctx.globalAlpha=.20 + (Math.sin(performance.now()*.006)*.5+.5)*.10; ctx.strokeStyle=WIRE_COLORS[cable.color]; ctx.lineWidth=Math.max(5,canvas.width*.008); ctx.lineCap='round'; ctx.lineJoin='round';
+  ctx.beginPath(); pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)); ctx.stroke(); ctx.restore();
+}
+function drawPumpPuzzle() {
+  if (!wirePuzzle) return;
+  const root=ensurePumpPuzzleUi(), canvas=root.querySelector('canvas'); resizePumpPuzzleCanvas(); const ctx=canvas.getContext('2d');
   ctx.clearRect(0,0,canvas.width,canvas.height);
-  const pad=wirePad(canvas),cw=(canvas.width-pad*2)/(WIRE_GRID_COLS-1),ch=(canvas.height-pad*2)/(WIRE_GRID_ROWS-1);
-  ctx.strokeStyle='rgba(205,205,184,.075)';ctx.lineWidth=Math.max(1,canvas.width*.0017);
+  const pad=wirePad(canvas), cw=(canvas.width-pad*2)/(WIRE_GRID_COLS-1), ch=(canvas.height-pad*2)/(WIRE_GRID_ROWS-1);
+  ctx.strokeStyle='rgba(205,205,184,.085)'; ctx.lineWidth=Math.max(1,canvas.width*.0016);
   for(let c=0;c<WIRE_GRID_COLS;c++){const x=pad+c*cw;ctx.beginPath();ctx.moveTo(x,pad);ctx.lineTo(x,canvas.height-pad);ctx.stroke();}
   for(let r=0;r<WIRE_GRID_ROWS;r++){const y=pad+r*ch;ctx.beginPath();ctx.moveTo(pad,y);ctx.lineTo(canvas.width-pad,y);ctx.stroke();}
-  for(const [color,path] of wirePuzzle.paths)drawTexturedWirePath(ctx,path,color,1,canvas);
-  if(wirePuzzle.drag){
-    const temp=wirePuzzle.drag.path.map(p=>({c:p.c,r:p.r}));
-    if(cursor){const cell=wireCellFromPoint(cursor,canvas);if(cell&&wireKey(temp[temp.length-1])!==wireKey(cell))temp.push(cell);}
-    drawTexturedWirePath(ctx,temp,wirePuzzle.drag.color,.82,canvas);
+
+  drawWireHint(ctx,canvas);
+  for (const cable of wirePuzzle.cables) if (cable.path.length>1) drawTexturedWirePath(ctx,cable.path,cable.color,cable.complete?1:.90,canvas);
+
+  if (wirePuzzle.blockedPulse && performance.now()<wirePuzzle.blockedPulse.until) {
+    const p=wirePointForCell(wirePuzzle.blockedPulse.cell,canvas), t=(wirePuzzle.blockedPulse.until-performance.now())/260;
+    ctx.strokeStyle=`rgba(255,84,74,${.25+.55*t})`; ctx.lineWidth=Math.max(3,canvas.width*.005); ctx.beginPath(); ctx.arc(p.x,p.y,Math.max(15,canvas.width*.022)*(1.4-t*.3),0,Math.PI*2); ctx.stroke();
   }
-  for(let color=0;color<wirePuzzle.count;color++)for(const cell of [wirePuzzle.starts[color],wirePuzzle.targets[color]]){
-    const p=wirePointForCell(cell,canvas),outer=Math.max(20,canvas.width*.030);
-    ctx.fillStyle='#111';ctx.beginPath();ctx.arc(p.x,p.y,outer,0,Math.PI*2);ctx.fill();
-    ctx.strokeStyle=WIRE_COLORS[color];ctx.lineWidth=Math.max(9,canvas.width*.013);ctx.stroke();
-    ctx.fillStyle=WIRE_COLORS[color];ctx.beginPath();ctx.arc(p.x,p.y,Math.max(8,canvas.width*.011),0,Math.PI*2);ctx.fill();
-    ctx.fillStyle='rgba(255,255,255,.25)';ctx.beginPath();ctx.arc(p.x-outer*.18,p.y-outer*.22,outer*.18,0,Math.PI*2);ctx.fill();
+
+  const activeTarget = wirePuzzle.drag ? wireOppositeEndpoint(wirePuzzle.drag.color,wirePuzzle.drag.startSide) : null;
+  for(let color=0;color<wirePuzzle.count;color++) {
+    const cable=wireCable(color), complete=!!cable?.complete;
+    drawWireEndpoint(ctx,wirePuzzle.starts[color],color,canvas,!!(activeTarget&&sameWireCell(activeTarget,wirePuzzle.starts[color])),complete);
+    drawWireEndpoint(ctx,wirePuzzle.targets[color],color,canvas,!!(activeTarget&&sameWireCell(activeTarget,wirePuzzle.targets[color])),complete);
   }
-  const coverage=Math.round(wireCoverage()*100);
-  const status=root.querySelector('.betonWireStatus');if(status)status.textContent=`ПРОВОДОВ: ${wirePuzzle.paths.size}/5 · ЩИТОК: ${coverage}%`+(wirePuzzle.mistakes?` · ПЕРЕДЕЛОК: ${wirePuzzle.mistakes}`:'');
+  const completeCount=wirePuzzle.cables.filter(c=>c.complete).length;
+  let detail='';
+  if(wirePuzzle.drag) detail=` · ${wirePuzzle.drag.path.length-1} секц.`;
+  const status=root.querySelector('.betonWireStatus'); if(status) status.textContent=`ПРОВОДОВ: ${completeCount} / 5${detail}`;
 }
-function pumpWireStartDrag(endpoint,cell,canvas){
-  if(wirePuzzle.paths.has(endpoint.color))wirePuzzle.paths.delete(endpoint.color);
-  wirePuzzle.drag={color:endpoint.color,startSide:endpoint.side,path:[{c:cell.c,r:cell.r}]};rebuildWireOccupancy();
+function beginWireDrag(color, anchorSide, path) {
+  const cable=wireCable(color); if(!cable)return false;
+  cable.complete=false; cable.startSide=anchorSide; cable.path=path.map(p=>({c:p.c,r:p.r}));
+  wirePuzzle.drag={color,startSide:anchorSide,path:cable.path,pointerId:null};
+  rebuildWireOccupancy(color);
+  wirePuzzle.lastInputAt=wirePuzzle.lastProgressAt=performance.now();
+  return true;
 }
-function pumpWireApplyStep(drag,cell){
-  const path=drag.path,last=path[path.length-1];if(cell.c===last.c&&cell.r===last.r)return false;
-  const prior=path.findIndex(p=>p.c===cell.c&&p.r===cell.r);
-  if(prior>=0){path.length=prior+1;rebuildWireOccupancy();return true;}
-  if(Math.abs(cell.c-last.c)+Math.abs(cell.r-last.r)!==1)return false;
-  const endpoint=isWireEndpoint(cell),target=wireOppositeEndpoint(drag.color,drag.startSide);
-  if(endpoint&&endpoint.color===drag.color&&!(cell.c===target.c&&cell.r===target.r))return false;
-  if(!canEnterWireCell(cell,drag.color))return false;
-  path.push({c:cell.c,r:cell.r});rebuildWireOccupancy();return true;
-}
-function pumpWireDown(e){
-  if(!wirePuzzle)return;const canvas=e.currentTarget,cell=wireCellFromPoint(wireCanvasPoint(e,canvas),canvas);if(!cell)return;
-  const endpoint=isWireEndpoint(cell);if(!endpoint)return;pumpWireStartDrag(endpoint,cell,canvas);
-  try{canvas.setPointerCapture(e.pointerId)}catch(_){}drawPumpPuzzle();e.preventDefault();
-}
-function pumpWireMove(e){
-  if(!wirePuzzle?.drag)return;const canvas=e.currentTarget,point=wireCanvasPoint(e,canvas),cell=wireCellFromPoint(point,canvas);if(!cell){drawPumpPuzzle(point);return;}
-  let current=wirePuzzle.drag.path[wirePuzzle.drag.path.length-1],guard=0;
-  while((current.c!==cell.c||current.r!==cell.r)&&guard++<24){
-    const dc=cell.c-current.c,dr=cell.r-current.r;
-    const options=[];
-    if(Math.abs(dc)>=Math.abs(dr)&&dc!==0)options.push({c:current.c+Math.sign(dc),r:current.r});
-    if(dr!==0)options.push({c:current.c,r:current.r+Math.sign(dr)});
-    if(dc!==0&&!options.some(o=>o.c===current.c+Math.sign(dc)&&o.r===current.r))options.push({c:current.c+Math.sign(dc),r:current.r});
-    let progressed=false;for(const next of options){if(pumpWireApplyStep(wirePuzzle.drag,next)){progressed=true;break;}}
-    if(!progressed)break;current=wirePuzzle.drag.path[wirePuzzle.drag.path.length-1];
+function findCableCellHit(cell) {
+  if(!wirePuzzle||!cell)return null;
+  for(const cable of wirePuzzle.cables){
+    const idx=cable.path.findIndex(p=>sameWireCell(p,cell));
+    if(idx>=0)return {cable,index:idx};
   }
-  drawPumpPuzzle(point);e.preventDefault();
+  return null;
 }
-function pumpWireUp(e){
-  if(!wirePuzzle?.drag)return;const canvas=e.currentTarget,drag=wirePuzzle.drag,target=wireOppositeEndpoint(drag.color,drag.startSide),last=drag.path[drag.path.length-1];
-  if((last.c!==target.c||last.r!==target.r)&&Math.abs(target.c-last.c)+Math.abs(target.r-last.r)===1)pumpWireApplyStep(drag,{c:target.c,r:target.r});
-  const final=drag.path[drag.path.length-1],ok=final.c===target.c&&final.r===target.r&&drag.path.length>1;
-  if(ok){wirePuzzle.paths.set(drag.color,drag.path.map(p=>({c:p.c,r:p.r})));mobileHaptic(16);}else if(drag.path.length>2){wirePuzzle.mistakes++;}
-  wirePuzzle.drag=null;rebuildWireOccupancy();drawPumpPuzzle();
-  if(wirePuzzle.paths.size===wirePuzzle.count&&wireCoverage()>=.999)setTimeout(()=>closePumpWirePuzzle(true),260);
+function startWireFromEndpoint(endpoint) {
+  const cable=wireCable(endpoint.color); if(!cable)return false;
+  // Rewiring a completed cable from either socket is intentional: touching the
+  // socket pulls that cable out and starts a fresh route from the chosen end.
+  cable.path=[]; cable.complete=false; cable.startSide=endpoint.side;
+  rebuildWireOccupancy(endpoint.color);
+  return beginWireDrag(endpoint.color,endpoint.side,[endpoint.side==='start'?wirePuzzle.starts[endpoint.color]:wirePuzzle.targets[endpoint.color]]);
+}
+function resumeWireAtHit(hit) {
+  const cable=hit?.cable; if(!cable||cable.complete)return false;
+  if(hit.index<0)return false;
+  cable.path=cable.path.slice(0,hit.index+1);
+  const anchor=cable.path[0], s=wirePuzzle.starts[cable.color], side=sameWireCell(anchor,s)?'start':'target';
+  return beginWireDrag(cable.color,side,cable.path);
+}
+function finishWireCable(color) {
+  const cable=wireCable(color); if(!cable)return;
+  cable.complete=true;
+  wirePuzzle.drag=null;
+  rebuildWireOccupancy();
+  wirePuzzle.lastProgressAt=performance.now();
+  mobileHaptic(22);
+  drawPumpPuzzle();
+  if(wirePuzzle.cables.every(c=>c.complete)) setTimeout(()=>closePumpWirePuzzle(true),420);
+}
+function wireTryStep(drag, next) {
+  const cable=wireCable(drag.color); if(!cable||!next)return false;
+  const path=cable.path, last=path[path.length-1];
+  if(sameWireCell(last,next))return false;
+
+  // Natural unwind: dragging back over your own cable retracts it to that node.
+  const ownIndex=path.findIndex(p=>sameWireCell(p,next));
+  if(ownIndex>=0){
+    path.length=ownIndex+1;
+    wirePuzzle.lastProgressAt=performance.now();
+    rebuildWireOccupancy(drag.color);
+    return true;
+  }
+  if(wireManhattan(last,next)!==1)return false;
+
+  const target=wireOppositeEndpoint(drag.color,drag.startSide);
+  const endpoint=isWireEndpoint(next);
+  if(endpoint&&endpoint.color===drag.color&&!sameWireCell(next,target)){
+    wireSetBlockedPulse(next);return false;
+  }
+  if(wireCellBlockedForColor(next,drag.color)){
+    wirePuzzle.mistakes++;
+    wireSetBlockedPulse(next);return false;
+  }
+
+  path.push({c:next.c,r:next.r});
+  wirePuzzle.lastProgressAt=performance.now();
+  rebuildWireOccupancy(drag.color);
+  if(sameWireCell(next,target))finishWireCable(drag.color);
+  return true;
+}
+function wireCandidateSteps(last,target) {
+  const dc=target.c-last.c, dr=target.r-last.r, arr=[];
+  const horiz=dc!==0?{c:last.c+Math.sign(dc),r:last.r}:null;
+  const vert=dr!==0?{c:last.c,r:last.r+Math.sign(dr)}:null;
+  if(Math.abs(dc)>=Math.abs(dr)){if(horiz)arr.push(horiz);if(vert)arr.push(vert);}
+  else {if(vert)arr.push(vert);if(horiz)arr.push(horiz);}
+  return arr;
+}
+function pumpWireDown(e) {
+  if(!wirePuzzle)return;
+  wirePuzzle.lastInputAt=performance.now();
+  const canvas=e.currentTarget, point=wireCanvasPoint(e,canvas), cell=wireCellFromPoint(point,canvas); if(!cell)return;
+  const p=wirePointForCell(cell,canvas), dx=point.x-p.x, dy=point.y-p.y, hitR=wireCellHitRadius(canvas);
+  if(dx*dx+dy*dy>hitR*hitR)return;
+
+  const endpoint=isWireEndpoint(cell);
+  if(endpoint){
+    if(startWireFromEndpoint(endpoint)){
+      wirePuzzle.drag.pointerId=e.pointerId;try{canvas.setPointerCapture(e.pointerId)}catch(_){}drawPumpPuzzle();e.preventDefault();return;
+    }
+  }
+  const hit=findCableCellHit(cell);
+  if(hit&&resumeWireAtHit(hit)){
+    wirePuzzle.drag.pointerId=e.pointerId;try{canvas.setPointerCapture(e.pointerId)}catch(_){}drawPumpPuzzle();e.preventDefault();
+  }
+}
+function pumpWireMove(e) {
+  if(!wirePuzzle?.drag||wirePuzzle.drag.pointerId!==e.pointerId)return;
+  wirePuzzle.lastInputAt=performance.now();
+  const canvas=e.currentTarget, point=wireCanvasPoint(e,canvas), target=wireCellFromPoint(point,canvas); if(!target){drawPumpPuzzle();return;}
+  let drag=wirePuzzle.drag, guard=0;
+  while(drag&&wirePuzzle.drag&&guard++<18){
+    const cable=wireCable(drag.color), last=cable.path[cable.path.length-1];
+    if(sameWireCell(last,target))break;
+    const options=wireCandidateSteps(last,target);
+    let progressed=false;
+    for(const next of options){
+      if(wireTryStep(drag,next)){progressed=true;break;}
+    }
+    if(!progressed)break;
+    drag=wirePuzzle.drag;
+  }
+  drawPumpPuzzle();e.preventDefault();
+}
+function pumpWireUp(e) {
+  if(!wirePuzzle?.drag||wirePuzzle.drag.pointerId!==e.pointerId)return;
+  wirePuzzle.lastInputAt=performance.now();
+  // Partial cable intentionally remains on the grid and can be continued later.
+  wirePuzzle.drag=null;
+  rebuildWireOccupancy();
+  drawPumpPuzzle();
   e.preventDefault();
 }
 function prepareZoneRandomEvent(zone, index = 0) {
