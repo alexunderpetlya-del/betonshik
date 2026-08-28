@@ -4341,7 +4341,7 @@ function ensurePumpPuzzleUi() {
   root = document.createElement('div');
   root.id = 'betonPumpPuzzle';
   root.className = 'betonEventQte';
-  root.innerHTML = '<div class="betonPumpPuzzleWrap"><button class="betonEventClose" type="button">×</button><div class="betonPumpPuzzleTitle">ЩИТОК НАСОСА</div><div class="betonPumpPuzzleSub">СОЕДИНИ 5 ПАР ПО СЕТКЕ · ПРОВОДА НЕ ПЕРЕСЕКАЮТСЯ</div><div class="betonPumpShell"><canvas class="betonWireCanvas" width="720" height="720"></canvas></div><div class="betonWireStatus">ПРОВОДОВ: 0 / 5</div></div>';
+  root.innerHTML = '<div class="betonPumpPuzzleWrap"><button class="betonEventClose" type="button">×</button><div class="betonPumpPuzzleMeta betonPumpPuzzleMetaLeft"><div class="betonPumpMetaChip"><span class="betonPumpMetaKicker">МИНИ-ИГРА</span><span class="betonPumpMetaMain">ЩИТОК НАСОСА</span></div></div><div class="betonPumpShell"><canvas class="betonWireCanvas" width="720" height="720"></canvas></div><div class="betonPumpPuzzleMeta betonPumpPuzzleMetaRight"><div class="betonPumpMetaChip betonWireStatus">ПРОВОДОВ: 0 / 5</div></div></div>';
   document.body.appendChild(root);
   root.querySelector('.betonEventClose')?.addEventListener('click', () => closePumpWirePuzzle(false));
   const canvas = root.querySelector('canvas');
@@ -4541,7 +4541,7 @@ function drawWireCornerTexture(ctx, prev, cur, next, color, width) {
 function drawTexturedWirePath(ctx, path, color, alpha, canvas) {
   if (!path || path.length < 2) return;
   const pts = path.map(c => wirePointForCell(c,canvas));
-  const width = Math.max(19, canvas.width * .034);
+  const width = Math.max(24, canvas.width * .042);
   ctx.save();
   ctx.globalAlpha = alpha;
   // Actual generated PNG texture is used for every straight grid section.
@@ -4551,7 +4551,7 @@ function drawTexturedWirePath(ctx, path, color, alpha, canvas) {
   ctx.restore();
 }
 function drawWireEndpoint(ctx, cell, color, canvas, active=false, complete=false) {
-  const p = wirePointForCell(cell,canvas), outer = Math.max(20,canvas.width*.030);
+  const p = wirePointForCell(cell,canvas), outer = Math.max(24,canvas.width*.036);
   if (active) {
     const pulse = outer*(1.35+(Math.sin(performance.now()*.011)*.5+.5)*.20);
     ctx.strokeStyle='rgba(255,255,255,.66)'; ctx.lineWidth=Math.max(3,canvas.width*.0045); ctx.beginPath(); ctx.arc(p.x,p.y,pulse,0,Math.PI*2); ctx.stroke();
@@ -4560,8 +4560,8 @@ function drawWireEndpoint(ctx, cell, color, canvas, active=false, complete=false
     ctx.strokeStyle='rgba(201,238,184,.42)'; ctx.lineWidth=Math.max(3,canvas.width*.004); ctx.beginPath(); ctx.arc(p.x,p.y,outer*1.25,0,Math.PI*2); ctx.stroke();
   }
   ctx.fillStyle='#101112'; ctx.beginPath(); ctx.arc(p.x,p.y,outer,0,Math.PI*2); ctx.fill();
-  ctx.strokeStyle=WIRE_COLORS[color]; ctx.lineWidth=Math.max(9,canvas.width*.013); ctx.stroke();
-  ctx.fillStyle=WIRE_COLORS[color]; ctx.beginPath(); ctx.arc(p.x,p.y,Math.max(8,canvas.width*.011),0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle=WIRE_COLORS[color]; ctx.lineWidth=Math.max(11,canvas.width*.016); ctx.stroke();
+  ctx.fillStyle=WIRE_COLORS[color]; ctx.beginPath(); ctx.arc(p.x,p.y,Math.max(10,canvas.width*.014),0,Math.PI*2); ctx.fill();
   ctx.fillStyle='rgba(255,255,255,.25)'; ctx.beginPath(); ctx.arc(p.x-outer*.18,p.y-outer*.22,outer*.18,0,Math.PI*2); ctx.fill();
 }
 function drawWireHint(ctx, canvas) {
@@ -4615,7 +4615,7 @@ function drawPumpPuzzle() {
 function beginWireDrag(color, anchorSide, path) {
   const cable=wireCable(color); if(!cable)return false;
   cable.complete=false; cable.startSide=anchorSide; cable.path=path.map(p=>({c:p.c,r:p.r}));
-  wirePuzzle.drag={color,startSide:anchorSide,path:cable.path,pointerId:null};
+  wirePuzzle.drag={color,startSide:anchorSide,path:cable.path,pointerId:null,lastAxis:null};
   rebuildWireOccupancy(color);
   wirePuzzle.lastInputAt=wirePuzzle.lastProgressAt=performance.now();
   return true;
@@ -4646,6 +4646,7 @@ function resumeWireAtHit(hit) {
 function finishWireCable(color) {
   const cable=wireCable(color); if(!cable)return;
   cable.complete=true;
+  wirePuzzle.drag.lastAxis=null;
   wirePuzzle.drag=null;
   rebuildWireOccupancy();
   wirePuzzle.lastProgressAt=performance.now();
@@ -4692,6 +4693,31 @@ function wireCandidateSteps(last,target) {
   else {if(vert)arr.push(vert);if(horiz)arr.push(horiz);}
   return arr;
 }
+function wireStepFromPointer(last, point, canvas, drag, forcedAxis = null) {
+  const base = wirePointForCell(last, canvas);
+  const dx = (point.x - base.x) / Math.max(1, base.cellW);
+  const dy = (point.y - base.y) / Math.max(1, base.cellH);
+  const ax = Math.abs(dx), ay = Math.abs(dy);
+  const threshold = .42;
+  if (ax < threshold && ay < threshold) return null;
+
+  let axis = forcedAxis;
+  if (!axis) {
+    if (ax > ay + .16) axis = 'x';
+    else if (ay > ax + .16) axis = 'y';
+    else axis = drag?.lastAxis || (ax >= ay ? 'x' : 'y');
+  }
+  if (axis === 'x' && ax < threshold) axis = ay >= threshold ? 'y' : null;
+  if (axis === 'y' && ay < threshold) axis = ax >= threshold ? 'x' : null;
+  if (!axis) return null;
+
+  const next = axis === 'x'
+    ? { c:last.c + Math.sign(dx || 0), r:last.r }
+    : { c:last.c, r:last.r + Math.sign(dy || 0) };
+  if (!Number.isFinite(next.c) || !Number.isFinite(next.r)) return null;
+  if (next.c < 0 || next.c >= WIRE_GRID_COLS || next.r < 0 || next.r >= WIRE_GRID_ROWS) return null;
+  return { next, axis, strength: axis === 'x' ? ax : ay };
+}
 function pumpWireDown(e) {
   if(!wirePuzzle)return;
   wirePuzzle.lastInputAt=performance.now();
@@ -4713,17 +4739,24 @@ function pumpWireDown(e) {
 function pumpWireMove(e) {
   if(!wirePuzzle?.drag||wirePuzzle.drag.pointerId!==e.pointerId)return;
   wirePuzzle.lastInputAt=performance.now();
-  const canvas=e.currentTarget, point=wireCanvasPoint(e,canvas), target=wireCellFromPoint(point,canvas); if(!target){drawPumpPuzzle();return;}
+  const canvas=e.currentTarget, point=wireCanvasPoint(e,canvas);
   let drag=wirePuzzle.drag, guard=0;
-  while(drag&&wirePuzzle.drag&&guard++<18){
-    const cable=wireCable(drag.color), last=cable.path[cable.path.length-1];
-    if(sameWireCell(last,target))break;
-    const options=wireCandidateSteps(last,target);
-    let progressed=false;
-    for(const next of options){
-      if(wireTryStep(drag,next)){progressed=true;break;}
+  while(drag&&wirePuzzle.drag&&guard++<8){
+    const cable=wireCable(drag.color); if(!cable||!cable.path.length) break;
+    const last=cable.path[cable.path.length-1];
+    let proposal=wireStepFromPointer(last, point, canvas, drag, null);
+    if(!proposal) break;
+    let progressed=wireTryStep(drag, proposal.next);
+    if(!progressed){
+      const altAxis = proposal.axis === 'x' ? 'y' : 'x';
+      const alt = wireStepFromPointer(last, point, canvas, drag, altAxis);
+      if(alt && !sameWireCell(alt.next, proposal.next)){
+        proposal = alt;
+        progressed = wireTryStep(drag, proposal.next);
+      }
     }
-    if(!progressed)break;
+    if(!progressed) break;
+    if(wirePuzzle?.drag) wirePuzzle.drag.lastAxis = proposal.axis;
     drag=wirePuzzle.drag;
   }
   drawPumpPuzzle();e.preventDefault();
@@ -4732,6 +4765,7 @@ function pumpWireUp(e) {
   if(!wirePuzzle?.drag||wirePuzzle.drag.pointerId!==e.pointerId)return;
   wirePuzzle.lastInputAt=performance.now();
   // Partial cable intentionally remains on the grid and can be continued later.
+  wirePuzzle.drag.lastAxis=null;
   wirePuzzle.drag=null;
   rebuildWireOccupancy();
   drawPumpPuzzle();
