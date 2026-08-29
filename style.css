@@ -5421,3 +5421,10 @@ body{position:relative!important;background:#000!important}
   .taskTrackerToggle{width:20px;height:20px;font-size:14px}
   .taskTracker.isCompact{width:min(250px,54vw)!important;padding:7px 9px!important}
 }
+
+/* v51.155 — support hook + delivery route */
+#hotbarHookSlot .hookGlyph{display:grid;place-items:center;width:42px;height:42px;font:1000 34px/1 system-ui,sans-serif;transform:rotate(-32deg);color:#b5a47e;text-shadow:0 2px 4px rgba(0,0,0,.7)}
+#hotbarHookSlot.active .hookGlyph{color:#f0cf72;filter:drop-shadow(0 0 5px rgba(240,207,114,.45))}
+#deliveryRouteHud{position:fixed;z-index:48;right:18px;bottom:18px;display:flex;align-items:center;gap:9px;padding:8px 11px;border:1px solid rgba(218,180,82,.3);border-radius:12px;background:rgba(14,16,16,.82);backdrop-filter:blur(8px);pointer-events:none;box-shadow:0 7px 18px rgba(0,0,0,.28);color:#d7d4ca;font:800 10px/1 system-ui,sans-serif;letter-spacing:.04em}
+#deliveryRouteHud b{color:#e5c774;letter-spacing:.14em}#deliveryRouteHud.pressurized{border-color:rgba(217,105,72,.45)}#deliveryRouteHud.pressurized span{color:#efb38d}
+@media(max-width:900px) and (orientation:landscape){#deliveryRouteHud{right:12px;bottom:8px;padding:6px 8px;font-size:8px}}

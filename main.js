@@ -58,6 +58,8 @@ const hotbarSmokeSlotEl = document.querySelector('#hotbarSmokeSlot');
 const hotbarDrinkSlotEl = document.querySelector('#hotbarDrinkSlot');
 const hotbarBeerSlotEl = document.querySelector('#hotbarBeerSlot');
 const hotbarRakeSlotEl = document.querySelector('#hotbarRakeSlot');
+const hotbarHookSlotEl = document.querySelector('#hotbarHookSlot');
+const hookHotbarStateEl = document.querySelector('#hookHotbarState');
 const rakeHotbarStateEl = document.querySelector('#rakeHotbarState');
 const hotbarSmokePreviewEl = document.querySelector('#hotbarSmokePreview');
 const hotbarDrinkPreviewEl = document.querySelector('#hotbarDrinkPreview');
@@ -1970,9 +1972,37 @@ const hosePoints = [];
 const hosePrev = [];
 const hoseMeshes = []; // legacy array kept empty for compatibility/debug counters
 const HOSE_SEGMENTS = 36;
-const HOSE_REST = 0.21;
+let HOSE_REST = 0.21;
 const HOSE_RADIUS = .105;
 const HOSE_RADIAL_SEGMENTS = TOUCH_DEVICE ? 10 : 14;
+
+// v51.155 — realistic delivery line + support hook.
+const DELIVERY_SECTION_LENGTH = 2.35;
+const DELIVERY_SECTION_COUNT = 5;
+const DELIVERY_STORAGE_KEY = 'beton_delivery_route_v51155';
+const SUPPORT_HOOK_STORAGE_KEY = 'beton_support_hook_v51155';
+let deliveryConnectedCount = 1;
+let deliveryCarriedSection = false;
+let deliveryPressureReleased = true;
+let deliveryRouteGroup = null;
+let deliverySectionRack = [];
+let deliveryPipeMeshes = [];
+const deliveryRouteEnd = new THREE.Vector3();
+let supportHookOwned = false;
+let supportHookEquipped = false;
+let supportHookInteraction = null;
+let supportHookWorldMesh = null;
+let hoseSupportActive = false;
+let hoseSupportIndex = Math.floor(HOSE_SEGMENTS * .54);
+const hoseSupportTarget = new THREE.Vector3();
+const hoseBendTmpA = new THREE.Vector3();
+const hoseBendTmpB = new THREE.Vector3();
+const hoseBendTmpMid = new THREE.Vector3();
+try {
+  const saved = JSON.parse(localStorage.getItem(DELIVERY_STORAGE_KEY) || '{}');
+  deliveryConnectedCount = THREE.MathUtils.clamp(Math.round(Number(saved.connectedCount)||1), 1, DELIVERY_SECTION_COUNT);
+  supportHookOwned = localStorage.getItem(SUPPORT_HOOK_STORAGE_KEY) === '1';
+} catch (_) {}
 // Textured procedural concrete-pump hose.
 const hoseTextureLoader = new THREE.TextureLoader();
 const hoseColorTex = hoseTextureLoader.load('./assets/hose_rubber_corrugated.jpg');
@@ -4141,7 +4171,7 @@ function ensureHoseControlUi() {
   root = document.createElement('div');
   root.id = 'betonHoseControl';
   root.className = 'betonEventQte';
-  root.innerHTML = '<div class="betonHoseControlCard"><div class="betonHoseControlTitle">ПЕРЕХВАТИ ШЛАНГ</div><div class="betonHoseRig"><div class="betonHoseTrack"></div><div class="betonHoseSlot"><div class="betonHoseBody"><img src="./assets/ui/events/hose.png?v=51.154" alt=""></div><div class="betonHoseCatchZone"></div></div><img class="betonHoseArm" src="./assets/ui/events/arm.png?v=51.154" alt=""><div class="betonHoseProgressSlot"><i></i></div></div><div class="betonHoseControlHint"><b>ЗАЖМИ</b> — РУКА ВВЕРХ · <b>ОТПУСТИ</b> — ВНИЗ</div><div class="betonHoseControlState">УДЕРЖИВАЙ ЛАДОНЬ В ЗОНЕ</div></div>';
+  root.innerHTML = '<div class="betonHoseControlCard"><div class="betonHoseControlTitle">ПЕРЕХВАТИ ШЛАНГ</div><div class="betonHoseRig"><div class="betonHoseTrack"></div><div class="betonHoseSlot"><div class="betonHoseBody"><img src="./assets/ui/events/hose.png?v=51.154" alt=""></div><div class="betonHoseCatchZone"></div></div><img class="betonHoseArm" src="./assets/ui/events/arm.png?v=51.155" alt=""><div class="betonHoseProgressSlot"><i></i></div></div><div class="betonHoseControlHint"><b>ЗАЖМИ</b> — РУКА ВВЕРХ · <b>ОТПУСТИ</b> — ВНИЗ</div><div class="betonHoseControlState">УДЕРЖИВАЙ ЛАДОНЬ В ЗОНЕ</div></div>';
   document.body.appendChild(root);
 
   const press = e => {
@@ -7780,6 +7810,154 @@ function updateQTE(dt) {
 // -----------------------------
 // Hose physics
 // -----------------------------
+
+function saveDeliveryRouteState() {
+  try { localStorage.setItem(DELIVERY_STORAGE_KEY, JSON.stringify({connectedCount:deliveryConnectedCount})); } catch (_) {}
+}
+function createDeliveryPipeMesh(length=DELIVERY_SECTION_LENGTH, color=0x5a5d60) {
+  const group = new THREE.Group();
+  const pipeMat = new THREE.MeshStandardMaterial({color, roughness:.72, metalness:.38});
+  const clampMat = new THREE.MeshStandardMaterial({color:0x282a2c, roughness:.55, metalness:.62});
+  const tube = new THREE.Mesh(new THREE.CylinderGeometry(.115,.115,length,14,1,false), pipeMat);
+  tube.rotation.z = Math.PI*.5; tube.castShadow=true; tube.receiveShadow=true; group.add(tube);
+  for (const side of [-1,1]) {
+    const ring = new THREE.Mesh(new THREE.CylinderGeometry(.16,.16,.12,14,1,false), clampMat);
+    ring.rotation.z=Math.PI*.5; ring.position.x=side*(length*.5-.06); ring.castShadow=true; group.add(ring);
+  }
+  group.userData.pipeLength=length;
+  return group;
+}
+function setupDeliveryInteractions() {
+  for (let i=interactive.length-1;i>=0;i--) {
+    if (['deliveryRouteEnd','deliverySpare'].includes(interactive[i]?.kind)) interactive.splice(i,1);
+  }
+  if (deliveryPipeMeshes.length) {
+    const last=deliveryPipeMeshes[Math.max(0,deliveryConnectedCount-1)];
+    interactive.push({obj:last,kind:'deliveryRouteEnd',radius:2.7,text:'E — изменить трассу'});
+  }
+  const spare=deliverySectionRack.find(x=>x.visible);
+  if (spare) interactive.push({obj:spare,kind:'deliverySpare',radius:2.7,text:'E — взять секцию трубы'});
+}
+function updateDeliveryRouteVisuals() {
+  if (!deliveryRouteGroup) return;
+  for (let i=0;i<deliveryPipeMeshes.length;i++) deliveryPipeMeshes[i].visible=i<deliveryConnectedCount;
+  for (let i=0;i<deliverySectionRack.length;i++) deliverySectionRack[i].visible=(i+1)>=deliveryConnectedCount && !deliveryCarriedSection;
+  if (hoseAnchorFallbackValid) {
+    deliveryRouteEnd.copy(hoseAnchorFallback).add(new THREE.Vector3(0,0,DELIVERY_SECTION_LENGTH*deliveryConnectedCount));
+    deliveryRouteEnd.y=Math.max(groundHeightAt(deliveryRouteEnd.x,deliveryRouteEnd.z)+.18,hoseAnchorFallback.y-.3);
+  }
+  setupDeliveryInteractions();
+}
+function setupDeliveryRoute(anchorPos) {
+  if (deliveryRouteGroup) scene.remove(deliveryRouteGroup);
+  deliveryRouteGroup = new THREE.Group();
+  deliveryRouteGroup.name='DELIVERY_ROUTE_RUNTIME';
+  scene.add(deliveryRouteGroup);
+  deliveryPipeMeshes.length=0; deliverySectionRack.length=0;
+  for (let i=0;i<DELIVERY_SECTION_COUNT;i++) {
+    const pipe=createDeliveryPipeMesh();
+    pipe.position.copy(anchorPos).add(new THREE.Vector3(0,-.32,DELIVERY_SECTION_LENGTH*(i+.5)));
+    pipe.position.y=Math.max(groundHeightAt(pipe.position.x,pipe.position.z)+.16,pipe.position.y);
+    deliveryRouteGroup.add(pipe); deliveryPipeMeshes.push(pipe);
+  }
+  for (let i=1;i<DELIVERY_SECTION_COUNT;i++) {
+    const spare=createDeliveryPipeMesh();
+    spare.position.copy(anchorPos).add(new THREE.Vector3(-1.3,-.56,1.0+i*.34));
+    spare.rotation.y=Math.PI*.5;
+    deliveryRouteGroup.add(spare); deliverySectionRack.push(spare);
+  }
+  if (!supportHookOwned) {
+    const hookGroup=new THREE.Group();
+    const hookMat=new THREE.MeshStandardMaterial({color:0x66513a,roughness:.84,metalness:.2});
+    const shaft=new THREE.Mesh(new THREE.CylinderGeometry(.03,.03,1.18,8),hookMat);
+    shaft.rotation.z=Math.PI*.5; hookGroup.add(shaft);
+    const hook=new THREE.Mesh(new THREE.TorusGeometry(.16,.03,6,16,Math.PI*1.35),hookMat);
+    hook.rotation.set(Math.PI*.5,0,-Math.PI*.2); hook.position.x=.64; hookGroup.add(hook);
+    hookGroup.position.copy(anchorPos).add(new THREE.Vector3(-.9,-.58,.25));
+    scene.add(hookGroup); supportHookWorldMesh=hookGroup;
+    supportHookInteraction={obj:hookGroup,kind:'supportHookPickup',radius:2.4,text:'E — взять крюк для рукава'};
+    interactive.push(supportHookInteraction);
+  }
+  updateDeliveryRouteVisuals();
+}
+function setDeliveryPressureReleased(value) { deliveryPressureReleased=!!value; }
+
+function flexibleHoseReach() {
+  return HOSE_SEGMENTS * HOSE_REST * .90;
+}
+function routeReachToActiveZone() {
+  const zone=activePourZone();
+  if (!zone) return {ok:true,distance:0,reach:flexibleHoseReach()};
+  const cx=(zone.minX+zone.maxX)*.5, cz=(zone.minZ+zone.maxZ)*.5;
+  const distance=Math.hypot(cx-deliveryRouteEnd.x,cz-deliveryRouteEnd.z);
+  const reach=flexibleHoseReach();
+  return {ok:distance<=reach,distance,reach};
+}
+
+function pickupSupportHook() {
+  supportHookOwned=true; supportHookEquipped=true;
+  try { localStorage.setItem(SUPPORT_HOOK_STORAGE_KEY,'1'); } catch(_){}
+  if (supportHookWorldMesh) supportHookWorldMesh.visible=false;
+  if (supportHookInteraction) {
+    const i=interactive.indexOf(supportHookInteraction); if(i>=0) interactive.splice(i,1);
+  }
+  showToast('КРЮК ДЛЯ РУКАВА ПОДОБРАН · 5 — ВЗЯТЬ/УБРАТЬ');
+}
+function toggleSupportHook() {
+  if (!supportHookOwned) return showToast('СНАЧАЛА ПОДБЕРИ КРЮК У НАСОСА');
+  supportHookEquipped=!supportHookEquipped;
+  if (!supportHookEquipped) hoseSupportActive=false;
+  showToast(supportHookEquipped?'КРЮК ГОТОВ · ЗАЖМИ ЛКМ РЯДОМ С РУКАВОМ':'КРЮК УБРАН',1.4);
+}
+function tryRouteInteraction(kind) {
+  if (kind==='deliverySpare') {
+    if (deliveryCarriedSection) return;
+    if (deliveryConnectedCount>=DELIVERY_SECTION_COUNT) return showToast('ВСЯ ТРАССА УЖЕ СОБРАНА');
+    deliveryCarriedSection=true; updateDeliveryRouteVisuals();
+    showToast('СЕКЦИЯ В РУКАХ · ПОДНЕСИ К КОНЦУ ТРАССЫ');
+    return;
+  }
+  if (kind==='deliveryRouteEnd') {
+    if (pouring || !deliveryPressureReleased) return showToast('СНАЧАЛА ВЫКЛЮЧИ ПОДАЧУ И СБРОСЬ ДАВЛЕНИЕ');
+    if (deliveryCarriedSection) {
+      if (deliveryConnectedCount>=DELIVERY_SECTION_COUNT) return;
+      deliveryConnectedCount++; deliveryCarriedSection=false;
+      saveDeliveryRouteState(); updateDeliveryRouteVisuals();
+      multiplayerBroadcastAction('route',{connectedCount:deliveryConnectedCount});
+      showToast(`СЕКЦИЯ ПОДКЛЮЧЕНА · ТРАССА ${deliveryConnectedCount}/${DELIVERY_SECTION_COUNT}`);
+    } else if (deliveryConnectedCount>1) {
+      deliveryConnectedCount--; deliveryCarriedSection=true;
+      saveDeliveryRouteState(); updateDeliveryRouteVisuals();
+      multiplayerBroadcastAction('route',{connectedCount:deliveryConnectedCount});
+      showToast(`СЕКЦИЯ ОТСТЁГНУТА · ТРАССА ${deliveryConnectedCount}/${DELIVERY_SECTION_COUNT}`);
+    } else showToast('ЭТО БАЗОВАЯ СЕКЦИЯ · СНЯТЬ НЕЛЬЗЯ');
+  }
+}
+function updateSupportHookConstraint(dt) {
+  if (!supportHookEquipped || !hosePoints.length) { hoseSupportActive=false; return; }
+  hoseSupportActive = !!mouseDown && !pouring;
+  if (!hoseSupportActive) return;
+  const idx=THREE.MathUtils.clamp(hoseSupportIndex,3,HOSE_SEGMENTS-4);
+  camera.updateWorldMatrix(true,false);
+  hoseSupportTarget.set(.18,-.18,-1.05).applyQuaternion(camera.quaternion).add(camera.position);
+  hoseSupportTarget.y=Math.max(hoseSupportTarget.y,hoseGroundY(hoseSupportTarget.x,hoseSupportTarget.z)+.18);
+  hosePoints[idx].lerp(hoseSupportTarget,THREE.MathUtils.clamp(dt*10,0,.58));
+  hosePrev[idx].lerp(hosePoints[idx],.55);
+}
+function applyHoseBendConstraints() {
+  const stiffness = pouring ? .35 : .23;
+  const maxDot = Math.cos(THREE.MathUtils.degToRad(52));
+  for (let i=1;i<HOSE_SEGMENTS;i++) {
+    if (hoseHeld && i>=HOSE_SEGMENTS-4) continue;
+    hoseBendTmpA.copy(hosePoints[i-1]).sub(hosePoints[i]).normalize();
+    hoseBendTmpB.copy(hosePoints[i+1]).sub(hosePoints[i]).normalize();
+    const dot=hoseBendTmpA.dot(hoseBendTmpB);
+    if (dot < maxDot) continue;
+    hoseBendTmpMid.copy(hosePoints[i-1]).add(hosePoints[i+1]).multiplyScalar(.5);
+    hosePoints[i].lerp(hoseBendTmpMid,stiffness);
+  }
+}
+
 function initializeHose(anchorPos) {
   hosePoints.length = 0;
   hosePrev.length = 0;
@@ -7838,7 +8016,9 @@ function hoseGroundY(x, z) {
   return groundHeightAt(x, z) + .055;
 }
 function constrainHose() {
-  if (hoseAnchorObject) {
+  if (deliveryRouteGroup && hoseAnchorFallbackValid) {
+    hosePoints[0].copy(deliveryRouteEnd);
+  } else if (hoseAnchorObject) {
     const liveAnchor = hoseAnchorObject.getWorldPosition(hoseTmpMid);
     if (liveAnchor.lengthSq() > .25) hosePoints[0].copy(liveAnchor);
     else if (hoseAnchorFallbackValid) hosePoints[0].copy(hoseAnchorFallback);
@@ -7942,19 +8122,22 @@ function updatePhysicalHose(dt) {
     if (i === HOSE_SEGMENTS && hoseHeld) continue;
     const p = hosePoints[i];
     const prev = hosePrev[i];
-    const vx = (p.x - prev.x) * .985;
-    const vy = (p.y - prev.y) * .985;
-    const vz = (p.z - prev.z) * .985;
+    const damping = hoseHeld ? .968 : .982;
+    const vx = (p.x - prev.x) * damping;
+    const vy = (p.y - prev.y) * damping;
+    const vz = (p.z - prev.z) * damping;
     prev.copy(p);
     p.x += vx;
-    p.y += vy - gravity;
+    const tipWeight = 1 + Math.pow(i / HOSE_SEGMENTS, 3) * .72;
+    p.y += vy - gravity * tipWeight;
     p.z += vz;
   }
 
 
 
 
-  for (let k = 0; k < 9; k++) constrainHose();
+  updateSupportHookConstraint(subDt);
+  for (let k = 0; k < 10; k++) { constrainHose(); applyHoseBendConstraints(); }
   hosePrev[0].copy(hosePoints[0]);
   if (hoseHeld) hosePrev[HOSE_SEGMENTS].copy(hosePoints[HOSE_SEGMENTS]);
 
@@ -9451,6 +9634,7 @@ loader.load(FINAL_SCENE_URL, gltf => {
     hoseAnchorFallback.copy(anchorPos);
     hoseAnchorFallbackValid = true;
     initializeHose(anchorPos);
+    setupDeliveryRoute(anchorPos);
     // Force visibility after scene material/setup passes.
     hoseGroup.visible = true;
     hoseGroup.traverse(o => {
@@ -9940,6 +10124,7 @@ function multiplayerBuildWorldSnapshot() {
     paidPourZoneCount,
     pouring,
     pumpBroken,
+    deliveryConnectedCount,
     zones: POUR_ZONES.map(z => ({
       id:z.id,
       fill:Array.from(z.fill,v=>Math.round((Number(v)||0)*10000)),
@@ -9969,6 +10154,10 @@ function multiplayerApplyWorldSnapshot(snapshot) {
     activePourZoneIndex=THREE.MathUtils.clamp(Math.round(Number(snapshot.activePourZoneIndex)||0),0,POUR_ZONES.length);
     paidPourZoneCount=THREE.MathUtils.clamp(Math.round(Number(snapshot.paidPourZoneCount)||0),0,POUR_ZONES.length);
     pouring=!!snapshot.pouring; pumpBroken=!!snapshot.pumpBroken;
+    if (Number(snapshot.deliveryConnectedCount)>0) {
+      deliveryConnectedCount=THREE.MathUtils.clamp(Math.round(Number(snapshot.deliveryConnectedCount)),1,DELIVERY_SECTION_COUNT);
+      saveDeliveryRouteState(); updateDeliveryRouteVisuals();
+    }
     refreshConcreteSurfaces(); saveDryState();
     for (const z of POUR_ZONES) if (z.curedConcrete && !z.surface.userData?.curedConcrete) applyCuredLook(z.id);
   } finally { multiplayerApplyingRemoteAction=false; }
@@ -10005,9 +10194,12 @@ function multiplayerApplyRemoteAction(msg) {
       levelConcreteAtPoint(Number(p.x)||0,Number(p.z)||0,THREE.MathUtils.clamp(Number(p.step)||.03,.005,.12),Number(p.dirX)||0,Number(p.dirZ)||0);
       evaluateJob();
     } else if (msg.action==='pump') {
-      pouring=!!p.on;
+      pouring=!!p.on; setDeliveryPressureReleased(!pouring);
     } else if (msg.action==='pumpBroken') {
-      pumpBroken=!!p.broken;
+      pumpBroken=!!p.broken; if (pumpBroken) setDeliveryPressureReleased(true);
+    } else if (msg.action==='route') {
+      deliveryConnectedCount=THREE.MathUtils.clamp(Math.round(Number(p.connectedCount)||1),1,DELIVERY_SECTION_COUNT);
+      saveDeliveryRouteState(); updateDeliveryRouteVisuals();
     }
   } finally { multiplayerApplyingRemoteAction=false; }
 }
@@ -14357,7 +14549,15 @@ function primaryActionDown() {
       showToast('НАСОС СЛОМАН · ИДИ К ДЖОРДЖУ', 3.6);
       return;
     }
+    if (!pouring) {
+      const reach=routeReachToActiveZone();
+      if (!reach.ok) {
+        showToast(`НЕ ДОТЯГИВАЕТСЯ · ДОБАВЬ СЕКЦИЮ ТРАССЫ`,3.2);
+        return;
+      }
+    }
     pouring = !pouring;
+      setDeliveryPressureReleased(!pouring);
     if (!multiplayerApplyingRemoteAction) {
       multiplayerBroadcastAction('pump',{on:pouring});
       const zone=activePourZone(); if(zone) multiplayerRecordContribution(zone.id,'pump',1);
@@ -14430,7 +14630,7 @@ document.addEventListener('keydown', e => {
 
   const handledCodes = [
     'KeyW','KeyA','KeyS','KeyD','ShiftLeft','ShiftRight',
-    'Digit1','Digit2','Digit3','Digit4','KeyM','KeyE'
+    'Digit1','Digit2','Digit3','Digit4','Digit5','KeyM','KeyE'
   ];
   if (handledCodes.includes(e.code)) e.preventDefault();
 
@@ -14445,6 +14645,7 @@ document.addEventListener('keydown', e => {
     if (!rakeOwned) showToast('ГРАБЛИ ЛЕЖАТ РЯДОМ С ПЛИТОЙ — СНАЧАЛА ПОДБЕРИ ИХ');
     else setRakeEquipped(!rakeEquipped);
   }
+  if (e.code === 'Digit5' && !e.repeat) toggleSupportHook();
   if (e.code === 'KeyM' && !e.repeat) {
     mapVisible = !mapVisible;
     minimap.style.display = mapVisible ? 'block' : 'none';
@@ -16646,7 +16847,7 @@ function pickupIsUnderCrosshair(it) {
   // the object. First test a very slightly padded *actual world bbox*; this still
   // requires looking directly at the object, but is robust from either side.
   if (it.bounds) {
-    const pad = it.kind === 'rakePickup' ? 0.22 : 0.07;
+    const pad = it.kind === 'rakePickup' ? 0.22 : (['supportHookPickup','deliverySpare','deliveryRouteEnd'].includes(it.kind) ? .18 : 0.07);
     interactionAimBox.copy(it.bounds).expandByScalar(pad);
     if (interactionRaycaster.ray.intersectBox(interactionAimBox, interactionHitPoint)) {
       camera.getWorldPosition(interactionCamPos);
@@ -16922,6 +17123,15 @@ function interact() {
 
 
 
+  if (it.kind === 'supportHookPickup') {
+    pickupSupportHook();
+    return;
+  }
+  if (it.kind === 'deliverySpare' || it.kind === 'deliveryRouteEnd') {
+    tryRouteInteraction(it.kind);
+    return;
+  }
+
   if (it.kind === 'rakePickup') {
     pickupRake(it.rakeSource || null);
     return;
@@ -16950,6 +17160,23 @@ function interact() {
     openDialogue(it.npcKey);
   }
 }
+
+function ensureDeliveryHud() {
+  let el=document.querySelector('#deliveryRouteHud');
+  if (el) return el;
+  el=document.createElement('div'); el.id='deliveryRouteHud';
+  el.innerHTML='<b>ТРАССА</b><span></span>';
+  document.body.appendChild(el); return el;
+}
+function updateDeliveryHud() {
+  const el=ensureDeliveryHud(), span=el.querySelector('span');
+  if (!span) return;
+  const state = pouring ? 'ПОД ДАВЛЕНИЕМ' : (deliveryPressureReleased ? 'ДАВЛЕНИЕ СБРОШЕНО' : 'ОЖИДАНИЕ СБРОСА');
+  const reach=routeReachToActiveZone();
+  span.textContent=`${deliveryConnectedCount}/${DELIVERY_SECTION_COUNT} секций · ${reach.ok?'ДОТЯГИВАЕТСЯ':'НУЖНО УДЛИНИТЬ'} · ${state}`;
+  el.classList.toggle('pressurized',pouring);
+}
+
 function currentZone() {
   for (const z of zones) if (Math.abs(playerPos.x - z.x) < z.w / 2 && Math.abs(playerPos.z - z.z) < z.d / 2) return z.name;
   return 'Двор стройплощадки';
@@ -17285,16 +17512,19 @@ function loop() {
     const staminaPctSafe = Math.min(100, stamina / staminaMax * 100);
     document.body.classList.toggle('showStamina', staminaPctSafe < 99.4);
     document.body.classList.toggle('showBoost', energyBoost > .5);
+    updateDeliveryHud();
     hotbarSmokeSlotEl.classList.toggle('active', specialMode === 'smoke');
     hotbarDrinkSlotEl.classList.toggle('active', specialMode === 'drink');
     hotbarBeerSlotEl.classList.toggle('active', specialMode === 'beer');
     syncMobileHud();
     hotbarRakeSlotEl.classList.toggle('active', rakeEquipped);
+    hotbarHookSlotEl?.classList.toggle('active', supportHookEquipped);
     hotbarSmokeSlotEl.classList.toggle('empty', cigarettes <= 0);
     hotbarDrinkSlotEl.classList.toggle('empty', energyCans <= 0);
     hotbarBeerSlotEl.classList.toggle('empty', beerCans <= 0);
     hotbarRakeSlotEl.classList.toggle('locked', !rakeOwned);
     rakeHotbarStateEl.textContent = !rakeOwned ? '—' : (rakeEquipped ? '●' : '✓');
+    if (hookHotbarStateEl) hookHotbarStateEl.textContent = !supportHookOwned ? '—' : (supportHookEquipped ? '●' : '✓');
     updateEconomyUI();
     updatePourHUD();
     updateTaskTracker();
