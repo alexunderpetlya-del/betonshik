@@ -9003,6 +9003,17 @@ function updatePourHUD() {
 
 
 
+// UI modal state must exist before task/mobile input helpers are evaluated.
+// Keep these declarations early to avoid Temporal Dead Zone errors on mobile startup.
+let dialogueOpen = false;
+let dialogueNpcKey = null;
+let shopOpen = false;
+let resultOpen = false;
+let statsOpen = false;
+let settlementCutsceneActive = false;
+let dialogueRewardTransitionActive = false;
+let settlementRankRevealTimer = 0;
+
 let lastTaskTrackerKey = '';
 let taskTrackerPulseTimer = 0;
 let taskTrackerCompact = localStorage.getItem(TASK_TRACKER_COMPACT_KEY) === '1';
@@ -15379,14 +15390,6 @@ function showToast(t, duration = 2.2) {
 
 
 
-let dialogueOpen = false;
-let dialogueNpcKey = null;
-let shopOpen = false;
-let resultOpen = false;
-let statsOpen = false;
-let settlementCutsceneActive = false;
-let dialogueRewardTransitionActive = false;
-let settlementRankRevealTimer = 0;
 
 
 
