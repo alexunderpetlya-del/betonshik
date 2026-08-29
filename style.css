@@ -5292,3 +5292,132 @@ body{position:relative!important;background:#000!important}
 #multiplayerCrewHud{position:fixed;left:14px;bottom:14px;z-index:150;min-width:148px;padding:9px 11px;border-radius:13px;background:rgba(8,10,10,.72);border:1px solid rgba(224,189,93,.22);backdrop-filter:blur(5px);pointer-events:none;color:#eee;box-shadow:0 10px 24px rgba(0,0,0,.24)}#multiplayerCrewHud>b{display:block;margin-bottom:6px;color:#d8b75e;font:900 9px/1 system-ui;letter-spacing:.12em}#multiplayerCrewList{display:flex;flex-direction:column;gap:4px}#multiplayerCrewList span{display:flex;align-items:center;gap:6px;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:800 10px/1.1 system-ui;color:#d9ddd8}#multiplayerCrewList span.self{color:#fff}#multiplayerCrewList i{width:6px;height:6px;border-radius:50%;background:#61d889;box-shadow:0 0 8px rgba(97,216,137,.5)}
 @media(pointer:coarse){#multiplayerCrewHud{left:8px;bottom:8px;min-width:126px;padding:7px 9px}#multiplayerCrewList span{font-size:9px}.multiplayerIdentityCard{padding:20px}}
 \n\n/* v51.152 — rank sheet geometry, hose-control rebuild, wire/cure visual fixes */\n.settlementRankBadge{\n  width:clamp(170px,24vw,330px)!important;\n  aspect-ratio:1/1!important;\n  background-image:url('./assets/ui/pour_rank_sheet.png?v=51.152')!important;\n  background-repeat:no-repeat!important;\n  background-size:400% 100%!important;\n  overflow:visible!important;\n  clip-path:none!important;\n}\n.settlementRankCard[data-grade=\"S\"] .settlementRankBadge{background-position:0% 50%!important}\n.settlementRankCard[data-grade=\"A\"] .settlementRankBadge{background-position:33.333% 50%!important}\n.settlementRankCard[data-grade=\"B\"] .settlementRankBadge,\n.settlementRankCard[data-grade=\"C\"] .settlementRankBadge,\n.settlementRankCard[data-grade=\"D\"] .settlementRankBadge,\n.settlementRankCard[data-grade=\"E\"] .settlementRankBadge{background-position:66.666% 50%!important}\n.settlementRankCard[data-grade=\"F\"] .settlementRankBadge{background-position:100% 50%!important}\n\n#betonHoseControl{background:rgba(5,7,7,.28);backdrop-filter:blur(2px)}\n.betonHoseControlCard{width:min(300px,78vw)!important;padding:10px 12px 10px!important;border-radius:16px!important;overflow:visible!important}\n.betonHoseControlTitle{font-size:14px!important;margin-bottom:4px!important}\n.betonHoseRig{position:relative!important;margin:0 auto!important;width:min(150px,24vw)!important;height:min(410px,58vh)!important;aspect-ratio:auto!important;overflow:visible!important}\n.betonHoseFrame{display:none!important}\n.betonHoseTrack{position:absolute;left:50%;top:0;transform:translateX(-50%);width:86px;height:100%;border-radius:28px;background:linear-gradient(180deg,#171b1d,#0c0f10);border:2px solid rgba(234,190,76,.55);box-shadow:inset 0 0 0 1px rgba(255,255,255,.04),inset 0 0 18px rgba(0,0,0,.65),0 10px 26px rgba(0,0,0,.35);z-index:1}\n.betonHoseTrack:before{content:\"\";position:absolute;inset:9px;border-radius:21px;border:1px solid rgba(255,255,255,.045);background:linear-gradient(180deg,rgba(255,255,255,.025),rgba(0,0,0,.09))}\n.betonHoseSlot{left:50%!important;top:7%!important;transform:translateX(-50%)!important;width:82px!important;height:86%!important;z-index:3!important}\n.betonHoseBody{left:50%!important;bottom:0!important;width:100%!important;min-height:15%!important;transform:translateX(-50%)!important;overflow:hidden!important}\n.betonHoseBody img{left:50%!important;bottom:0!important;width:100%!important;height:100%!important;object-fit:fill!important;transform:translateX(-50%)!important;filter:drop-shadow(0 2px 3px rgba(0,0,0,.62))!important}\n.betonHoseGrip{left:50%!important;width:118%!important;transform:translate(-50%,50%)!important;z-index:6!important}\n.betonHoseArm{width:122%!important;left:-72%!important;height:auto!important;transform:translateY(50%)!important;z-index:7!important;object-fit:contain!important;background:transparent!important}\n.betonHoseProgressSlot{left:auto!important;right:-22px!important;top:4%!important;width:10px!important;height:92%!important;z-index:4!important}\n.betonHoseControlHint{margin-top:4px!important;font-size:9px!important;line-height:1.2!important}\n.betonHoseControlState{margin-top:2px!important;min-height:11px!important;font-size:8.5px!important}\n@media (orientation:landscape) and (max-height:560px){\n  .betonHoseControlCard{width:min(286px,66vw)!important;padding:7px 9px 7px!important}\n  .betonHoseRig{width:min(128px,19vw)!important;height:min(340px,66vh)!important}\n  .betonHoseTrack{width:76px!important}\n  .betonHoseSlot{width:72px!important}\n  .betonHoseControlHint{font-size:7.5px!important}\n  .betonHoseControlState{font-size:7.5px!important}\n}\n
+
+/* v51.154 — rank crop, hose QTE geometry, task compact mode */
+#multiplayerCrewHud{display:none!important}
+
+/* Rank sheet native size is 2103x748: four equal frames => ~525.75x748 each.
+   Preserve that frame aspect ratio so badges are not horizontally squashed. */
+.settlementRankBadge{
+  width:clamp(126px,17vw,235px)!important;
+  aspect-ratio:525.75/748!important;
+  background-image:url('./assets/ui/pour_rank_sheet.png?v=51.154')!important;
+  background-repeat:no-repeat!important;
+  background-size:400% 100%!important;
+  background-position-y:50%!important;
+  overflow:hidden!important;
+  clip-path:none!important;
+  border-radius:0!important;
+}
+.settlementRankCard[data-grade="S"] .settlementRankBadge{background-position-x:0%!important}
+.settlementRankCard[data-grade="A"] .settlementRankBadge{background-position-x:33.333333%!important}
+.settlementRankCard[data-grade="B"] .settlementRankBadge,
+.settlementRankCard[data-grade="C"] .settlementRankBadge,
+.settlementRankCard[data-grade="D"] .settlementRankBadge,
+.settlementRankCard[data-grade="E"] .settlementRankBadge{background-position-x:66.666667%!important}
+.settlementRankCard[data-grade="F"] .settlementRankBadge{background-position-x:100%!important}
+@media (orientation:landscape) and (max-height:560px){
+  .settlementRankBadge{width:min(27vh,17vw)!important}
+}
+
+/* Hose QTE: no baked frame and no grip image. Track/target are code/CSS. */
+#betonHoseControl{background:rgba(5,7,7,.26)!important;backdrop-filter:blur(2px)!important}
+.betonHoseControlCard{
+  width:min(300px,74vw)!important;
+  padding:10px 12px 10px!important;
+  border-radius:18px!important;
+  overflow:visible!important;
+}
+.betonHoseControlTitle{font-size:15px!important;margin:0 0 5px!important}
+.betonHoseRig{
+  position:relative!important;
+  margin:0 auto!important;
+  width:min(190px,31vw)!important;
+  height:min(430px,61vh)!important;
+  aspect-ratio:auto!important;
+  overflow:visible!important;
+}
+.betonHoseTrack{
+  position:absolute!important;
+  left:50%!important;top:0!important;transform:translateX(-50%)!important;
+  width:112px!important;height:100%!important;
+  border-radius:30px!important;
+  background:linear-gradient(180deg,#171a1b 0%,#0d1011 100%)!important;
+  border:2px solid rgba(224,187,87,.55)!important;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.035),inset 0 0 24px rgba(0,0,0,.75),0 12px 28px rgba(0,0,0,.34)!important;
+  z-index:1!important;
+}
+.betonHoseTrack:before{
+  content:""!important;position:absolute!important;inset:8px!important;border-radius:23px!important;
+  border:1px solid rgba(255,255,255,.04)!important;
+  background:linear-gradient(90deg,rgba(255,255,255,.02),rgba(0,0,0,.10),rgba(255,255,255,.02))!important;
+}
+.betonHoseSlot{
+  position:absolute!important;left:50%!important;top:5%!important;transform:translateX(-50%)!important;
+  width:104px!important;height:90%!important;overflow:visible!important;z-index:3!important;
+}
+.betonHoseBody{
+  position:absolute!important;left:50%!important;bottom:0!important;width:100%!important;min-height:18%!important;
+  transform:translateX(-50%)!important;overflow:hidden!important;z-index:3!important;
+}
+.betonHoseBody img{
+  position:absolute!important;left:50%!important;bottom:0!important;width:100%!important;height:100%!important;
+  object-fit:fill!important;transform:translateX(-50%) scaleX(1.08)!important;transform-origin:50% 100%!important;
+  filter:drop-shadow(0 3px 4px rgba(0,0,0,.66))!important;
+}
+.betonHoseGrip{display:none!important}
+.betonHoseCatchZone{
+  position:absolute!important;left:50%!important;width:116%!important;min-height:10%!important;
+  transform:translate(-50%,50%)!important;border-radius:18px!important;z-index:6!important;pointer-events:none!important;
+  border:2px solid rgba(236,196,81,.70)!important;
+  background:linear-gradient(90deg,rgba(236,196,81,.05),rgba(236,196,81,.18),rgba(236,196,81,.05))!important;
+  box-shadow:0 0 12px rgba(229,184,65,.16),inset 0 0 10px rgba(239,207,115,.08)!important;
+  transition:border-color .08s linear,background .08s linear,box-shadow .08s linear!important;
+}
+.betonHoseCatchZone.hit{
+  border-color:rgba(238,206,112,.96)!important;
+  background:linear-gradient(90deg,rgba(238,206,112,.10),rgba(238,206,112,.28),rgba(238,206,112,.10))!important;
+  box-shadow:0 0 16px rgba(238,206,112,.34),inset 0 0 12px rgba(255,229,150,.12)!important;
+}
+.betonHoseArm{
+  position:absolute!important;width:128%!important;left:-78%!important;height:auto!important;z-index:8!important;
+  transform:translateY(50%)!important;object-fit:contain!important;background:transparent!important;pointer-events:none!important;
+  filter:drop-shadow(0 4px 6px rgba(0,0,0,.55))!important;
+}
+.betonHoseProgressSlot{left:auto!important;right:7px!important;top:5%!important;width:8px!important;height:90%!important;z-index:5!important}
+.betonHoseControlHint{margin-top:5px!important;font-size:9px!important;line-height:1.2!important}
+.betonHoseControlState{margin-top:2px!important;min-height:11px!important;font-size:8.5px!important}
+@media (orientation:landscape) and (max-height:560px){
+  .betonHoseControlCard{width:min(270px,60vw)!important;padding:7px 9px 7px!important}
+  .betonHoseControlTitle{font-size:13px!important;margin-bottom:2px!important}
+  .betonHoseRig{width:min(165px,25vw)!important;height:min(330px,67vh)!important}
+  .betonHoseTrack{width:102px!important}
+  .betonHoseSlot{width:94px!important}
+  .betonHoseArm{width:124%!important;left:-74%!important}
+  .betonHoseControlHint{font-size:7.5px!important;margin-top:2px!important}
+  .betonHoseControlState{font-size:7.5px!important;margin-top:1px!important}
+}
+
+/* Current task can collapse to a compact one-line card. */
+.taskTrackerHeadRight{display:flex;align-items:center;gap:7px}
+.taskTrackerToggle{
+  width:22px;height:22px;padding:0;border:1px solid rgba(226,190,93,.26);border-radius:7px;
+  background:rgba(255,255,255,.045);color:#dfc06b;font:950 15px/18px system-ui,sans-serif;
+  display:grid;place-items:center;cursor:pointer;touch-action:manipulation;
+}
+.taskTrackerToggle:active{transform:scale(.94)}
+.taskTracker.isCompact{width:min(280px,56vw)!important;padding:8px 10px!important}
+.taskTracker.isCompact .taskTrackerHead{margin-bottom:0!important}
+.taskTracker.isCompact .taskTrackerHead>span{display:none!important}
+.taskTracker.isCompact .taskTrackerBody{grid-template-columns:20px minmax(0,1fr)!important;gap:6px!important;margin-top:0!important}
+.taskTracker.isCompact .taskTrackerBody>i{width:20px!important;height:20px!important;font-size:10px!important;border-radius:6px!important}
+.taskTracker.isCompact .taskTrackerBody strong{font-size:9px!important}
+.taskTracker.isCompact .taskTrackerBody small{display:none!important}
+.taskTracker.isCompact .taskTrackerBar{margin-top:5px!important}
+.taskTracker.isCompact .taskTrackerHeadRight{position:absolute;right:8px;top:6px;z-index:2}
+.taskTracker.isCompact .taskTrackerHeadRight>b{font-size:6.5px!important;opacity:.7}
+.taskTracker.isCompact .taskTrackerBody{padding-right:46px}
+@media(pointer:coarse){
+  .taskTrackerToggle{width:20px;height:20px;font-size:14px}
+  .taskTracker.isCompact{width:min(250px,54vw)!important;padding:7px 9px!important}
+}

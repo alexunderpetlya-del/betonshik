@@ -100,6 +100,8 @@ const taskTrackerIconEl = document.querySelector('#taskTrackerIcon');
 const taskTrackerTitleEl = document.querySelector('#taskTrackerTitle');
 const taskTrackerDetailEl = document.querySelector('#taskTrackerDetail');
 const taskTrackerFillEl = document.querySelector('#taskTrackerFill');
+const taskTrackerToggleEl = document.querySelector('#taskTrackerToggle');
+const TASK_TRACKER_COMPACT_KEY = 'beton_task_tracker_compact_v1';
 let settlementRankSheetPreload = null;
 function preloadSettlementRankSheet() {
   if (settlementRankSheetPreload) return settlementRankSheetPreload;
@@ -4139,7 +4141,7 @@ function ensureHoseControlUi() {
   root = document.createElement('div');
   root.id = 'betonHoseControl';
   root.className = 'betonEventQte';
-  root.innerHTML = '<div class="betonHoseControlCard"><div class="betonHoseControlTitle">ПЕРЕХВАТИ ШЛАНГ</div><div class="betonHoseRig"><div class="betonHoseTrack"></div><div class="betonHoseSlot"><div class="betonHoseBody"><img src="./assets/ui/events/hose.png?v=51.152" alt=""></div><img class="betonHoseGrip" src="./assets/ui/events/grip.png?v=51.152" alt=""></div><img class="betonHoseArm" src="./assets/ui/events/arm.png?v=51.152" alt=""><div class="betonHoseProgressSlot"><i></i></div></div><div class="betonHoseControlHint"><b>ЗАЖМИ</b> — РУКА ВВЕРХ · <b>ОТПУСТИ</b> — ВНИЗ</div><div class="betonHoseControlState">ПОЙМАЙ РУКОЯТКУ ЛАДОНЬЮ</div></div>';
+  root.innerHTML = '<div class="betonHoseControlCard"><div class="betonHoseControlTitle">ПЕРЕХВАТИ ШЛАНГ</div><div class="betonHoseRig"><div class="betonHoseTrack"></div><div class="betonHoseSlot"><div class="betonHoseBody"><img src="./assets/ui/events/hose.png?v=51.154" alt=""></div><div class="betonHoseCatchZone"></div></div><img class="betonHoseArm" src="./assets/ui/events/arm.png?v=51.154" alt=""><div class="betonHoseProgressSlot"><i></i></div></div><div class="betonHoseControlHint"><b>ЗАЖМИ</b> — РУКА ВВЕРХ · <b>ОТПУСТИ</b> — ВНИЗ</div><div class="betonHoseControlState">УДЕРЖИВАЙ ЛАДОНЬ В ЗОНЕ</div></div>';
   document.body.appendChild(root);
 
   const press = e => {
@@ -4169,7 +4171,7 @@ function ensureHoseControlUi() {
 function updateHoseControlUi(hit = false) {
   const root = ensureHoseControlUi();
   const body = root.querySelector('.betonHoseBody');
-  const grip = root.querySelector('.betonHoseGrip');
+  const catchZone = root.querySelector('.betonHoseCatchZone');
   const arm = root.querySelector('.betonHoseArm');
   const progress = root.querySelector('.betonHoseProgressSlot i');
   const state = root.querySelector('.betonHoseControlState');
@@ -4178,17 +4180,20 @@ function updateHoseControlUi(hit = false) {
   const slotRange = 75.0;
   const targetY = THREE.MathUtils.clamp(hoseControlTargetY, .24, .97);
   const handY = THREE.MathUtils.clamp(hoseControlZoneY, .03, .97);
-  if (body) body.style.height = Math.max(12, targetY * 100) + '%';
-  if (grip) {
-    grip.style.bottom = Math.max(4, targetY * 100 - 20) + '%';
-    grip.classList.toggle('hit', hit);
+  if (body) body.style.height = Math.max(18, targetY * 100) + '%';
+  if (catchZone) {
+    const difficulty = THREE.MathUtils.clamp((activePourZoneIndex || 0) / Math.max(1, POUR_ZONES.length - 1), 0, 1);
+    const tolerance = THREE.MathUtils.lerp(.090, .064, difficulty);
+    catchZone.style.bottom = (targetY * 100) + '%';
+    catchZone.style.height = Math.max(10, tolerance * 200) + '%';
+    catchZone.classList.toggle('hit', hit);
   }
   if (arm) {
     arm.style.bottom = (slotBottom + handY * slotRange) + '%';
     arm.classList.toggle('hit', hit);
   }
   if (progress) progress.style.height = Math.max(1, THREE.MathUtils.clamp(hoseControlProgress, 0, 1) * 98) + '%';
-  if (state) state.textContent = hit ? 'ЗАХВАТ ЕСТЬ · УДЕРЖИВАЙ' : 'ПОЙМАЙ РУКОЯТКУ ЛАДОНЬЮ';
+  if (state) state.textContent = hit ? 'ДЕРЖИ В ЗОНЕ' : 'УДЕРЖИВАЙ ЛАДОНЬ В ЗОНЕ';
 }
 
 function startHoseControlQTE() {
@@ -8499,6 +8504,25 @@ function updatePourHUD() {
 
 let lastTaskTrackerKey = '';
 let taskTrackerPulseTimer = 0;
+let taskTrackerCompact = localStorage.getItem(TASK_TRACKER_COMPACT_KEY) === '1';
+function applyTaskTrackerCompactState() {
+  if (!taskTrackerEl) return;
+  taskTrackerEl.classList.toggle('isCompact', taskTrackerCompact);
+  if (taskTrackerToggleEl) {
+    taskTrackerToggleEl.setAttribute('aria-expanded', taskTrackerCompact ? 'false' : 'true');
+    taskTrackerToggleEl.setAttribute('aria-label', taskTrackerCompact ? 'Развернуть текущую задачу' : 'Свернуть текущую задачу');
+    taskTrackerToggleEl.textContent = taskTrackerCompact ? '+' : '−';
+  }
+}
+if (taskTrackerToggleEl) {
+  taskTrackerToggleEl.addEventListener('click', e => {
+    e.preventDefault(); e.stopPropagation();
+    taskTrackerCompact = !taskTrackerCompact;
+    localStorage.setItem(TASK_TRACKER_COMPACT_KEY, taskTrackerCompact ? '1' : '0');
+    applyTaskTrackerCompactState();
+  });
+}
+applyTaskTrackerCompactState();
 
 
 
@@ -9808,12 +9832,7 @@ function multiplayerSend(payload) {
   try { multiplayerSocket.send(JSON.stringify(payload)); return true; } catch (_) { return false; }
 }
 function ensureMultiplayerUi() {
-  if (!document.querySelector('#multiplayerCrewHud')) {
-    const crew = document.createElement('div');
-    crew.id = 'multiplayerCrewHud';
-    crew.innerHTML = '<b>БРИГАДА <span id="multiplayerCrewCount">0/3</span></b><div id="multiplayerCrewList"></div>';
-    document.body.appendChild(crew);
-  }
+  // v51.154: no persistent crew HUD. Multiplayer remains active; names stay above remote players.
 }
 function multiplayerIdentityPrompt() {
   const saved = multiplayerCleanNickname(localStorage.getItem(MULTI_NICK_KEY));
@@ -10015,7 +10034,7 @@ function multiplayerHandleMessage(data) {
     if (msg.profile) applyMultiplayerProfile(msg.profile);
     updateMultiplayerRoster(msg.players||[]);
     if (msg.world) multiplayerApplyWorldSnapshot(msg.world);
-    showToast(`БРИГАДА · ${Math.max(1,(msg.players||[]).length)}/3`,2.2);
+    showToast(`ПОДКЛЮЧЕНО · ${Math.max(1,(msg.players||[]).length)}/3`,2.2);
   } else if (msg.type==='roster') {
     multiplayerHostId=msg.hostId||multiplayerHostId; updateMultiplayerRoster(msg.players||[]);
   } else if (msg.type==='pose') {

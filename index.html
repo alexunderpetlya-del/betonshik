@@ -14,7 +14,7 @@
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png?v=51.41" />
   <title>БЕТОНЩИК</title>
   <link rel="manifest" href="./manifest.webmanifest?v=51.62" />
-  <link rel="stylesheet" href="./style.css?v=51.153" />
+  <link rel="stylesheet" href="./style.css?v=51.154" />
   <script type="importmap">
   {
     "imports": {
@@ -117,7 +117,7 @@
 
 
   <div id="taskTracker" class="taskTracker" aria-live="polite" aria-label="Текущая задача">
-    <div class="taskTrackerHead"><span>ТЕКУЩАЯ ЗАДАЧА</span><b id="taskTrackerStep">1/6</b></div>
+    <div class="taskTrackerHead"><span>ТЕКУЩАЯ ЗАДАЧА</span><div class="taskTrackerHeadRight"><b id="taskTrackerStep">1/6</b><button id="taskTrackerToggle" class="taskTrackerToggle" type="button" aria-expanded="true" aria-label="Свернуть текущую задачу">−</button></div></div>
     <div class="taskTrackerBody">
       <i id="taskTrackerIcon" aria-hidden="true">◆</i>
       <div><strong id="taskTrackerTitle">Найти шланг</strong><small id="taskTrackerDetail">На стройплощадке возле насоса</small></div>
@@ -390,7 +390,7 @@
 
 
 
-  <script type="module" src="./main.js?v=51.153"></script>
+  <script type="module" src="./main.js?v=51.154"></script>
   <script>
   (function(){
     function showBootError(msg){
