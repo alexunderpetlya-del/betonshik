@@ -3965,6 +3965,7 @@ function saveCareerStats(force = false) {
     localStorage.setItem(CAREER_STATS_KEY, JSON.stringify(careerStats));
     careerStatsDirty = false;
     careerStatsSaveTimer = 0;
+    multiplayerQueueProfileSync();
   } catch (_) {}
 }
 
@@ -3990,6 +3991,7 @@ function saveProgression() {
   localStorage.setItem('beton_stamina_level', String(staminaLevel));
   localStorage.setItem('beton_pump_level', String(pumpLevel));
   localStorage.setItem('beton_jobs_completed', String(jobsCompleted));
+  multiplayerQueueProfileSync();
 }
 
 
@@ -4124,7 +4126,7 @@ function ensureHoseControlUi() {
   root = document.createElement('div');
   root.id = 'betonHoseControl';
   root.className = 'betonEventQte';
-  root.innerHTML = '<div class="betonHoseControlCard"><div class="betonHoseControlTitle">ПЕРЕХВАТИ ШЛАНГ</div><div class="betonHoseRig"><img class="betonHoseFrame" src="./assets/ui/events/hose_frame.png" alt=""><div class="betonHoseSlot"><div class="betonHoseBody"><img src="./assets/ui/events/hose.png" alt=""></div><img class="betonHoseGrip" src="./assets/ui/events/grip.png" alt=""></div><img class="betonHoseArm" src="./assets/ui/events/arm.png" alt=""><div class="betonHoseProgressSlot"><i></i></div></div><div class="betonHoseControlHint"><b>ЗАЖМИ</b> — РУКА ВВЕРХ · <b>ОТПУСТИ</b> — ВНИЗ</div><div class="betonHoseControlState">ДЕРЖИ ЛАДОНЬ НА РУКОЯТКЕ</div></div>';
+  root.innerHTML = '<div class="betonHoseControlCard"><div class="betonHoseControlTitle">ПЕРЕХВАТИ ШЛАНГ</div><div class="betonHoseRig"><img class="betonHoseFrame" src="./assets/ui/events/hose_frame.png" alt=""><div class="betonHoseSlot"><div class="betonHoseBody"><img src="./assets/ui/events/hose.png" alt=""></div><img class="betonHoseGrip" src="./assets/ui/events/grip.png" alt=""></div><img class="betonHoseArm" src="./assets/ui/events/arm.png?v=51.151" alt=""><div class="betonHoseProgressSlot"><i></i></div></div><div class="betonHoseControlHint"><b>ЗАЖМИ</b> — РУКА ВВЕРХ · <b>ОТПУСТИ</b> — ВНИЗ</div><div class="betonHoseControlState">ДЕРЖИ ЛАДОНЬ НА РУКОЯТКЕ</div></div>';
   document.body.appendChild(root);
 
   const press = e => {
@@ -4201,7 +4203,7 @@ function startHoseControlQTE() {
 function failHoseControlQTE() {
   if (!hoseControlActive) return;
   hoseControlFailures += 1;
-  window.__betonEventResult = 'ПРОВАЛ';
+  window.__betonEventResult = '—';
   hoseControlActive = false;
   hoseControlHeld = false;
   hoseControlPointer = null;
@@ -4218,7 +4220,7 @@ function completeHoseControlQTE() {
   hoseControlPointer = null;
   hoseRecoveryNeeded = false;
   hoseControlProgress = 1;
-  window.__betonEventResult = hoseControlFailures > 0 ? 'ЧАСТИЧНО' : 'ИДЕАЛЬНО';
+  window.__betonEventResult = '—';
   ensureHoseControlUi().classList.remove('show','pressed');
   hoseHeld = true;
   hoseDropRelaxUntil = 0;
@@ -4567,7 +4569,9 @@ function closePumpWirePuzzle(success) {
   if (success && wirePuzzle) window.__betonEventResult = wirePuzzle.mistakes === 0 ? 'ИДЕАЛЬНО' : 'ЧАСТИЧНО';
   pumpPuzzleOpen = false; wirePuzzle = null; ensurePumpPuzzleUi().classList.remove('show');
   if (success) {
-    pumpBroken = false; markPourProgressDirty(); savePourProgress(true);
+    pumpBroken = false;
+    if (!multiplayerApplyingRemoteAction) multiplayerBroadcastAction('pumpBroken',{broken:false});
+    markPourProgressDirty(); savePourProgress(true);
     if (hoseInteraction) hoseInteraction.text = hoseHeld ? 'E — бросить шланг · ЛКМ — включить бетон' : 'E — взять шланг';
     showToast('НАСОС ЗАПУЩЕН · ПОДАЧА ВОССТАНОВЛЕНА', 3.0); dialogueCloseEl?.click();
   }
@@ -4948,6 +4952,7 @@ function executePendingPourEvent() {
   }
   if(event.type==='pump'){
     cancelQTEWithoutPenalty(); pumpBroken=true; pouring=false;
+    if (!multiplayerApplyingRemoteAction) { multiplayerBroadcastAction('pumpBroken',{broken:true}); multiplayerBroadcastAction('pump',{on:false}); }
     if(hoseInteraction)hoseInteraction.text='НАСОС СЛОМАН · ИДИ К ДЖОРДЖУ';
     // Pump alert is a notification AFTER the failure, not a reaction countdown.
     showEventAlarmVisual('pump', POUR_EVENT_COPY.pump);
@@ -5831,6 +5836,10 @@ function addConcreteVolumeAt(
 
   if (changed) {
     markPourProgressDirty();
+    if (fromHose && !multiplayerApplyingRemoteAction) {
+      multiplayerRecordContribution(zone.id,'poured',volumeM3);
+      multiplayerBroadcastAction('pour',{zoneId:zone.id,x:depositX,z:depositZ,volume:volumeM3,vx:impactVX,vz:impactVZ,speed:impactSpeed});
+    }
     evaluateJob();
   }
   return changed;
@@ -7487,6 +7496,13 @@ function rakeContinuousSweepStep(step) {
 
   if (changed) {
     markPourProgressDirty();
+    if (!multiplayerApplyingRemoteAction) {
+      const workZone=zoneAt(rakeSweepNowPoint.x,rakeSweepNowPoint.z);
+      if (workZone) {
+        multiplayerRecordContribution(workZone.id,'rake',step);
+        multiplayerBroadcastRake(rakeSweepNowPoint.x,rakeSweepNowPoint.z,step,dirX,dirZ,workZone.id);
+      }
+    }
     // The supplied rake sample is ~0.6 s. Re-trigger only while the tool is
     // genuinely travelling through concrete, with enough spacing to avoid a
     // machine-gun repetition.
@@ -7954,6 +7970,10 @@ function currentPourRateM3() {
 
 
 function updatePouring(dt) {
+  if (multiplayerConnected && multiplayerHoseAuthority && multiplayerHoseAuthority !== multiplayerPlayerId) {
+    pourTipPrevSafeValid = false;
+    return;
+  }
   // Pump state and hand state are separate. A dropped hose can keep dumping
   // concrete until the player recovers it and turns the pump off.
   if (!pouring || pumpBroken || !hosePoints.length || jobState !== 'active') {
@@ -8315,6 +8335,7 @@ function resetPourJob() {
   markPourProgressDirty();
   savePourProgress(true);
   updatePourHUD();
+  multiplayerNotifyWorldReset();
 }
 
 
@@ -9594,6 +9615,7 @@ let energyCans = savedInt('beton_energy', 0);
 let beerCans = savedInt('beton_beer', 4);
 function saveRakeOwned() {
   try { localStorage.setItem(RAKE_OWNED_STORAGE_KEY, rakeOwned ? '1' : '0'); } catch (_) {}
+  multiplayerQueueProfileSync();
 }
 
 
@@ -9604,6 +9626,7 @@ function saveEconomy() {
   localStorage.setItem('beton_cigarettes', String(cigarettes));
   localStorage.setItem('beton_energy', String(energyCans));
   localStorage.setItem('beton_beer', String(beerCans));
+  multiplayerQueueProfileSync();
 }
 function addMoney(amount) {
   const earned = Math.max(0, Math.round(amount));
@@ -9646,6 +9669,393 @@ function syncPlayerBodyToWorld() {
 let eyeHeight = calibratedEyeHeight + cameraHeightOffset;
 const SITE = { minX: -31.7, maxX: 31.7, minZ: -49.9, maxZ: 22.9 };
 const playerPos = new THREE.Vector3(0, 0, 18.0); // fallback until Blender `spawn` is loaded
+
+
+// -----------------------------------------------------------------------------
+// SINGLE-SERVER CO-OP (1-3 PLAYERS) · v51.149
+// One Cloudflare Durable Object is the only public game room. Profiles are
+// persistent on the server; the browser keeps a stable UUID and nickname.
+// -----------------------------------------------------------------------------
+const MULTI_PLAYER_ID_KEY = 'beton_mp_player_id_v1';
+const MULTI_NICK_KEY = 'beton_mp_nickname_v1';
+const MULTI_POSE_INTERVAL = 1 / 12;
+const MULTI_WORLD_INTERVAL = 1.35;
+const MULTI_PROFILE_INTERVAL = .65;
+const MULTI_CONTRIB_INTERVAL = .85;
+const multiplayerRemotePlayers = new Map();
+const multiplayerContributionDelta = new Map();
+let multiplayerPlayerId = '';
+let multiplayerNickname = '';
+let multiplayerSocket = null;
+let multiplayerConnected = false;
+let multiplayerServerFull = false;
+let multiplayerHostId = '';
+let multiplayerWorldEpoch = 1;
+let multiplayerPoseTimer = 0;
+let multiplayerWorldTimer = 0;
+let multiplayerProfileTimer = 0;
+let multiplayerContribTimer = 0;
+let multiplayerProfileDirty = false;
+let multiplayerApplyingProfile = false;
+let multiplayerApplyingRemoteAction = false;
+let multiplayerApplyingWorldReset = false;
+let multiplayerHoseHolder = null;
+let multiplayerHoseAuthority = null;
+let multiplayerRakeSendAt = 0;
+let multiplayerPendingSettlement = null;
+
+function multiplayerSafeId() {
+  let id = localStorage.getItem(MULTI_PLAYER_ID_KEY) || '';
+  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) {
+    id = (crypto.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`).replace(/[^a-zA-Z0-9_-]/g,'');
+    localStorage.setItem(MULTI_PLAYER_ID_KEY, id);
+  }
+  return id;
+}
+function multiplayerCleanNickname(value) {
+  return String(value || '').replace(/[<>\n\r\t]/g, '').replace(/\s+/g, ' ').trim().slice(0, 18);
+}
+function buildLocalMultiplayerProfile() {
+  return {
+    nickname: multiplayerNickname || localStorage.getItem(MULTI_NICK_KEY) || 'Рабочий',
+    money: Math.max(0, Math.round(Number(money) || 0)),
+    cigarettes: Math.max(0, Math.round(Number(cigarettes) || 0)),
+    energy: Math.max(0, Math.round(Number(energyCans) || 0)),
+    beer: Math.max(0, Math.round(Number(beerCans) || 0)),
+    rakeOwned: !!rakeOwned,
+    upgrades: {
+      bootTier: Math.max(0, Math.round(Number(bootTier) || 0)),
+      staminaLevel: Math.max(0, Math.round(Number(staminaLevel) || 0)),
+      pumpLevel: Math.max(0, Math.round(Number(pumpLevel) || 0)),
+      jobsCompleted: Math.max(0, Math.round(Number(jobsCompleted) || 0)),
+    },
+    careerStats: { ...careerStats },
+  };
+}
+function multiplayerQueueProfileSync() {
+  if (multiplayerApplyingProfile) return;
+  multiplayerProfileDirty = true;
+}
+function applyMultiplayerProfile(profile) {
+  if (!profile || typeof profile !== 'object') return;
+  multiplayerApplyingProfile = true;
+  try {
+    money = Math.max(0, Math.round(Number(profile.money) || 0));
+    cigarettes = Math.max(0, Math.round(Number(profile.cigarettes) || 0));
+    energyCans = Math.max(0, Math.round(Number(profile.energy) || 0));
+    beerCans = Math.max(0, Math.round(Number(profile.beer) || 0));
+    rakeOwned = !!profile.rakeOwned;
+    const u = profile.upgrades || {};
+    bootTier = THREE.MathUtils.clamp(Math.round(Number(u.bootTier) || 0), 0, 3);
+    staminaLevel = THREE.MathUtils.clamp(Math.round(Number(u.staminaLevel) || 0), 0, 3);
+    pumpLevel = THREE.MathUtils.clamp(Math.round(Number(u.pumpLevel) || 0), 0, 3);
+    jobsCompleted = Math.max(0, Math.round(Number(u.jobsCompleted) || 0));
+    if (profile.careerStats && typeof profile.careerStats === 'object') {
+      for (const [key,value] of Object.entries(profile.careerStats)) {
+        if (key in careerStats && Number.isFinite(Number(value))) careerStats[key] = Number(value);
+      }
+    }
+    localStorage.setItem('beton_money', String(money));
+    localStorage.setItem('beton_cigarettes', String(cigarettes));
+    localStorage.setItem('beton_energy', String(energyCans));
+    localStorage.setItem('beton_beer', String(beerCans));
+    localStorage.setItem(RAKE_OWNED_STORAGE_KEY, rakeOwned ? '1' : '0');
+    localStorage.setItem('beton_boot_tier', String(bootTier));
+    localStorage.setItem('beton_stamina_level', String(staminaLevel));
+    localStorage.setItem('beton_pump_level', String(pumpLevel));
+    localStorage.setItem('beton_jobs_completed', String(jobsCompleted));
+    localStorage.setItem(CAREER_STATS_KEY, JSON.stringify(careerStats));
+  } finally {
+    multiplayerApplyingProfile = false;
+    multiplayerProfileDirty = false;
+  }
+}
+function multiplayerSend(payload) {
+  if (!multiplayerSocket || multiplayerSocket.readyState !== WebSocket.OPEN) return false;
+  try { multiplayerSocket.send(JSON.stringify(payload)); return true; } catch (_) { return false; }
+}
+function ensureMultiplayerUi() {
+  if (!document.querySelector('#multiplayerCrewHud')) {
+    const crew = document.createElement('div');
+    crew.id = 'multiplayerCrewHud';
+    crew.innerHTML = '<b>БРИГАДА <span id="multiplayerCrewCount">0/3</span></b><div id="multiplayerCrewList"></div>';
+    document.body.appendChild(crew);
+  }
+}
+function multiplayerIdentityPrompt() {
+  const saved = multiplayerCleanNickname(localStorage.getItem(MULTI_NICK_KEY));
+  if (saved) return Promise.resolve(saved);
+  return new Promise(resolve => {
+    let root = document.querySelector('#multiplayerIdentity');
+    if (!root) {
+      root = document.createElement('div');
+      root.id = 'multiplayerIdentity';
+      root.innerHTML = '<div class="multiplayerIdentityCard"><span>БРИГАДА</span><h2>КАК ТЕБЯ ЗОВУТ?</h2><p>Имя будет видно над твоим персонажем.</p><input id="multiplayerNickInput" maxlength="18" autocomplete="off" placeholder="Имя рабочего"><button id="multiplayerNickSave" type="button">НА СТРОЙКУ</button><small>2–18 символов</small></div>';
+      document.body.appendChild(root);
+    }
+    root.classList.add('show');
+    const input = root.querySelector('#multiplayerNickInput');
+    const button = root.querySelector('#multiplayerNickSave');
+    const submit = () => {
+      const nick = multiplayerCleanNickname(input.value);
+      if (nick.length < 2) { input.classList.add('bad'); return; }
+      localStorage.setItem(MULTI_NICK_KEY, nick);
+      root.classList.remove('show');
+      resolve(nick);
+    };
+    input.addEventListener('input', () => input.classList.remove('bad'));
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+    button.addEventListener('click', submit);
+    setTimeout(() => input.focus(), 50);
+  });
+}
+function multiplayerServerFullOverlay(show = true) {
+  let root = document.querySelector('#multiplayerServerFull');
+  if (!root) {
+    root = document.createElement('div');
+    root.id = 'multiplayerServerFull';
+    root.innerHTML = '<div><b>СЕРВЕР ЗАПОЛНЕН</b><span>На стройке уже 3/3 рабочих.</span><button type="button">ПОВТОРИТЬ</button></div>';
+    document.body.appendChild(root);
+    root.querySelector('button').addEventListener('click', () => { root.classList.remove('show'); multiplayerServerFull=false; connectMultiplayer(); });
+  }
+  root.classList.toggle('show', !!show);
+}
+function makeRemoteNameSprite(nickname) {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 112;
+  const g = c.getContext('2d');
+  g.font = '900 44px system-ui,sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  const text = multiplayerCleanNickname(nickname) || 'Рабочий';
+  const w = Math.min(470, g.measureText(text).width + 54);
+  const x = 256 - w/2;
+  g.fillStyle='rgba(8,10,11,.82)'; g.beginPath(); g.roundRect(x,14,w,82,24); g.fill();
+  g.strokeStyle='rgba(224,189,93,.55)'; g.lineWidth=3; g.stroke();
+  g.fillStyle='#f5f3eb'; g.fillText(text,256,56);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.minFilter = THREE.LinearFilter;
+  const mat = new THREE.SpriteMaterial({ map:tex, transparent:true, depthTest:false, depthWrite:false });
+  const sprite = new THREE.Sprite(mat); sprite.scale.set(2.05,.45,1); sprite.position.set(0,2.28,0); sprite.renderOrder=100;
+  return sprite;
+}
+function makeRemoteWorker(player) {
+  const root = new THREE.Group(); root.name = `REMOTE_WORKER_${player.id}`;
+  const dark = new THREE.MeshStandardMaterial({color:0x293035,roughness:.9});
+  const vest = new THREE.MeshStandardMaterial({color:0xd07d24,roughness:.88});
+  const skin = new THREE.MeshStandardMaterial({color:0xc99b7d,roughness:.95});
+  const helmet = new THREE.MeshStandardMaterial({color:0xe2bf3a,roughness:.75});
+  const legs = new THREE.Mesh(new THREE.BoxGeometry(.55,.86,.30), dark); legs.position.y=.47; root.add(legs);
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(.72,.82,.36), vest); torso.position.y=1.27; root.add(torso);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(.23,12,8), skin); head.position.y=1.88; root.add(head);
+  const cap = new THREE.Mesh(new THREE.SphereGeometry(.255,12,6,0,Math.PI*2,0,Math.PI*.55), helmet); cap.position.y=1.99; root.add(cap);
+  const name = makeRemoteNameSprite(player.nickname); root.add(name);
+  root.traverse(o=>{if(o.isMesh){o.castShadow=false;o.receiveShadow=true;}});
+  scene.add(root);
+  return { root, name, targetPos:new THREE.Vector3(), targetYaw:0, state:'idle', bob:0 };
+}
+function destroyRemoteWorker(id) {
+  const remote = multiplayerRemotePlayers.get(id); if (!remote) return;
+  scene.remove(remote.root);
+  remote.root.traverse(o=>{ if (o.material?.map) o.material.map.dispose?.(); o.material?.dispose?.(); o.geometry?.dispose?.(); });
+  multiplayerRemotePlayers.delete(id);
+}
+function updateMultiplayerRoster(players = []) {
+  ensureMultiplayerUi();
+  const ids = new Set();
+  for (const p of players) {
+    ids.add(p.id);
+    if (p.id !== multiplayerPlayerId && !multiplayerRemotePlayers.has(p.id)) multiplayerRemotePlayers.set(p.id, makeRemoteWorker(p));
+  }
+  for (const id of [...multiplayerRemotePlayers.keys()]) if (!ids.has(id)) destroyRemoteWorker(id);
+  const list = document.querySelector('#multiplayerCrewList');
+  const count = document.querySelector('#multiplayerCrewCount');
+  if (count) count.textContent = `${players.length}/3`;
+  if (list) list.innerHTML = players.map(p => `<span class="${p.id===multiplayerPlayerId?'self':''}"><i></i>${String(p.nickname||'Рабочий').replace(/[<>&]/g,'')}</span>`).join('');
+}
+function updateRemoteWorkers(dt) {
+  for (const remote of multiplayerRemotePlayers.values()) {
+    const t = 1 - Math.exp(-12 * dt);
+    remote.root.position.lerp(remote.targetPos, t);
+    let d = ((remote.targetYaw - remote.root.rotation.y + Math.PI) % (Math.PI*2)) - Math.PI;
+    remote.root.rotation.y += d * t;
+    const moving = remote.state === 'walk' || remote.state === 'run';
+    remote.bob += moving ? dt * (remote.state==='run'?11:8) : 0;
+    remote.root.position.y += moving ? Math.abs(Math.sin(remote.bob))*0.015 : 0;
+  }
+}
+function multiplayerBuildWorldSnapshot() {
+  return {
+    epoch: multiplayerWorldEpoch,
+    jobState,
+    activePourZoneIndex,
+    paidPourZoneCount,
+    pouring,
+    pumpBroken,
+    zones: POUR_ZONES.map(z => ({
+      id:z.id,
+      fill:Array.from(z.fill,v=>Math.round((Number(v)||0)*10000)),
+      rake:Array.from(z.rakeTouched,v=>v?1:0),
+      ready:!!z.readyNotified,
+      grade:z.settledGrade || null,
+      cured:!!z.curedConcrete,
+      cureAt:Number(dryState[z.id]?.cureAt)||0,
+    }))
+  };
+}
+function multiplayerApplyWorldSnapshot(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.zones)) return;
+  multiplayerApplyingRemoteAction = true;
+  try {
+    multiplayerWorldEpoch = Math.max(1, Math.round(Number(snapshot.epoch)||multiplayerWorldEpoch));
+    for (const source of snapshot.zones) {
+      const zone = POUR_ZONES.find(z=>z.id===Number(source.id)); if (!zone) continue;
+      if (Array.isArray(source.fill)) for (let i=0;i<Math.min(zone.fill.length,source.fill.length);i++) zone.fill[i]=THREE.MathUtils.clamp((Number(source.fill[i])||0)/10000,0,zone.maxH);
+      if (Array.isArray(source.rake)) for (let i=0;i<Math.min(zone.rakeTouched.length,source.rake.length);i++) zone.rakeTouched[i]=source.rake[i]?1:0;
+      zone.readyNotified=!!source.ready; zone.settledGrade=source.grade||null; zone.curedConcrete=!!source.cured;
+      if (source.cured) dryState[zone.id]={cured:true,cureAt:Number(source.cureAt)||Date.now()};
+      else if (Number(source.cureAt)>0) dryState[zone.id]={cured:false,cureAt:Number(source.cureAt)};
+      zone.mobility.fill(source.cured?0:.22); zone.dirty=true;
+    }
+    if (['active','ready','accepted','failed'].includes(snapshot.jobState)) jobState=snapshot.jobState;
+    activePourZoneIndex=THREE.MathUtils.clamp(Math.round(Number(snapshot.activePourZoneIndex)||0),0,POUR_ZONES.length);
+    paidPourZoneCount=THREE.MathUtils.clamp(Math.round(Number(snapshot.paidPourZoneCount)||0),0,POUR_ZONES.length);
+    pouring=!!snapshot.pouring; pumpBroken=!!snapshot.pumpBroken;
+    refreshConcreteSurfaces(); saveDryState();
+    for (const z of POUR_ZONES) if (z.curedConcrete && !z.surface.userData?.curedConcrete) applyCuredLook(z.id);
+  } finally { multiplayerApplyingRemoteAction=false; }
+}
+function multiplayerRecordContribution(zoneId, type, amount=0) {
+  if (!multiplayerConnected || !Number.isFinite(Number(zoneId))) return;
+  const id=Number(zoneId); let row=multiplayerContributionDelta.get(id);
+  if (!row) { row={poured:0,rake:0,pump:0}; multiplayerContributionDelta.set(id,row); }
+  if (type==='poured') row.poured += Math.max(0,Number(amount)||0);
+  else if (type==='rake') row.rake += Math.max(0,Number(amount)||0);
+  else if (type==='pump') row.pump += Math.max(0,Number(amount)||1);
+}
+function multiplayerBroadcastAction(action, payload) {
+  if (multiplayerApplyingRemoteAction) return;
+  multiplayerSend({type:'action',action,payload});
+}
+function multiplayerBroadcastRake(x,z,step,dirX,dirZ,zoneId) {
+  const now=performance.now(); if (now < multiplayerRakeSendAt) return;
+  multiplayerRakeSendAt=now+80;
+  multiplayerBroadcastAction('rake',{x,z,step,dirX,dirZ,zoneId});
+}
+function multiplayerApplyRemoteAction(msg) {
+  if (!msg || msg.playerId===multiplayerPlayerId) return;
+  const p=msg.payload||{};
+  multiplayerApplyingRemoteAction=true;
+  try {
+    if (msg.action==='pour') {
+      const zone=POUR_ZONES.find(z=>z.id===Number(p.zoneId));
+      if (zone && !zone.curedConcrete) {
+        zone.hosePouredVolume += Math.max(0,Number(p.volume)||0);
+        if (depositConcreteImpact(zone,Number(p.x)||0,Number(p.z)||0,Math.max(0,Number(p.volume)||0),Number(p.vx)||0,Number(p.vz)||0,Number(p.speed)||0)) { markZoneDirty(zone); evaluateJob(); }
+      }
+    } else if (msg.action==='rake') {
+      levelConcreteAtPoint(Number(p.x)||0,Number(p.z)||0,THREE.MathUtils.clamp(Number(p.step)||.03,.005,.12),Number(p.dirX)||0,Number(p.dirZ)||0);
+      evaluateJob();
+    } else if (msg.action==='pump') {
+      pouring=!!p.on;
+    } else if (msg.action==='pumpBroken') {
+      pumpBroken=!!p.broken;
+    }
+  } finally { multiplayerApplyingRemoteAction=false; }
+}
+function multiplayerNotifyHoseState(held) {
+  if (!multiplayerConnected) return;
+  multiplayerBroadcastAction('hose',{held:!!held});
+}
+function multiplayerNotifyWorldReset() {
+  if (!multiplayerConnected || multiplayerApplyingWorldReset) return;
+  multiplayerSend({type:'world:reset',token:`${multiplayerPlayerId}:${Date.now()}`});
+}
+function multiplayerSettleBreakdown(breakdown, fallbackReward) {
+  if (!multiplayerConnected) { addMoney(fallbackReward); return false; }
+  const zones=(breakdown||[]).map(e=>({id:e.zone.id,reward:Math.max(0,Math.round(e.reward)),grade:e.grade}));
+  multiplayerPendingSettlement={zones,createdAt:Date.now()};
+  multiplayerSend({type:'settle',epoch:multiplayerWorldEpoch,zones});
+  return true;
+}
+function multiplayerHandleMessage(data) {
+  let msg; try { msg=JSON.parse(data); } catch(_) { return; }
+  if (msg.type==='welcome') {
+    multiplayerConnected=true; multiplayerHostId=msg.hostId||''; multiplayerWorldEpoch=Number(msg.epoch)||1;
+    multiplayerHoseHolder=msg.hoseHolder||null; multiplayerHoseAuthority=msg.hoseAuthority||null;
+    if (msg.profile) applyMultiplayerProfile(msg.profile);
+    updateMultiplayerRoster(msg.players||[]);
+    if (msg.world) multiplayerApplyWorldSnapshot(msg.world);
+    showToast(`БРИГАДА · ${Math.max(1,(msg.players||[]).length)}/3`,2.2);
+  } else if (msg.type==='roster') {
+    multiplayerHostId=msg.hostId||multiplayerHostId; updateMultiplayerRoster(msg.players||[]);
+  } else if (msg.type==='pose') {
+    if (msg.playerId===multiplayerPlayerId) return;
+    let remote=multiplayerRemotePlayers.get(msg.playerId);
+    if (!remote) { remote=makeRemoteWorker({id:msg.playerId,nickname:msg.nickname||'Рабочий'}); multiplayerRemotePlayers.set(msg.playerId,remote); }
+    remote.targetPos.set(Number(msg.x)||0,Number(msg.y)||0,Number(msg.z)||0); remote.targetYaw=Number(msg.yaw)||0; remote.state=msg.state||'idle';
+  } else if (msg.type==='profile') {
+    if (msg.playerId===multiplayerPlayerId && msg.profile) applyMultiplayerProfile(msg.profile);
+  } else if (msg.type==='payout') {
+    if (msg.playerId===multiplayerPlayerId) {
+      if (msg.profile) applyMultiplayerProfile(msg.profile);
+      showToast(`ПАВЕЛ ПЕТРОВИЧ РАССЧИТАЛ БРИГАДУ · +${Math.round(Number(msg.amount)||0).toLocaleString('ru-RU')} ₽`,4.5);
+    }
+  } else if (msg.type==='action') {
+    multiplayerApplyRemoteAction(msg);
+  } else if (msg.type==='hoseState') {
+    multiplayerHoseHolder=msg.holder||null; multiplayerHoseAuthority=msg.authority||null;
+    if (msg.deniedFor===multiplayerPlayerId) { hoseHeld=false; showToast('ШЛАНГ УЖЕ У ДРУГОГО РАБОЧЕГО',2.6); }
+  } else if (msg.type==='world') {
+    multiplayerWorldEpoch=Number(msg.epoch)||multiplayerWorldEpoch;
+    if (msg.playerId!==multiplayerPlayerId && multiplayerHostId!==multiplayerPlayerId) multiplayerApplyWorldSnapshot(msg.snapshot);
+  } else if (msg.type==='worldReset') {
+    multiplayerWorldEpoch=Number(msg.epoch)||multiplayerWorldEpoch;
+    if (msg.playerId!==multiplayerPlayerId) {
+      multiplayerApplyingWorldReset=true; try { resetPourJob(); } finally { multiplayerApplyingWorldReset=false; }
+      showToast('НОВЫЙ ОБЪЕКТ · БРИГАДА ПРОДОЛЖАЕТ РАБОТУ',3.2);
+    }
+  } else if (msg.type==='server_full') {
+    multiplayerServerFull=true; multiplayerServerFullOverlay(true);
+  }
+}
+async function connectMultiplayer() {
+  if (!/^https?:$/.test(location.protocol)) return;
+  if (multiplayerSocket && [WebSocket.OPEN,WebSocket.CONNECTING].includes(multiplayerSocket.readyState)) return;
+  multiplayerPlayerId=multiplayerSafeId();
+  multiplayerNickname=await multiplayerIdentityPrompt();
+  ensureMultiplayerUi();
+  const scheme=location.protocol==='https:'?'wss':'ws';
+  const ws=new WebSocket(`${scheme}://${location.host}/api/socket`); multiplayerSocket=ws;
+  ws.onopen=()=>multiplayerSend({type:'hello',playerId:multiplayerPlayerId,nickname:multiplayerNickname,seedProfile:buildLocalMultiplayerProfile()});
+  ws.onmessage=e=>multiplayerHandleMessage(e.data);
+  ws.onclose=e=>{
+    multiplayerConnected=false;
+    if (e.code===4003) { multiplayerServerFull=true; multiplayerServerFullOverlay(true); return; }
+    setTimeout(()=>{ if(!multiplayerServerFull) connectMultiplayer(); },1800);
+  };
+  ws.onerror=()=>{};
+}
+function updateMultiplayer(dt) {
+  updateRemoteWorkers(dt);
+  if (!multiplayerConnected) return;
+  multiplayerPoseTimer+=dt; multiplayerWorldTimer+=dt; multiplayerProfileTimer+=dt; multiplayerContribTimer+=dt;
+  if (multiplayerPoseTimer>=MULTI_POSE_INTERVAL) {
+    multiplayerPoseTimer=0;
+    multiplayerSend({type:'pose',x:playerPos.x,y:groundHeightAt(playerPos.x,playerPos.z),z:playerPos.z,yaw,pitch,state:hoseHeld?'hose':rakeEquipped?'rake':playerSprintingNow?'run':playerMovingNow?'walk':'idle'});
+  }
+  if (multiplayerProfileDirty && multiplayerProfileTimer>=MULTI_PROFILE_INTERVAL) {
+    multiplayerProfileTimer=0; multiplayerProfileDirty=false;
+    multiplayerSend({type:'profile:update',profile:buildLocalMultiplayerProfile()});
+  }
+  if (multiplayerContribTimer>=MULTI_CONTRIB_INTERVAL) {
+    multiplayerContribTimer=0;
+    for (const [zoneId,row] of multiplayerContributionDelta) multiplayerSend({type:'contrib',zoneId,...row});
+    multiplayerContributionDelta.clear();
+  }
+  if (multiplayerHostId===multiplayerPlayerId && multiplayerWorldTimer>=MULTI_WORLD_INTERVAL) {
+    multiplayerWorldTimer=0;
+    multiplayerSend({type:'world:snapshot',snapshot:multiplayerBuildWorldSnapshot()});
+  }
+}
+
+setTimeout(()=>connectMultiplayer(),40);
 
 
 
@@ -13896,6 +14306,10 @@ function primaryActionDown() {
       return;
     }
     pouring = !pouring;
+    if (!multiplayerApplyingRemoteAction) {
+      multiplayerBroadcastAction('pump',{on:pouring});
+      const zone=activePourZone(); if(zone) multiplayerRecordContribution(zone.id,'pump',1);
+    }
     if (hoseInteraction) hoseInteraction.text = pouring
       ? 'E — бросить шланг · ЛКМ — выключить бетон'
       : 'E — бросить шланг · ЛКМ — включить бетон';
@@ -15603,7 +16017,7 @@ function pavelDialogue() {
             entry.zone.settledGrade = entry.grade;
             recordCareerStat('floorM2', entry.zone.w * entry.zone.d);
           }
-          addMoney(reward);
+          if (!multiplayerSettleBreakdown(breakdown,reward)) addMoney(reward);
           paidPourZoneCount += unpaid;
           saveProgression();
           saveCareerStats();
@@ -16424,6 +16838,7 @@ function interact() {
       // Dropping the hose does not touch the pump switch. If it was ON, the
       // hose keeps pouring on the ground until recovered.
       hoseHeld = false;
+      multiplayerNotifyHoseState(false);
       hoseRecoveryNeeded = false;
       hoseDropRelaxUntil = performance.now() + 1800;
       if (hoseInteraction) hoseInteraction.text = pouring
@@ -16434,6 +16849,7 @@ function interact() {
         : 'Шланг отпущен.');
     } else {
       hoseHeld = true;
+      multiplayerNotifyHoseState(true);
       hoseRecoveryNeeded = false;
       hoseDropRelaxUntil = 0;
       if (!hoseHeldAtLeastOnce) {
@@ -16756,6 +17172,7 @@ function loop() {
     updateMachineAudio();
     updatePhysicalHose(dt);
     updateActivePourOutline(dt);
+    updateMultiplayer(dt);
 
 
 
