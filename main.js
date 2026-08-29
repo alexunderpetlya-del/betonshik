@@ -2772,14 +2772,27 @@ function loadDryTexturesLazy() {
       resolve(texture);
     }, undefined, reject);
   });
-  dryTexturesPromise = Promise.all([
-    load('wet_concrete_v2_albedo.webp', true),
-    load('wet_concrete_v2_normal.webp', false),
-    load('wet_concrete_v2_height.webp', false),
-  ]).then(([albedo, normal, height]) => ({ albedo, normal, height })).catch(error => {
-    console.warn('[CURE] v2 maps unavailable; using matte fallback', error);
+  const trySet = async (names) => {
+    try {
+      const [albedo, normal, height] = await Promise.all([
+        load(names[0], true), load(names[1], false), load(names[2], false)
+      ]);
+      return { albedo, normal, height };
+    } catch (_) { return null; }
+  };
+  dryTexturesPromise = (async () => {
+    const candidates = [
+      ['dry_concrete_albedo.webp','dry_concrete_normal.webp','dry_concrete_height.webp'],
+      ['hard_concrete_albedo.webp','hard_concrete_normal.webp','hard_concrete_height.webp'],
+      ['finished_concrete_albedo.webp','finished_concrete_normal.webp','finished_concrete_height.webp'],
+      ['wet_concrete_v2_albedo.webp','wet_concrete_v2_normal.webp','wet_concrete_v2_height.webp']
+    ];
+    for (const names of candidates) {
+      const textures = await trySet(names);
+      if (textures) return textures;
+    }
     return null;
-  });
+  })();
   return dryTexturesPromise;
 }
 function ensureCuredSurface(zone, material) {
@@ -4126,7 +4139,7 @@ function ensureHoseControlUi() {
   root = document.createElement('div');
   root.id = 'betonHoseControl';
   root.className = 'betonEventQte';
-  root.innerHTML = '<div class="betonHoseControlCard"><div class="betonHoseControlTitle">ПЕРЕХВАТИ ШЛАНГ</div><div class="betonHoseRig"><img class="betonHoseFrame" src="./assets/ui/events/hose_frame.png" alt=""><div class="betonHoseSlot"><div class="betonHoseBody"><img src="./assets/ui/events/hose.png" alt=""></div><img class="betonHoseGrip" src="./assets/ui/events/grip.png" alt=""></div><img class="betonHoseArm" src="./assets/ui/events/arm.png?v=51.151" alt=""><div class="betonHoseProgressSlot"><i></i></div></div><div class="betonHoseControlHint"><b>ЗАЖМИ</b> — РУКА ВВЕРХ · <b>ОТПУСТИ</b> — ВНИЗ</div><div class="betonHoseControlState">ДЕРЖИ ЛАДОНЬ НА РУКОЯТКЕ</div></div>';
+  root.innerHTML = '<div class="betonHoseControlCard"><div class="betonHoseControlTitle">ПЕРЕХВАТИ ШЛАНГ</div><div class="betonHoseRig"><div class="betonHoseTrack"></div><div class="betonHoseSlot"><div class="betonHoseBody"><img src="./assets/ui/events/hose.png?v=51.152" alt=""></div><img class="betonHoseGrip" src="./assets/ui/events/grip.png?v=51.152" alt=""></div><img class="betonHoseArm" src="./assets/ui/events/arm.png?v=51.152" alt=""><div class="betonHoseProgressSlot"><i></i></div></div><div class="betonHoseControlHint"><b>ЗАЖМИ</b> — РУКА ВВЕРХ · <b>ОТПУСТИ</b> — ВНИЗ</div><div class="betonHoseControlState">ПОЙМАЙ РУКОЯТКУ ЛАДОНЬЮ</div></div>';
   document.body.appendChild(root);
 
   const press = e => {
@@ -4167,7 +4180,7 @@ function updateHoseControlUi(hit = false) {
   const handY = THREE.MathUtils.clamp(hoseControlZoneY, .03, .97);
   if (body) body.style.height = Math.max(12, targetY * 100) + '%';
   if (grip) {
-    grip.style.bottom = (targetY * 100) + '%';
+    grip.style.bottom = Math.max(4, targetY * 100 - 20) + '%';
     grip.classList.toggle('hit', hit);
   }
   if (arm) {
@@ -4579,12 +4592,15 @@ function closePumpWirePuzzle(success) {
 }
 const WIRE_STRAIGHT_TEXTURE_SRC = './assets/ui/events/wire_straight.png?v=51.141';
 const WIRE_CORNER_TEXTURE_SRC = './assets/ui/events/wire_corner.png?v=51.141';
+const WIRE_SOCKET_TEXTURE_SRC = './assets/ui/events/wire_socket.png?v=51.153';
 const wireStraightTextureImage = new Image();
 const wireCornerTextureImage = new Image();
+const wireSocketTextureImage = new Image();
 const wireTintedTextureCache = new Map();
 wireStraightTextureImage.src = WIRE_STRAIGHT_TEXTURE_SRC;
 wireCornerTextureImage.src = WIRE_CORNER_TEXTURE_SRC;
-for (const image of [wireStraightTextureImage, wireCornerTextureImage]) {
+wireSocketTextureImage.src = WIRE_SOCKET_TEXTURE_SRC;
+for (const image of [wireStraightTextureImage, wireCornerTextureImage, wireSocketTextureImage]) {
   image.addEventListener('load', () => {
     wireTintedTextureCache.clear();
     if (wirePuzzle) drawPumpPuzzle();
@@ -4626,12 +4642,11 @@ function drawWireSegmentTexture(ctx, a, b, color, width) {
     return;
   }
   const angle = Math.atan2(dy, dx);
-  // overlap hides seams under corner pieces and between grid sections.
-  const overlap = width * .38;
+  const trim = Math.min(width * .46, len * .22);
   ctx.save();
   ctx.translate(a.x, a.y);
   ctx.rotate(angle);
-  ctx.drawImage(texture, -overlap, -width * .5, len + overlap * 2, width);
+  ctx.drawImage(texture, trim, -width * .5, Math.max(1, len - trim * 2), width);
   ctx.restore();
 }
 function wireCornerRotation(prev, cur, next) {
@@ -4650,17 +4665,13 @@ function drawWireCornerTexture(ctx, prev, cur, next, color, width) {
   if (rotation == null) return;
   const texture = makeTintedWireTexture(wireCornerTextureImage, color, 'corner');
   if (!texture) return;
-  // Native body thickness in the generated corner asset is roughly 180 px.
-  const scale = width / 180;
+  const scale = width / Math.max(1, Math.min(texture.width, texture.height) * .34);
   const drawW = texture.width * scale;
   const drawH = texture.height * scale;
-  // The bend center in the cropped texture. Both straight legs pass through this grid node.
-  const anchorX = .285;
-  const anchorY = .265;
   ctx.save();
   ctx.translate(cur.x, cur.y);
   ctx.rotate(rotation);
-  ctx.drawImage(texture, -drawW * anchorX, -drawH * anchorY, drawW, drawH);
+  ctx.drawImage(texture, -drawW * .5, -drawH * .5, drawW, drawH);
   ctx.restore();
 }
 function drawTexturedWirePath(ctx, path, color, alpha, canvas) {
@@ -4669,25 +4680,47 @@ function drawTexturedWirePath(ctx, path, color, alpha, canvas) {
   const width = Math.max(24, canvas.width * .042);
   ctx.save();
   ctx.globalAlpha = alpha;
-  // Actual generated PNG texture is used for every straight grid section.
+  ctx.strokeStyle = WIRE_COLORS[color];
+  ctx.lineWidth = width * .78;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.stroke();
   for (let i = 0; i < pts.length - 1; i++) drawWireSegmentTexture(ctx, pts[i], pts[i + 1], color, width);
-  // A separate matched generated elbow PNG is stamped on each 90-degree turn.
   for (let i = 1; i < pts.length - 1; i++) drawWireCornerTexture(ctx, pts[i - 1], pts[i], pts[i + 1], color, width);
   ctx.restore();
 }
 function drawWireEndpoint(ctx, cell, color, canvas, active=false, complete=false) {
-  const p = wirePointForCell(cell,canvas), outer = Math.max(24,canvas.width*.036);
+  const p = wirePointForCell(cell,canvas);
+  const outer = Math.max(24,canvas.width*.036);
   if (active) {
     const pulse = outer*(1.35+(Math.sin(performance.now()*.011)*.5+.5)*.20);
-    ctx.strokeStyle='rgba(255,255,255,.66)'; ctx.lineWidth=Math.max(3,canvas.width*.0045); ctx.beginPath(); ctx.arc(p.x,p.y,pulse,0,Math.PI*2); ctx.stroke();
+    ctx.strokeStyle='rgba(255,255,255,.66)';
+    ctx.lineWidth=Math.max(3,canvas.width*.0045);
+    ctx.beginPath(); ctx.arc(p.x,p.y,pulse,0,Math.PI*2); ctx.stroke();
   }
   if (complete) {
-    ctx.strokeStyle='rgba(201,238,184,.42)'; ctx.lineWidth=Math.max(3,canvas.width*.004); ctx.beginPath(); ctx.arc(p.x,p.y,outer*1.25,0,Math.PI*2); ctx.stroke();
+    ctx.strokeStyle='rgba(201,238,184,.42)';
+    ctx.lineWidth=Math.max(3,canvas.width*.004);
+    ctx.beginPath(); ctx.arc(p.x,p.y,outer*1.27,0,Math.PI*2); ctx.stroke();
   }
+
+  const socket = makeTintedWireTexture(wireSocketTextureImage, color, 'socket');
+  if (socket) {
+    const size = outer * 2.34;
+    ctx.save();
+    ctx.translate(p.x,p.y);
+    ctx.drawImage(socket,-size*.5,-size*.5,size,size);
+    ctx.restore();
+    return;
+  }
+
+  // Fallback while the texture is still loading.
   ctx.fillStyle='#101112'; ctx.beginPath(); ctx.arc(p.x,p.y,outer,0,Math.PI*2); ctx.fill();
   ctx.strokeStyle=WIRE_COLORS[color]; ctx.lineWidth=Math.max(11,canvas.width*.016); ctx.stroke();
   ctx.fillStyle=WIRE_COLORS[color]; ctx.beginPath(); ctx.arc(p.x,p.y,Math.max(10,canvas.width*.014),0,Math.PI*2); ctx.fill();
-  ctx.fillStyle='rgba(255,255,255,.25)'; ctx.beginPath(); ctx.arc(p.x-outer*.18,p.y-outer*.22,outer*.18,0,Math.PI*2); ctx.fill();
 }
 function drawWireHint(ctx, canvas) {
   if (!wirePuzzle || wirePuzzle.drag) return;
