@@ -4511,16 +4511,16 @@ body.settlementCutsceneActive #mobileDebugToggle{
   aspect-ratio:1;
   background-image:url('./assets/ui/pour_rank_sheet.png');
   background-repeat:no-repeat;
-  background-size:300% 200%;
+  background-size:400% 100%;
   background-position:100% 100%;
 }
-.settlementRankCard[data-grade="S"] .settlementRankBadge{background-position:0 0}
-.settlementRankCard[data-grade="A"] .settlementRankBadge{background-position:50% 0}
-.settlementRankCard[data-grade="B"] .settlementRankBadge{background-position:100% 0}
-.settlementRankCard[data-grade="C"] .settlementRankBadge{background-position:100% 0}
-.settlementRankCard[data-grade="D"] .settlementRankBadge{background-position:0 100%}
-.settlementRankCard[data-grade="E"] .settlementRankBadge{background-position:50% 100%}
-.settlementRankCard[data-grade="F"] .settlementRankBadge{background-position:100% 100%}
+.settlementRankCard[data-grade="S"] .settlementRankBadge{background-position:0 50%}
+.settlementRankCard[data-grade="A"] .settlementRankBadge{background-position:33.333% 50%}
+.settlementRankCard[data-grade="B"] .settlementRankBadge{background-position:66.666% 50%}
+.settlementRankCard[data-grade="C"] .settlementRankBadge{background-position:66.666% 50%}
+.settlementRankCard[data-grade="D"] .settlementRankBadge{background-position:66.666% 50%}
+.settlementRankCard[data-grade="E"] .settlementRankBadge{background-position:66.666% 50%}
+.settlementRankCard[data-grade="F"] .settlementRankBadge{background-position:100% 50%}
 .settlementRankBadge::after{
   content:"";
   position:absolute;
@@ -4575,9 +4575,9 @@ body.settlementCutsceneActive #mobileDebugToggle{
   backdrop-filter:blur(10px);
 }
 .settlementRankCopy span{color:#d8bd77;font:950 clamp(8px,.72vw,11px)/1 system-ui,sans-serif;letter-spacing:.16em;white-space:nowrap}
-.settlementRankCopy strong{margin:2px 0 -3px;color:#fff;font:1000 clamp(52px,6.1vw,92px)/.92 Impact,"Arial Black",system-ui,sans-serif;text-shadow:0 4px 0 rgba(0,0,0,.35)}
-.settlementRankCopy small{color:rgba(255,255,255,.74);font:850 clamp(8px,.72vw,11px)/1.15 system-ui,sans-serif;letter-spacing:.05em;white-space:nowrap}
-.settlementRankCopy em{margin-top:10px;color:#8ff0b1;font:950 clamp(14px,1.5vw,22px)/1 system-ui,sans-serif;font-style:normal;white-space:nowrap}
+.settlementRankCopy strong{margin:0;color:#fff;font:1000 clamp(50px,5.8vw,88px)/.9 Impact,"Arial Black",system-ui,sans-serif;text-shadow:0 4px 0 rgba(0,0,0,.35)}
+.settlementRankCopy small{margin-top:3px;color:rgba(255,255,255,.78);font:850 clamp(8px,.72vw,11px)/1.15 system-ui,sans-serif;letter-spacing:.05em;white-space:nowrap}
+.settlementRankCopy em{margin-top:8px;color:#8ff0b1;font:950 clamp(14px,1.5vw,22px)/1 system-ui,sans-serif;font-style:normal;white-space:nowrap}
 .settlementRankCard[data-grade="F"] .settlementRankCopy{border-left-color:#ba765c}
 .settlementRankCard[data-grade="F"] .settlementRankCopy em{color:#ffc0a3}
 
@@ -4586,7 +4586,7 @@ body.settlementCutsceneActive #mobileDebugToggle{
 
 @media (pointer:coarse), (max-width:820px){
   .settlementRankCard{left:72%;top:51%;gap:5px}
-  .settlementRankBadge{width:min(43vh,31vw)}
+  .settlementRankBadge{width:min(44vh,32vw)}
   .settlementRankCopy{width:min(31vw,155px);padding:10px 11px;border-left-width:3px;border-radius:4px 12px 12px 4px}
   .settlementRankCopy span{font-size:6.5px;letter-spacing:.11em}
   .settlementRankCopy strong{font-size:clamp(34px,10vh,58px)}
@@ -5059,13 +5059,13 @@ body{position:relative!important;background:#000!important}
   background-repeat:no-repeat!important;
   clip-path:polygon(6% 1%,94% 1%,100% 15%,98% 91%,88% 98%,12% 98%,2% 91%,0 15%)!important;
 }
-.settlementRankCard[data-grade="S"] .settlementRankBadge{background-position:0 0!important}
-.settlementRankCard[data-grade="A"] .settlementRankBadge{background-position:50% 0!important}
+.settlementRankCard[data-grade="S"] .settlementRankBadge{background-position:0 50%!important}
+.settlementRankCard[data-grade="A"] .settlementRankBadge{background-position:33.333% 50%!important}
 .settlementRankCard[data-grade="B"] .settlementRankBadge,
-.settlementRankCard[data-grade="C"] .settlementRankBadge{background-position:100% 0!important}
-.settlementRankCard[data-grade="D"] .settlementRankBadge{background-position:0 100%!important}
-.settlementRankCard[data-grade="E"] .settlementRankBadge{background-position:50% 100%!important}
-.settlementRankCard[data-grade="F"] .settlementRankBadge{background-position:100% 100%!important}
+.settlementRankCard[data-grade="C"] .settlementRankBadge{background-position:66.666% 50%!important}
+.settlementRankCard[data-grade="D"] .settlementRankBadge{background-position:66.666% 50%!important}
+.settlementRankCard[data-grade="E"] .settlementRankBadge{background-position:66.666% 50%!important}
+.settlementRankCard[data-grade="F"] .settlementRankBadge{background-position:100% 50%!important}
 
 .settlementRankOverride{
   left:33%!important;

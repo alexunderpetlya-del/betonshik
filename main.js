@@ -2108,8 +2108,9 @@ const HOSE_DROP_SETTLE_SEGMENTS = 10;
 let hoseDropRelaxUntil = 0;
 const hoseCoupler = new THREE.Mesh(new THREE.CylinderGeometry(.125, .125, .32, 16, 1, false), hoseEndMat);
 hoseCoupler.name = 'PHYSICAL_HOSE_COUPLER';
-hoseCoupler.castShadow = true;
+hoseCoupler.castShadow = false;
 hoseCoupler.frustumCulled = false;
+hoseCoupler.visible = false;
 hoseGroup.add(hoseCoupler);
 hoseTip.name = 'PHYSICAL_HOSE_TIP';
 hoseTip.castShadow = false;
@@ -2788,6 +2789,8 @@ async function applyCuredLook(zoneId) {
   // Gameplay becomes solid immediately when the timer expires; texture IO is never allowed
   // to postpone the actual curing state.
   zone.curedConcrete = true;
+  zone.visualWetness = 0;
+  zone.levelPrompted = true;
   if (zone.mobility?.fill) zone.mobility.fill(0);
   if (zone.velX?.fill) zone.velX.fill(0);
   if (zone.velZ?.fill) zone.velZ.fill(0);
@@ -2802,31 +2805,41 @@ async function applyCuredLook(zoneId) {
     material.vertexColors = false;
     material.color?.set?.(0xc4c8c3);
     material.metalness = 0;
-    material.roughness = .90;
+    material.roughness = .95;
     material.roughnessMap = null;
     material.normalMap = null;
     material.bumpMap = null;
     material.transparent = false;
     material.opacity = 1;
     material.side = THREE.DoubleSide;
+    material.polygonOffset = true;
+    material.polygonOffsetFactor = -1;
+    material.polygonOffsetUnits = -2;
     material.userData = { ...(material.userData || {}), curedConcrete:true };
     material.needsUpdate = true;
     dryMaterials.set(zone.id, material);
   }
 
   zone.surface.material = material;
+  zone.surface.visible = true;
+  zone.surface.renderOrder = TOUCH_DEVICE ? 4 : 1;
   zone.surface.userData = { ...(zone.surface.userData || {}), curedConcrete:true };
   for (const skirt of zone.surfaceSkirts || []) {
     if (!skirt?.material) continue;
     const side = skirt.material.clone();
     side.map = null; side.normalMap = null; side.bumpMap = null; side.roughnessMap = null;
-    side.color?.set?.(0x707570); side.roughness = .92; side.metalness = 0; side.needsUpdate = true;
+    side.color?.set?.(0x707570); side.roughness = .95; side.metalness = 0;
+    side.polygonOffset = true; side.polygonOffsetFactor = -2; side.polygonOffsetUnits = -3;
+    side.needsUpdate = true;
     skirt.material = side;
+    skirt.visible = true;
   }
 
   // Persist the hard state before any async texture request. Safari may suspend/kill the page.
   dryState[zone.id] = { cured:true, cureAt:Date.now() };
   saveDryState();
+  markPourProgressDirty();
+  savePourProgress(true);
   mobileDebugLog(`concrete cured: zone ${zone.id}`);
 
   // Dry texture is optional visual polish. Matte fallback above is already visibly cured.
@@ -2834,10 +2847,10 @@ async function applyCuredLook(zoneId) {
   if (!textures || zone.surface?.material !== material) return;
   material.map = textures.albedo;
   material.normalMap = textures.normal;
-  material.normalScale = new THREE.Vector2(.10,.10);
+  material.normalScale = new THREE.Vector2(.08,.08);
   material.bumpMap = textures.height;
-  material.bumpScale = .0035;
-  material.roughness = .86;
+  material.bumpScale = .0025;
+  material.roughness = .92;
   material.needsUpdate = true;
 }
 function armCure(zoneId, delay = DRY_AFTER_MS) {
@@ -2870,6 +2883,33 @@ function restoreCuredLooksAfterStart() {
     else if (Number(state?.cureAt) > 0) armCure(zone.id);
   }
   if (migrated) saveDryState();
+}
+
+function updatePendingZoneCures() {
+  const now = Date.now();
+  for (const zone of POUR_ZONES) {
+    if (zone.curedConcrete) continue;
+    const ready = zone.readyNotified || zone.settledGrade || zoneReadyForSequence(zone);
+    if (!ready) continue;
+    let state = dryState[zone.id];
+    if (!state) {
+      state = dryState[zone.id] = { cured:false, cureAt: now + DRY_AFTER_MS };
+      saveDryState();
+    }
+    if (state.cured) {
+      applyCuredLook(zone.id);
+      continue;
+    }
+    if (Number(state.cureAt) <= 0) {
+      state.cureAt = now + DRY_AFTER_MS;
+      saveDryState();
+    }
+    if (now >= Number(state.cureAt)) {
+      applyCuredLook(zone.id);
+    } else if (!dryTimers.has(zone.id)) {
+      armCure(zone.id, Math.max(0, Number(state.cureAt) - now));
+    }
+  }
 }
 
 function addPitBox(name, x, y, z, w, h, d, mat) {
@@ -3050,7 +3090,12 @@ function createConcreteEdgeSkirt(zone, edge) {
   mesh.castShadow = false;
   mesh.receiveShadow = true;
   mesh.frustumCulled = false;
-  mesh.renderOrder = TOUCH_DEVICE ? 3 : 0;
+  mesh.renderOrder = TOUCH_DEVICE ? 5 : 2;
+  if (mesh.material) {
+    mesh.material.polygonOffset = true;
+    mesh.material.polygonOffsetFactor = -2;
+    mesh.material.polygonOffsetUnits = -3;
+  }
   mesh.visible = false;
   mesh.userData.surfaceVertexIndices = surfaceVertexIndices;
   scene.add(mesh);
@@ -3315,6 +3360,12 @@ for (const zone of POUR_ZONES) {
   zone.surface.castShadow = false;
   zone.surface.receiveShadow = true;
   zone.surface.visible = false;
+  zone.surface.renderOrder = TOUCH_DEVICE ? 4 : 1;
+  if (zone.surface.material) {
+    zone.surface.material.polygonOffset = true;
+    zone.surface.material.polygonOffsetFactor = -1;
+    zone.surface.material.polygonOffsetUnits = -2;
+  }
   scene.add(zone.surface);
 
 
@@ -3480,7 +3531,7 @@ function updateConcreteAppearance(dt) {
     zone.wetMaterial.normalScale.setScalar(
       THREE.MathUtils.lerp(.24, .38, wet) * THREE.MathUtils.lerp(1, .54, finish)
     );
-    zone.wetMaterial.envMapIntensity = THREE.MathUtils.lerp(.38, 1.15, wet);
+    zone.wetMaterial.envMapIntensity = THREE.MathUtils.lerp(.06, .22, wet);
     updateConcreteVertexColors(zone);
 
 
@@ -6019,7 +6070,7 @@ function relaxConcrete(dt) {
 // Falling blobs are short-lived stream visuals. Persistent volume lives either in a bay heightfield or in surface spill clumps.
 const BLOB_MAX = TOUCH_DEVICE ? 48 : 120;
 const blobGeom = new THREE.SphereGeometry(.15, 14, 10);
-const blobMat = registerWetConcreteMaterial(new THREE.MeshStandardMaterial({ color: 0x747c78, roughness: .68, metalness: 0.0 }), .004, .10, 1.15);
+const blobMat = registerWetConcreteMaterial(new THREE.MeshStandardMaterial({ color: 0x707774, roughness: .90, metalness: 0.0 }), .006, .18, 2.9);
 blobMat.map = wetConcreteAlbedo || blobMat.map;
 blobMat.normalMap = wetConcreteNormal || blobMat.normalMap;
 blobMat.bumpMap = wetConcreteHeight || blobMat.bumpMap;
@@ -6056,10 +6107,10 @@ let blobSpawnAccumulator = 0;
 const HOSE_SPLASH_MAX = TOUCH_DEVICE ? 24 : 56;
 const hoseSplashGeom = new THREE.SphereGeometry(.022, 6, 4);
 const hoseSplashMat = registerWetConcreteMaterial(new THREE.MeshStandardMaterial({
-  color: 0x7f8783,
-  roughness: .72,
+  color: 0x767d79,
+  roughness: .88,
   metalness: 0,
-}), .003, .08, 1.85);
+}), .004, .12, 3.1);
 const hoseSplashGroup = new THREE.Group();
 hoseSplashGroup.name = 'HOSE_SPLASH_PARTICLES';
 scene.add(hoseSplashGroup);
@@ -6088,8 +6139,8 @@ scene.add(splashSpotGroup);
 const splashSpots = [];
 for (let i = 0; i < SPLASH_SPOT_MAX; i++) {
   const material = registerWetConcreteMaterial(new THREE.MeshStandardMaterial({
-    color: 0x424c48,
-    roughness: .34,
+    color: 0x535b57,
+    roughness: .82,
     metalness: 0,
     transparent: true,
     opacity: 0,
@@ -6098,7 +6149,7 @@ for (let i = 0; i < SPLASH_SPOT_MAX; i++) {
     polygonOffset: true,
     polygonOffsetFactor: -3,
     polygonOffsetUnits: -3,
-  }), .0025, .07, 1.25);
+  }), .0035, .10, 3.4);
   const mesh = new THREE.Mesh(splashSpotGeom, material);
   mesh.visible = false;
   mesh.raycast = () => {};
@@ -12926,6 +12977,14 @@ if (localStorage.getItem('beton_cigarette_flip_v5135') !== '1') {
   propConfigs.cigarette.quat.setFromEuler(propConfigs.cigarette.euler);
   localStorage.setItem('beton_cigarette_flip_v5135', '1');
 }
+if (localStorage.getItem('beton_cigarette_flip_v5144') !== '1') {
+  localStorage.removeItem('beton_prop_cigarette');
+  const d = PROP_DEFAULTS.cigarette;
+  propConfigs.cigarette.pos.set(...d.pos);
+  propConfigs.cigarette.euler.set(...d.rot);
+  propConfigs.cigarette.quat.setFromEuler(propConfigs.cigarette.euler);
+  localStorage.setItem('beton_cigarette_flip_v5144', '1');
+}
 
 
 
@@ -14441,7 +14500,7 @@ function loadPourProgress() {
         for (let i = 0; i < count; i++) {
           const height = THREE.MathUtils.clamp((Number(source.fill[i]) || 0) / 10000, 0, zone.maxH);
           zone.fill[i] = height;
-          if (height > .00035) zone.mobility[i] = .22;
+          if (height > .00035 && !source.cured) zone.mobility[i] = .22;
         }
       }
 
@@ -16509,6 +16568,7 @@ function loop() {
   updateMobileRenderBudget(dt);
   updateCareerStatsPersistence(dt);
   updatePourProgressPersistence(dt);
+  updatePendingZoneCures();
   mobileUiAccumulator += dt;
   const updateUiNow = !TOUCH_DEVICE || mobileUiAccumulator >= .10;
   if (updateUiNow) mobileUiAccumulator = 0;
