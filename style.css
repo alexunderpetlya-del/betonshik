@@ -5265,3 +5265,5 @@ body{position:relative!important;background:#000!important}
   .betonPumpMetaChip.betonWireStatus,.betonWireStatus.betonPumpMetaChip{font-size:14px}
   .betonPumpShell{width:min(84vw,calc(100dvh - 12px),860px)}
 }
+
+/* v51.145: cure-state isolation between jobs + hose recovery QTE fix */

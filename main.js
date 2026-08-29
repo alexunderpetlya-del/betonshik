@@ -2782,75 +2782,130 @@ function loadDryTexturesLazy() {
   });
   return dryTexturesPromise;
 }
+function ensureCuredSurface(zone, material) {
+  if (!zone.curedSurface) {
+    const geometry = new THREE.PlaneGeometry(zone.w, zone.d, 1, 1);
+    geometry.rotateX(-Math.PI * .5);
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.name = `CURED_CONCRETE_ZONE_${zone.id}`;
+    mesh.castShadow = false;
+    mesh.receiveShadow = true;
+    mesh.frustumCulled = false;
+    mesh.renderOrder = TOUCH_DEVICE ? 6 : 3;
+    mesh.raycast = zone.surface?.raycast ? zone.surface.raycast.bind(zone.surface) : mesh.raycast;
+    scene.add(mesh);
+    zone.curedSurface = mesh;
+  }
+  zone.curedSurface.material = material;
+  const height = THREE.MathUtils.clamp(zoneAverageHeight(zone), .001, zone.maxH);
+  zone.curedSurface.position.set(
+    (zone.minX + zone.maxX) * .5,
+    zone.bottomY + height + .004,
+    (zone.minZ + zone.maxZ) * .5
+  );
+  zone.curedSurface.visible = true;
+  return zone.curedSurface;
+}
+
+function restoreWetZoneLook(zone, clearStored = false) {
+  if (!zone) return;
+  zone.curedConcrete = false;
+  zone.visualWetness = 1;
+  if (zone.surface) {
+    zone.surface.material = zone.wetMaterial;
+    zone.surface.userData = { ...(zone.surface.userData || {}), curedConcrete:false };
+    zone.surface.renderOrder = TOUCH_DEVICE ? 4 : 1;
+    // visibility is recalculated from the heightfield below.
+  }
+  if (zone.curedSurface) zone.curedSurface.visible = false;
+  for (const skirt of zone.surfaceSkirts || []) {
+    skirt.material = zone.edgeMaterial;
+    skirt.renderOrder = TOUCH_DEVICE ? 5 : 2;
+  }
+  zone.dirty = true;
+  if (clearStored) {
+    const timer = dryTimers.get(zone.id);
+    if (timer) clearTimeout(timer);
+    dryTimers.delete(zone.id);
+    delete dryState[zone.id];
+    saveDryState();
+  }
+}
+
 async function applyCuredLook(zoneId) {
   const zone = POUR_ZONES.find(z => z.id === Number(zoneId));
-  if (!zone?.surface || zone.surface.userData?.curedConcrete) return;
+  if (!zone?.surface) return;
+  if (zone.curedConcrete && zone.curedSurface?.visible) return;
 
-  // Gameplay becomes solid immediately when the timer expires; texture IO is never allowed
-  // to postpone the actual curing state.
   zone.curedConcrete = true;
   zone.visualWetness = 0;
-  zone.levelPrompted = true;
   if (zone.mobility?.fill) zone.mobility.fill(0);
   if (zone.velX?.fill) zone.velX.fill(0);
   if (zone.velZ?.fill) zone.velZ.fill(0);
   if (zone.flowDelta?.fill) zone.flowDelta.fill(0);
   if (zone.flowBudget?.fill) zone.flowBudget.fill(0);
 
-  const source = zone.surface.material;
   let material = dryMaterials.get(zone.id);
   if (!material) {
-    material = source?.clone?.() || new THREE.MeshStandardMaterial();
+    material = new THREE.MeshStandardMaterial({
+      color: 0xbfc2bd,
+      roughness: .96,
+      metalness: 0,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -4,
+    });
     material.name = `CURED_CONCRETE_ZONE_${zone.id}_MATERIAL`;
-    material.vertexColors = false;
-    material.color?.set?.(0xc4c8c3);
-    material.metalness = 0;
-    material.roughness = .95;
-    material.roughnessMap = null;
-    material.normalMap = null;
-    material.bumpMap = null;
-    material.transparent = false;
-    material.opacity = 1;
-    material.side = THREE.DoubleSide;
-    material.polygonOffset = true;
-    material.polygonOffsetFactor = -1;
-    material.polygonOffsetUnits = -2;
-    material.userData = { ...(material.userData || {}), curedConcrete:true };
-    material.needsUpdate = true;
+    material.userData = { curedConcrete:true };
     dryMaterials.set(zone.id, material);
   }
 
-  zone.surface.material = material;
-  zone.surface.visible = true;
-  zone.surface.renderOrder = TOUCH_DEVICE ? 4 : 1;
+  // The dynamic liquid heightfield is completely removed from rendering after curing.
+  // A single 2-triangle static slab replaces it, which is both cleaner and cheaper.
+  if (zone.surface) zone.surface.visible = false;
+  for (const skirt of zone.surfaceSkirts || []) skirt.visible = false;
+  ensureCuredSurface(zone, material);
   zone.surface.userData = { ...(zone.surface.userData || {}), curedConcrete:true };
-  for (const skirt of zone.surfaceSkirts || []) {
-    if (!skirt?.material) continue;
-    const side = skirt.material.clone();
-    side.map = null; side.normalMap = null; side.bumpMap = null; side.roughnessMap = null;
-    side.color?.set?.(0x707570); side.roughness = .95; side.metalness = 0;
-    side.polygonOffset = true; side.polygonOffsetFactor = -2; side.polygonOffsetUnits = -3;
-    side.needsUpdate = true;
-    skirt.material = side;
-    skirt.visible = true;
+
+  // Kill all short-lived wet visuals that happen to be over this bay.
+  for (const b of blobs || []) {
+    if (!b?.mesh?.visible) continue;
+    if (zoneAt(b.mesh.position.x, b.mesh.position.z)?.id === zone.id) {
+      b.active = false; b.mesh.visible = false;
+    }
+  }
+  for (const p of hoseSplashes || []) {
+    if (p?.mesh?.visible && zoneAt(p.mesh.position.x, p.mesh.position.z)?.id === zone.id) p.mesh.visible = false;
+  }
+  for (const spot of splashSpots || []) {
+    if (spot?.mesh?.visible && zoneAt(spot.mesh.position.x, spot.mesh.position.z)?.id === zone.id) {
+      spot.mesh.visible = false; spot.mesh.material.opacity = 0;
+    }
+  }
+  for (const ripple of impactRipples || []) {
+    if (ripple?.mesh?.visible && zoneAt(ripple.mesh.position.x, ripple.mesh.position.z)?.id === zone.id) {
+      ripple.mesh.visible = false; ripple.mesh.material.opacity = 0;
+    }
+  }
+  for (const mark of rakeMarks || []) {
+    if (mark?.mesh?.visible && zoneAt(mark.mesh.position.x, mark.mesh.position.z)?.id === zone.id) mark.mesh.visible = false;
   }
 
-  // Persist the hard state before any async texture request. Safari may suspend/kill the page.
   dryState[zone.id] = { cured:true, cureAt:Date.now() };
   saveDryState();
   markPourProgressDirty();
   savePourProgress(true);
   mobileDebugLog(`concrete cured: zone ${zone.id}`);
 
-  // Dry texture is optional visual polish. Matte fallback above is already visibly cured.
   const textures = await loadDryTexturesLazy();
-  if (!textures || zone.surface?.material !== material) return;
+  if (!textures || zone.curedSurface?.material !== material) return;
   material.map = textures.albedo;
   material.normalMap = textures.normal;
   material.normalScale = new THREE.Vector2(.08,.08);
   material.bumpMap = textures.height;
   material.bumpScale = .0025;
-  material.roughness = .92;
+  material.roughness = .94;
   material.needsUpdate = true;
 }
 function armCure(zoneId, delay = DRY_AFTER_MS) {
@@ -2867,44 +2922,52 @@ function armCure(zoneId, delay = DRY_AFTER_MS) {
   dryTimers.set(id, timer);
 }
 function restoreCuredLooksAfterStart() {
-  let migrated = false;
+  let changed = false;
   for (const zone of POUR_ZONES) {
     let state = dryState[zone.id];
+    const physicallyReady = zoneReadyForSequence(zone);
+    const hasCompletionFlag = !!(zone.readyNotified || zone.settledGrade);
 
-    // Old saves can have readyNotified=true but no cure record at all because curing was
-    // introduced later. Detect the completed physical surface, create a timer now, and
-    // never leave an old finished bay permanently wet.
-    if (!state && (zone.readyNotified || zone.settledGrade || zoneReadyForSequence(zone))) {
-      state = dryState[zone.id] = { cured:false, cureAt:Date.now() + DRY_AFTER_MS };
-      migrated = true;
+    // v51.145: old cure records belong to the previous object. If a bay is empty/not-ready
+    // in the current job, never let that stale record turn it solid on boot.
+    if (state && !physicallyReady && !hasCompletionFlag) {
+      restoreWetZoneLook(zone, true);
+      state = null;
+      changed = true;
     }
 
-    if (state?.cured) setTimeout(() => applyCuredLook(zone.id), 200 + zone.id * 80);
+    if (!state && (hasCompletionFlag || physicallyReady)) {
+      state = dryState[zone.id] = { cured:false, cureAt:Date.now() + DRY_AFTER_MS };
+      changed = true;
+    }
+
+    if (state?.cured) setTimeout(() => applyCuredLook(zone.id), 180 + zone.id * 55);
     else if (Number(state?.cureAt) > 0) armCure(zone.id);
   }
-  if (migrated) saveDryState();
+  if (changed) saveDryState();
 }
 
 function updatePendingZoneCures() {
   const now = Date.now();
   for (const zone of POUR_ZONES) {
-    if (zone.curedConcrete) continue;
-    const ready = zone.readyNotified || zone.settledGrade || zoneReadyForSequence(zone);
-    if (!ready) continue;
+    const physicallyReady = zoneReadyForSequence(zone);
+    const hasCompletionFlag = !!(zone.readyNotified || zone.settledGrade);
     let state = dryState[zone.id];
-    if (!state) {
-      state = dryState[zone.id] = { cured:false, cureAt: now + DRY_AFTER_MS };
-      saveDryState();
-    }
-    if (state.cured) {
-      applyCuredLook(zone.id);
+
+    // Self-heal stale cure state from a previous object/save.
+    if ((state || zone.curedConcrete) && !physicallyReady && !hasCompletionFlag) {
+      restoreWetZoneLook(zone, true);
+      state = null;
       continue;
     }
-    if (Number(state.cureAt) <= 0) {
-      state.cureAt = now + DRY_AFTER_MS;
+    if (!physicallyReady && !hasCompletionFlag) continue;
+    if (zone.curedConcrete && zone.curedSurface?.visible) continue;
+
+    if (!state) {
+      state = dryState[zone.id] = { cured:false, cureAt:now + DRY_AFTER_MS };
       saveDryState();
     }
-    if (now >= Number(state.cureAt)) {
+    if (state.cured || now >= Number(state.cureAt || 0)) {
       applyCuredLook(zone.id);
     } else if (!dryTimers.has(zone.id)) {
       armCure(zone.id, Math.max(0, Number(state.cureAt) - now));
@@ -3796,6 +3859,7 @@ function concreteMovementFactor(x, z) {
 
 
   if (zone) {
+    if (zone.curedConcrete) return 1.0;
     const h = getFillHeightAt(x, z);
     if (h < .006) return 1.0;
 
@@ -3827,6 +3891,13 @@ function concreteMovementFactor(x, z) {
   const factor = THREE.MathUtils.lerp(.76, .43, Math.min(1, Math.sqrt(wet01)));
   return Math.max(factor, bootFloor);
 }
+
+function playerInWetConcrete(x = playerPos.x, z = playerPos.z) {
+  const zone = zoneAt(x, z);
+  if (zone && !zone.curedConcrete && getFillHeightAt(x, z) >= .006) return true;
+  return spillHeightAt(x, z) >= .006;
+}
+
 
 
 
@@ -3939,10 +4010,9 @@ let pourProgressLoading = false;
 
 
 
-const POUR_EVENT_TYPES = ['pressure', 'hose', 'pump', 'eye'];
+const POUR_EVENT_TYPES = ['pressure', 'pump', 'eye'];
 const POUR_EVENT_COPY = {
   pressure: { title: 'СКАЧОК ДАВЛЕНИЯ', text: '0,5 СЕК · ОТВЕДИ ШЛАНГ ИЛИ ВЫКЛЮЧИ ПОДАЧУ' },
-  hose: { title: 'ШЛАНГ ВЫСКОЛЬЗНУЛ', text: 'ПЕРЕХВАТИ ЕГО' },
   pump: { title: 'ПОЛОМКА НАСОСА', text: 'ПОДАЧА ОСТАНОВЛЕНА' },
   eye: { title: 'БЕТОН В ГЛАЗ', text: 'СМАХНИ БЕТОН' },
 };
@@ -3955,7 +4025,6 @@ let eventAlarmHideTimer = 0;
 // stopped the whole module at boot with ReferenceError on Safari.
 const EVENT_UI_ASSET_CANDIDATES = {
   pressure: ['./assets/ui/events/alarm_pressure.png'],
-  hose: ['./assets/ui/events/alarm_pump.png'],
   pump: ['./assets/ui/events/alarm_pump.png'],
   eye: ['./assets/ui/events/alarm_pump.png'],
   eyeSplat: ['./assets/ui/events/eye_splat.png'],
@@ -3992,6 +4061,7 @@ let pumpBroken = false;
 let pressureSpikePending = false;
 let pressureSpikeVolumeM3 = 0;
 let blindnessTimer = 0;
+// Armed only by a failed pressure QTE. Random pour events never drop the hose.
 let hoseRecoveryNeeded = false;
 let hoseControlActive = false;
 let hoseWhipClock = 0;
@@ -4136,7 +4206,7 @@ function failHoseControlQTE() {
   hoseControlHeld = false;
   hoseControlPointer = null;
   ensureHoseControlUi().classList.remove('show','pressed');
-  if (hoseInteraction) hoseInteraction.text = 'E — удержать шланг · БЕТОН ЛЬЁТСЯ!';
+  if (hoseInteraction) hoseInteraction.text = pouring ? 'E — удержать шланг · БЕТОН ЛЬЁТСЯ!' : 'E — удержать шланг';
   showToast('ШЛАНГ ВЫРВАЛСЯ — ПОДОЙДИ И ПОПРОБУЙ ЕЩЁ', 2.1);
   requestMouseLock();
 }
@@ -4833,8 +4903,6 @@ function prepareZoneRandomEvent(zone, index = 0) {
 POUR_ZONES.forEach((zone,index)=>prepareZoneRandomEvent(zone,index));
 
 function cancelQTEWithoutPenalty(){if(!qteActive)return;qteActive=false;qteLayerEl.classList.remove('active');qteTargetEl.classList.remove('pulse','perfect','badclick');resetQTECooldown();}
-function dropHoseFromEvent(message){hoseHeld=false;hoseDropRelaxUntil=performance.now()+1800;playHoseSlipAudio();if(hoseInteraction)hoseInteraction.text=pouring?'E — взять шланг · БЕТОН ЛЬЁТСЯ!':'E — взять шланг';showToast(message,4.2);}
-
 function showEventAlarmVisual(eventType, copy, durationMs = EVENT_ALARM_VISUAL_MS) {
   if (!eventAlarmEl) return;
   if (eventAlarmHideTimer) clearTimeout(eventAlarmHideTimer);
@@ -4876,11 +4944,6 @@ function executePendingPourEvent() {
     pressureSpikePending=true;
     window.__betonEventResult='ЧАСТИЧНО';
     showToast('ПРОБКА ДОШЛА ДО КОНЦА — ОТВЕДИ ШЛАНГ!',2.2);
-    return;
-  }
-  if(event.type==='hose'){
-    cancelQTEWithoutPenalty(); hoseRecoveryNeeded=true; hoseWhipClock=0;
-    dropHoseFromEvent('ШЛАНГ ВЫРВАЛО — ОН БЬЁТСЯ И ПРОДОЛЖАЕТ ЛИТЬ!');
     return;
   }
   if(event.type==='pump'){
@@ -7608,6 +7671,10 @@ function endQTE(success, perfect = false) {
     // the worker's hands.  If concrete was flowing, it keeps flowing on the
     // floor until the player grabs the hose again and switches the pump off.
     hoseHeld = false;
+    // v51.146: the hose recovery minigame is armed ONLY by a failed pressure QTE.
+    // Manual drops and authored/random hose events remain normal direct pickups.
+    hoseRecoveryNeeded = true;
+    hoseDropRelaxUntil = performance.now() + 1800;
     if (hoseInteraction) hoseInteraction.text = pouring
       ? 'E — взять шланг · БЕТОН ЛЬЁТСЯ!'
       : 'E — взять шланг';
@@ -8169,8 +8236,15 @@ function finishJob(success, failedZone = null) {
 
 
 function resetPourJob() {
+  // Every new object reuses the six physical bays, so cure state from the previous
+  // object MUST be discarded before the fresh fill arrays are created.
+  for (const timer of dryTimers.values()) clearTimeout(timer);
+  dryTimers.clear();
+  dryState = {};
+  saveDryState();
   for (let zoneIndex = 0; zoneIndex < POUR_ZONES.length; zoneIndex++) {
     const zone = POUR_ZONES[zoneIndex];
+    restoreWetZoneLook(zone, false);
     zone.fill.fill(0);
     zone.mobility.fill(0);
     zone.velX.fill(0);
@@ -8238,6 +8312,8 @@ function resetPourJob() {
   concreteRelaxTimer = 0;
   concreteVisualTimer = 0;
   resetQTECooldown();
+  markPourProgressDirty();
+  savePourProgress(true);
   updatePourHUD();
 }
 
@@ -16348,6 +16424,7 @@ function interact() {
       // Dropping the hose does not touch the pump switch. If it was ON, the
       // hose keeps pouring on the ground until recovered.
       hoseHeld = false;
+      hoseRecoveryNeeded = false;
       hoseDropRelaxUntil = performance.now() + 1800;
       if (hoseInteraction) hoseInteraction.text = pouring
         ? 'E — взять шланг · БЕТОН ЛЬЁТСЯ!'
@@ -16357,6 +16434,7 @@ function interact() {
         : 'Шланг отпущен.');
     } else {
       hoseHeld = true;
+      hoseRecoveryNeeded = false;
       hoseDropRelaxUntil = 0;
       if (!hoseHeldAtLeastOnce) {
         hoseHeldAtLeastOnce = true;
@@ -16617,7 +16695,8 @@ function loop() {
 
 
     const moving = moveWorld.lengthSq() > .0001;
-    const sprint = !inputBlocked && (!!(keys.ShiftLeft || keys.ShiftRight) || (TOUCH_DEVICE && mobileSprintIntent));
+    const sprintRequested = !inputBlocked && (!!(keys.ShiftLeft || keys.ShiftRight) || (TOUCH_DEVICE && mobileSprintIntent));
+    const sprint = sprintRequested && !playerInWetConcrete();
     playerMovingNow = moving;
     playerSprintingNow = sprint;
     let speed = 3.35;
