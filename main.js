@@ -8418,11 +8418,29 @@ function constrainHose() {
     }
   }
 }
+let deliveryRouteRuntimeFaulted = false;
 function updatePhysicalHose(dt) {
-  updateDeliveryRoutePhysics(dt);
-  deliveryRouteVisualTimer += dt;
-  if(deliveryRouteVisualTimer>=.05){deliveryRouteVisualTimer=0;updateDeliveryRouteVisuals();}
-  else {
+  // The delivery-route simulation is optional to the core player loop. A bad
+  // route segment must never be able to kill requestAnimationFrame and freeze
+  // all mobile movement/camera/buttons. Fall back to the last valid route end.
+  if (!deliveryRouteRuntimeFaulted) {
+    try {
+      updateDeliveryRoutePhysics(dt);
+      deliveryRouteVisualTimer += dt;
+      if(deliveryRouteVisualTimer>=.05){deliveryRouteVisualTimer=0;updateDeliveryRouteVisuals();}
+      else {
+        if(deliveryRouteEndProxy) deliveryRouteEndProxy.position.copy(deliveryRouteEnd);
+        if(hosePoints.length && deliveryRouteParts.at(-1)==='flex') hosePoints[0].copy(deliveryRouteEnd);
+      }
+    } catch (err) {
+      deliveryRouteRuntimeFaulted = true;
+      console.error('[DELIVERY ROUTE] physics disabled after runtime fault', err);
+      try { mobileDebugLog(`ROUTE ERROR ${err?.name||'Error'}: ${err?.message||err}`); } catch (_) {}
+      showToast('ТРАССА: ФИЗИКА ВОССТАНОВЛЕНА В БЕЗОПАСНОМ РЕЖИМЕ', 2.4);
+      deliveryRouteVisualTimer = 0;
+    }
+  } else {
+    // Safe fallback: keep the original hose simulation and all player controls alive.
     if(deliveryRouteEndProxy) deliveryRouteEndProxy.position.copy(deliveryRouteEnd);
     if(hosePoints.length && deliveryRouteParts.at(-1)==='flex') hosePoints[0].copy(deliveryRouteEnd);
   }
@@ -14883,7 +14901,7 @@ document.addEventListener('mousemove', e => {
 
 
 function primaryActionDown() {
-  if (!started || !locked || shopOpen || resultOpen || dialogueOpen || statsOpen) return;
+  if (!started || (!TOUCH_DEVICE && !locked) || shopOpen || resultOpen || dialogueOpen || statsOpen) return;
   if (qteActive) { clickQTE(); return; }
   if (supportHookEquipped && jobState === 'active') {
     if(stamina<=0){showToast('НЕТ СИЛ');return;}
@@ -17807,7 +17825,10 @@ function loop() {
     updateRake(dt);
     updatePourAudio();
     updateMachineAudio();
-    updatePhysicalHose(dt);
+    try { updatePhysicalHose(dt); } catch (err) {
+      console.error('[HOSE FRAME] recovered', err);
+      try { mobileDebugLog(`HOSE ERROR ${err?.name||'Error'}: ${err?.message||err}`); } catch (_) {}
+    }
     updateActivePourOutline(dt);
     updateMultiplayer(dt);
 
